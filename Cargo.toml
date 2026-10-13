@@ -1,0 +1,10 @@
+[workspace]
+members = ["crates/tiny-core", "crates/tiny", "crates/tiny-ffi"]
+default-members = ["crates/tiny-core", "crates/tiny", "crates/tiny-ffi"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/mxrsv/tinysift-core"

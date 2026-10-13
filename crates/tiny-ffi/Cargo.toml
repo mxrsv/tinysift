@@ -1,0 +1,25 @@
+[package]
+name = "tiny-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+name = "tiny_ffi"
+crate-type = ["staticlib", "lib"]
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"
+required-features = ["bindgen"]
+
+[features]
+# Generates Swift bindings; kept out of the library the app links.
+bindgen = ["uniffi/cli"]
+# Test-only exports (for example `debug_panic`); never enabled for the shipped app.
+test-hooks = []
+
+[dependencies]
+tiny-core = { path = "../tiny-core" }
+uniffi = "0.32"
+thiserror = "2"

@@ -1,0 +1,376 @@
+//! The desktop's Move to Trash: each planned path is revalidated right
+//! before it is moved, and every path gets its own outcome. It never calls
+//! `CleanProvider::execute`, so no provider command runs from here.
+//!
+//! The run holds the [`StoreLease`] of the saved "always keep" rules. Before
+//! each move it re-reads them: a policy that changed or cannot be read stops
+//! the whole run, a path the rules protect (or whose protection cannot be
+//! decided) is skipped. Neither is ever retried.
+
+use std::collections::BTreeSet;
+use std::fs;
+use std::io;
+use std::os::unix::fs::MetadataExt;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::finder_trash::{Trash, TrashError};
+use super::fs_safe::PathFingerprint;
+use super::process::AppProbe;
+use super::protection::{Evaluation, Matcher, Relation, INTERNAL_ID_PREFIX};
+use super::protection_store::{StoreError, StoreLease};
+use super::providers::{desktop_report_only, CleanProvider};
+use super::trash_plan::{protected_reason, PlannedItem};
+use super::types::CleanItem;
+
+/// Why a path was not moved even though it was planned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SkipReason {
+    /// The category is report-only on the desktop.
+    ReportOnly,
+    /// No registered provider has the item's category ID.
+    UnknownCategory,
+    Missing,
+    /// The path itself is a symlink now.
+    Symlink,
+    /// Replaced or edited since discovery.
+    Changed,
+    /// Not inside a discovery root, or a symlink appeared on the way to it.
+    OutsideRoots,
+    /// The file-system root, the home folder or one of its ancestors, or a
+    /// tool-reported path outside the home folder.
+    ProtectedPath(String),
+    /// On another volume than the home folder. Finder may delete such a
+    /// path permanently when that volume has no Trash.
+    NotOnHomeVolume,
+    /// The provider's own guard refused the path.
+    ProviderGuard(String),
+    AppRunning(String),
+    /// A required safety check could not run; acting would be a guess.
+    SafetyCheckFailed(String),
+    /// A saved rule keeps the path itself, or it lies inside a kept folder.
+    Kept {
+        rule_path: PathBuf,
+    },
+    /// The path is a parent of a saved rule's path, so moving it would carry
+    /// the kept path along, found by discovery or not.
+    HoldsKept {
+        rule_path: PathBuf,
+    },
+    /// Whether a saved rule covers the path could not be decided.
+    KeepUncertain(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ItemOutcome {
+    MovedToTrash,
+    /// Trash refused the path. `source_present` is re-checked afterwards.
+    Failed {
+        error: TrashError,
+        source_present: bool,
+    },
+    Skipped(SkipReason),
+    /// Execution stopped before this path.
+    NotAttempted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StopReason {
+    Cancelled,
+    AutomationDenied,
+    /// The saved rules differ from what this run started with.
+    ProtectionChanged,
+    /// The saved rules could not be read again.
+    ProtectionUnavailable(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct ItemResult {
+    pub item: CleanItem,
+    pub outcome: ItemOutcome,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct CheckedExecReport {
+    /// One entry per planned item, in plan order.
+    pub results: Vec<ItemResult>,
+    pub stopped: Option<StopReason>,
+}
+
+impl CheckedExecReport {
+    /// Sizes measured at discovery of every planned item.
+    pub fn bytes_selected(&self) -> u64 {
+        self.sum(|_| true)
+    }
+
+    /// Sizes measured at discovery of the items moved to Trash. Moving to
+    /// Trash frees no space until Trash is emptied.
+    pub fn bytes_moved_to_trash(&self) -> u64 {
+        self.sum(|outcome| *outcome == ItemOutcome::MovedToTrash)
+    }
+
+    pub fn moved_count(&self) -> usize {
+        self.count(|outcome| *outcome == ItemOutcome::MovedToTrash)
+    }
+
+    pub fn count(&self, keep: impl Fn(&ItemOutcome) -> bool) -> usize {
+        self.results.iter().filter(|r| keep(&r.outcome)).count()
+    }
+
+    fn sum(&self, keep: impl Fn(&ItemOutcome) -> bool) -> u64 {
+        self.results
+            .iter()
+            .filter(|r| keep(&r.outcome))
+            .fold(0, |sum, r| sum.saturating_add(r.item.size))
+    }
+}
+
+/// Everything execution needs besides the plan.
+pub struct ExecContext<'a> {
+    pub providers: &'a [Box<dyn CleanProvider>],
+    /// The home folder (`trash_plan::trusted_home` in the app).
+    pub home: Option<&'a Path>,
+    pub probe: &'a dyn AppProbe,
+    pub trash: &'a dyn Trash,
+    pub cancel: Option<&'a AtomicBool>,
+    pub progress: crate::progress::ProgressCallback<'a>,
+    /// The saved rules, locked for the whole run. There is no way to run
+    /// without one: a store that holds nothing is still a store.
+    pub policy: &'a StoreLease<'a>,
+}
+
+impl ExecContext<'_> {
+    fn is_cancelled(&self) -> bool {
+        self.cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
+    }
+}
+
+/// Moves each planned path to Trash after `validate` passes for it. Stops
+/// on cancellation, an Automation denial or a change in the saved rules; the
+/// remaining paths are reported as not attempted.
+pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedExecReport {
+    let total = plan.len() as u64;
+    let mut report = CheckedExecReport::default();
+    for (index, planned) in plan.iter().enumerate() {
+        let outcome = match report.stopped {
+            Some(_) => ItemOutcome::NotAttempted,
+            None => {
+                crate::progress::report(
+                    ctx.progress,
+                    "trash",
+                    index as u64,
+                    Some(total),
+                    &planned.item.path.to_string_lossy(),
+                );
+                act_on(planned, ctx, &mut report.stopped)
+            }
+        };
+        report.results.push(ItemResult {
+            item: planned.item.clone(),
+            outcome,
+        });
+    }
+    if report.stopped.is_none() {
+        crate::progress::report(ctx.progress, "trash", total, Some(total), "Done");
+    }
+    report
+}
+
+fn act_on(
+    planned: &PlannedItem,
+    ctx: &ExecContext<'_>,
+    stopped: &mut Option<StopReason>,
+) -> ItemOutcome {
+    let mut stop = |reason: StopReason| {
+        *stopped = Some(reason);
+        ItemOutcome::NotAttempted
+    };
+    if ctx.is_cancelled() {
+        return stop(StopReason::Cancelled);
+    }
+    // Before the slow checks, so a changed policy never spends a probe.
+    if let Err(reason) = policy_unchanged(ctx) {
+        return stop(reason);
+    }
+    if let Err(reason) = validate(planned, ctx) {
+        return ItemOutcome::Skipped(reason);
+    }
+    // After them, which can take long enough for the rules to change.
+    if let Err(reason) = policy_unchanged(ctx) {
+        return stop(reason);
+    }
+    if let Err(reason) = protection_skip(&planned.item.path, ctx) {
+        return ItemOutcome::Skipped(reason);
+    }
+    // Last check before the mutation.
+    if ctx.is_cancelled() {
+        return stop(StopReason::Cancelled);
+    }
+    let path = &planned.item.path;
+    match ctx.trash.move_to_trash(path) {
+        Ok(()) => ItemOutcome::MovedToTrash,
+        Err(error) => {
+            if matches!(error, TrashError::AutomationDenied(_)) {
+                *stopped = Some(StopReason::AutomationDenied);
+            }
+            ItemOutcome::Failed {
+                error,
+                source_present: fs::symlink_metadata(path).is_ok(),
+            }
+        }
+    }
+}
+
+/// The stored rules are still exactly the ones this run holds.
+fn policy_unchanged(ctx: &ExecContext<'_>) -> Result<(), StopReason> {
+    ctx.policy.ensure_unchanged().map_err(|error| match error {
+        StoreError::Changed | StoreError::StoreLost => StopReason::ProtectionChanged,
+        other => StopReason::ProtectionUnavailable(other.to_string()),
+    })
+}
+
+/// Why the saved rules forbid moving `path`, if they do. The path alone is
+/// enough: a rule inside it makes it `HoldsKept`, so nothing it would carry
+/// (a covered candidate, or a kept path discovery never listed) needs its own
+/// check. A fresh `Matcher` per call, since its cache describes one moment.
+fn protection_skip(path: &Path, ctx: &ExecContext<'_>) -> Result<(), SkipReason> {
+    let evaluation = ctx.policy.snapshot().evaluate(&Matcher::new(), path);
+    if evaluation.allows_move() {
+        return Ok(());
+    }
+    Err(skip_for(ctx, &evaluation))
+}
+
+fn skip_for(ctx: &ExecContext<'_>, evaluation: &Evaluation) -> SkipReason {
+    let snapshot = ctx.policy.snapshot();
+    let rule_path = |id: &str| {
+        snapshot
+            .guarded()
+            .find(|r| r.id == id)
+            .map(|r| r.path.clone())
+    };
+    let saved = evaluation
+        .blocks
+        .iter()
+        .filter(|b| !b.rule_id.starts_with(INTERNAL_ID_PREFIX))
+        .find_map(|b| rule_path(&b.rule_id).map(|path| (path, b.relation)));
+    if let Some((rule_path, relation)) = saved {
+        return match relation {
+            Relation::CarriesRule => SkipReason::HoldsKept { rule_path },
+            Relation::Equal | Relation::InsideRule => SkipReason::Kept { rule_path },
+        };
+    }
+    // Only Tiny's own storage rules are left: not something the user kept.
+    if !evaluation.blocks.is_empty() {
+        return SkipReason::ProtectedPath("Tiny's own saved settings".into());
+    }
+    let doubt = evaluation.uncertain.first().map(|u| u.doubt.to_string());
+    SkipReason::KeepUncertain(doubt.unwrap_or_else(|| "the rules could not be applied".into()))
+}
+
+/// The per-item validator, run immediately before each move. The saved rules
+/// come first (cheap, and the user's explicit choice); then slow checks come
+/// before the path checks so those sit right before the move: provider
+/// eligibility, the running-app probe, the providers' guards, then
+/// `symlink_metadata`, fingerprint, volume, root containment and protected
+/// paths. Guards and app gates of every item merged into this one apply too.
+pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), SkipReason> {
+    let item = &planned.item;
+    protection_skip(&item.path, ctx)?;
+    let gated = gated_items(planned, ctx)?;
+    let apps: BTreeSet<String> = gated
+        .iter()
+        .flat_map(|(provider, path)| provider.item_apps(path))
+        .collect();
+    for app in apps {
+        match ctx.probe.probe(&app) {
+            Ok(false) => {}
+            Ok(true) => return Err(SkipReason::AppRunning(app)),
+            Err(e) => {
+                return Err(SkipReason::SafetyCheckFailed(format!(
+                    "running-app check for {app} failed: {e}"
+                )))
+            }
+        }
+    }
+    for (provider, path) in &gated {
+        provider
+            .check_item(path)
+            .map_err(SkipReason::ProviderGuard)?;
+    }
+    let meta = fs::symlink_metadata(&item.path).map_err(|e| match e.kind() {
+        io::ErrorKind::NotFound => SkipReason::Missing,
+        _ => SkipReason::SafetyCheckFailed(e.to_string()),
+    })?;
+    if meta.file_type().is_symlink() {
+        return Err(SkipReason::Symlink);
+    }
+    if PathFingerprint::of(&meta) != planned.fingerprint {
+        return Err(SkipReason::Changed);
+    }
+    if meta.dev() != home_device(ctx.home)? {
+        return Err(SkipReason::NotOnHomeVolume);
+    }
+    if !planned
+        .roots
+        .iter()
+        .any(|root| inside_root(&item.path, root))
+    {
+        return Err(SkipReason::OutsideRoots);
+    }
+    let tool_printed = gated.iter().any(|(p, _)| p.roots_from_tool_output());
+    if let Some(reason) = protected_reason(&item.path, ctx.home, tool_printed) {
+        return Err(SkipReason::ProtectedPath(reason));
+    }
+    Ok(())
+}
+
+/// Device of the home folder, whose volume is known to have a Trash.
+fn home_device(home: Option<&Path>) -> Result<u64, SkipReason> {
+    let home = home.ok_or_else(|| SkipReason::SafetyCheckFailed("home folder unknown".into()))?;
+    fs::metadata(home)
+        .map(|m| m.dev())
+        .map_err(|e| SkipReason::SafetyCheckFailed(format!("cannot stat home folder: {e}")))
+}
+
+/// The item and every item merged into it, each with its provider. Any
+/// unknown or report-only provider refuses the whole move.
+fn gated_items<'a>(
+    planned: &'a PlannedItem,
+    ctx: &'a ExecContext<'_>,
+) -> Result<Vec<(&'a dyn CleanProvider, &'a Path)>, SkipReason> {
+    std::iter::once(&planned.item)
+        .chain(&planned.covers)
+        .map(|item| {
+            let provider = ctx
+                .providers
+                .iter()
+                .find(|p| p.id() == item.category_id)
+                .ok_or(SkipReason::UnknownCategory)?;
+            if desktop_report_only(provider.as_ref()).is_some() {
+                return Err(SkipReason::ReportOnly);
+            }
+            Ok((provider.as_ref(), item.path.as_path()))
+        })
+        .collect()
+}
+
+/// `path` is `root` or below it, and `root` plus every directory between
+/// them is still a real directory, so no symlink redirects the move.
+fn inside_root(path: &Path, root: &Path) -> bool {
+    if !path.starts_with(root) {
+        return false;
+    }
+    // Excludes `path` itself, which `validate` already checked.
+    path.ancestors()
+        .skip(1)
+        .take_while(|ancestor| ancestor.starts_with(root))
+        .all(is_real_dir)
+}
+
+fn is_real_dir(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_dir())
+}
+
+#[cfg(test)]
+mod tests;
