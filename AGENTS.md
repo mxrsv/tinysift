@@ -5,6 +5,9 @@
 Rust workspace containing [`tiny-core`](crates/tiny-core/src/lib.rs), the [`tiny` CLI](crates/tiny/src/main.rs)
 and the [`tiny-ffi` UniFFI boundary](crates/tiny-ffi/src/lib.rs). Native presentation and the
 website live in the separate private app repository. Start with [docs](docs/README.md).
+This workspace's planned public GitHub name is `mxrsv/tinysift`; its local directory remains
+`tinysift-core`. The private app GitHub repository is `mxrsv/tinycore`, in the local `tiny-cli`
+directory. See the [repository names](README.md#repository-names) before changing remotes or links.
 
 ## Common commands
 
@@ -22,11 +25,13 @@ website live in the separate private app repository. Start with [docs](docs/READ
   stay with their modules; CLI smoke tests live in [`crates/tiny/tests/`](crates/tiny/tests/).
 - All operations have one implementation in core. CLI parses/presents; FFI owns records,
   consent, preview lifetime and the session gate. See [overview](docs/internals/overview.md).
-- Add cleanup categories to every registry mapping in
-  [`providers/mod.rs`](crates/tiny-core/src/clean/providers/mod.rs), including desktop eligibility.
+- Register cleanup categories in `all_providers_with`, `known_category_ids`, `category_family`
+  and `comes_back` in [`providers/mod.rs`](crates/tiny-core/src/clean/providers/mod.rs); the
+  desktop may move paths only when `desktop_trash_paths()` is true.
 - In cleanup, discovered paths use `symlink_metadata`; deletion goes through
   [`fs_safe.rs`](crates/tiny-core/src/clean/fs_safe.rs) or
-  [`FinderTrash`](crates/tiny-core/src/clean/finder_trash.rs). Never bypass app guards to find more data.
+  [`FinderTrash`](crates/tiny-core/src/clean/finder_trash.rs). Never call `fs::remove_*` or `is_dir()` on discovered paths. Honor `quit_apps()` and
+  `item_apps()` both during discovery and before execution; never bypass app guards to find more data.
 - Preserve menu-level `CleanAction` versus executor-level `ExecAction`, including the
   Trash provider's `EmptyTrash` mapping ([actions](crates/tiny-core/src/clean/execute.rs)).
 - Scan stays read-only. Review-risk paths require explicit consent; the FFI must preserve

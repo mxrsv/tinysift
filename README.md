@@ -4,6 +4,15 @@ The Rust engine, `tiny` command-line tool and UniFFI interface used by TinySift.
 The [workspace](Cargo.toml) keeps all three crates together so a change to cleanup consent
 or process identity can be tested across the engine and native interface in one revision.
 
+## Repository names
+
+The planned public GitHub repository is `mxrsv/tinysift`, matching the TinySift brand.
+It will contain this Rust workspace and host app binaries through GitHub Releases.
+The private SwiftUI app and website belong to `mxrsv/tinycore`.
+Local directories remain `tinysift-core` for Rust and `tiny-cli` for the app;
+the [native builder](scripts/build-ffi.sh) does not depend on GitHub naming.
+Publication has not happened yet; see [Publication](#publication).
+
 ## Build and check
 
 Use Rust 1.91 or newer. From this checkout:
