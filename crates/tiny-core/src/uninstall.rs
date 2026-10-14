@@ -392,30 +392,10 @@ pub fn execute_plan(plan: &Plan, hard: bool) -> Result<()> {
 }
 
 fn move_to_trash(path: &Path) -> Result<()> {
-    let posix = path
-        .to_str()
-        .ok_or_else(|| engine_error!("non-utf8 path: {}", path.display()))?;
-    // Pass the path as `argv` (item 1 of argv) instead of interpolating it
-    // into the script. Avoids any AppleScript escaping concerns even if the
-    // path contains backslashes, quotes, or newlines.
-    let script = "on run argv\n\
-                  tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)\n\
-                  end run";
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(script)
-        .arg(posix)
-        .output()
-        .with_context(|| format!("failed to spawn osascript for {}", path.display()))?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(engine_error!(
-            "osascript failed for {}: {}",
-            path.display(),
-            err
-        ));
-    }
-    Ok(())
+    use crate::clean::finder_trash::{FinderTrash, Trash};
+    FinderTrash
+        .move_to_trash(path)
+        .map_err(|e| engine_error!("{}: {e}", path.display()))
 }
 
 fn hard_remove(path: &Path) -> Result<()> {

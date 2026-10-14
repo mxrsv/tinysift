@@ -26,10 +26,9 @@ by contract. `clean` and `uninstall` remove data and `processes quit` sends sign
 what it will do, asks, then acts.
 
 - **Move to Trash** asks Finder through `osascript` with the path as an argument, never
-  interpolated, so Put Back works and quoting cannot break. There are three copies: the app's
-  [`FinderTrash`](../../crates/tiny-core/src/clean/finder_trash.rs), the CLI clean's
-  [`move_to_trash`](../../crates/tiny-core/src/clean/providers/mod.rs) and an inline one in
-  [`uninstall.rs`](../../crates/tiny-core/src/uninstall.rs).
+  interpolated, so Put Back works and quoting cannot break. The app, CLI clean and
+  `uninstall` all go through [`FinderTrash`](../../crates/tiny-core/src/clean/finder_trash.rs),
+  which refuses a symlink because Finder would trash its target.
 - **Hard delete** exists only in the CLI. `clean` and `uninstall` remove through
   [`remove_recursive_safe`](../../crates/tiny-core/src/clean/fs_safe.rs), bottom-up and never
   following a symlink; tool-backed categories run their tool instead.

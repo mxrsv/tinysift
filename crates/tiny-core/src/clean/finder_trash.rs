@@ -7,8 +7,8 @@ use std::time::Duration;
 
 use crate::runner::{CommandRunner, RealRunner};
 
-/// `osascript` program shared with the CLI's `move_to_trash`.
-pub const FINDER_DELETE_SCRIPT: &str = "on run argv\n\
+/// `as alias` resolves a final symlink, so `refuse_symlink` runs first.
+const FINDER_DELETE_SCRIPT: &str = "on run argv\n\
      tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)\n\
      end run";
 
@@ -40,6 +40,7 @@ pub struct FinderTrash;
 
 impl Trash for FinderTrash {
     fn move_to_trash(&self, path: &Path) -> Result<(), TrashError> {
+        refuse_symlink(path)?;
         let posix = path
             .to_str()
             .ok_or_else(|| TrashError::Failed(format!("non-UTF-8 path: {}", path.display())))?;
@@ -54,6 +55,18 @@ impl Trash for FinderTrash {
             return Ok(());
         }
         Err(classify_failure(outcome.stderr.trim()))
+    }
+}
+
+/// Finder would trash a link's target, never the link itself.
+fn refuse_symlink(path: &Path) -> Result<(), TrashError> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => Err(TrashError::Failed(format!(
+            "refusing to move a symlink: {}",
+            path.display()
+        ))),
+        Ok(_) => Ok(()),
+        Err(e) => Err(TrashError::Failed(format!("{}: {e}", path.display()))),
     }
 }
 
@@ -90,5 +103,19 @@ mod tests {
             "execution error: Can’t get alias \"/Users/me/build-1743 (-1743) copy\". (-1728)";
         assert!(matches!(classify_failure(in_path), TrashError::Failed(_)));
         assert!(matches!(classify_failure("no code"), TrashError::Failed(_)));
+    }
+
+    #[test]
+    fn a_symlink_never_reaches_finder() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target");
+        std::fs::create_dir(&target).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+        assert!(
+            matches!(refuse_symlink(&link), Err(TrashError::Failed(m)) if m.contains("symlink"))
+        );
+        assert!(refuse_symlink(&target).is_ok());
+        assert!(refuse_symlink(&dir.path().join("missing")).is_err());
     }
 }

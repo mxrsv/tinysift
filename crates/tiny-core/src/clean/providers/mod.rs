@@ -1,8 +1,7 @@
 use crate::engine_error;
-use crate::error::{Context, Result};
+use crate::error::Result;
 use crate::runner::{CommandOutcome, CommandRunner, RealRunner, TOOL_TIMEOUT};
 use std::path::Path;
-use std::process::Command;
 use std::sync::Arc;
 
 use super::fs_safe::{dir_size_checked, list_children, remove_recursive_safe};
@@ -451,27 +450,12 @@ pub(crate) fn execute_per_item(
     Ok(report)
 }
 
-/// Move a path to the user's Trash via Finder. Mirrors the helper in
-/// `uninstall.rs` but lives here so the clean module is self-contained.
+/// Move a path to the user's Trash via Finder, never through a symlink.
 pub(crate) fn move_to_trash(path: &Path) -> Result<()> {
-    let posix = path
-        .to_str()
-        .ok_or_else(|| engine_error!("non-utf8 path: {}", path.display()))?;
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(super::finder_trash::FINDER_DELETE_SCRIPT)
-        .arg(posix)
-        .output()
-        .with_context(|| format!("failed to spawn osascript for {}", path.display()))?;
-    if !output.status.success() {
-        let err = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        return Err(engine_error!(
-            "osascript failed for {}: {}",
-            path.display(),
-            err
-        ));
-    }
-    Ok(())
+    use super::finder_trash::{FinderTrash, Trash};
+    FinderTrash
+        .move_to_trash(path)
+        .map_err(|e| engine_error!("{}: {e}", path.display()))
 }
 
 #[cfg(test)]
