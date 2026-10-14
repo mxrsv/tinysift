@@ -47,5 +47,7 @@ The clean pipeline, its registry and the desktop's checked Trash are in [clean.m
 `clean`, `uninstall` and port lookups assume macOS tools: Finder, `pgrep`, `mdls`, `tmutil`,
 `xcrun`, `lsof`, `git`. Code the app reaches spawns them by absolute path or through
 `ToolLookup::app`, because a Finder-launched app gets a minimal `PATH`
-([`runner.rs`](../../crates/tiny-core/src/runner.rs)). There is no `cfg(target_os)` gating: the
-workspace builds on Linux and fails at run time wherever it shells out to a macOS tool.
+([`runner.rs`](../../crates/tiny-core/src/runner.rs)). Outside macOS-only tests, the only
+`cfg(target_os)` gate is the memory-pressure sysctl, which reads `None` elsewhere
+([`pressure.rs`](../../crates/tiny-core/src/processes/pressure.rs)); the workspace builds on
+Linux and fails at run time wherever it shells out to a macOS tool.

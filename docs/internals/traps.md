@@ -57,6 +57,12 @@ Things that are not obvious from reading one file.
   `python3` ([`processes_smoke.rs`](../../crates/tiny/tests/processes_smoke.rs)); Linux
   [CI](../../.github/workflows/ci.yml) retains the platform-independent port fixture tests.
 
+## Code layout
+
+- **The CLI's clean and scan modules are mostly shims**: files such as
+  [`render/clean/types.rs`](../../crates/tiny/src/render/clean/types.rs) and
+  [`render/scan/walker.rs`](../../crates/tiny/src/render/scan/walker.rs) only re-export
+  `tiny-core`, where the logic belongs.
 
 ## Native integration
 

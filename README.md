@@ -6,12 +6,12 @@ or process identity can be tested across the engine and native interface in one 
 
 ## Repository names
 
-The planned public GitHub repository is `mxrsv/tinysift`, matching the TinySift brand.
-It will contain this Rust workspace and host app binaries through GitHub Releases.
+This Rust workspace is the public GitHub repository `mxrsv/tinysift`, matching the TinySift
+brand. Its GitHub Releases are intended to host app binaries; none are published yet.
 The private SwiftUI app and website belong to `mxrsv/tinycore`.
 Local directories remain `tinysift-core` for Rust and `tiny-cli` for the app;
 the [native builder](scripts/build-ffi.sh) does not depend on GitHub naming.
-Publication has not happened yet; see [Publication](#publication).
+See [Publication](#publication) for what remains before a release.
 
 ## Build and check
 
@@ -48,6 +48,7 @@ and [documentation index](docs/README.md) before extending the interface.
 
 ## Publication
 
-This local extraction is not a published release. [Cargo metadata](Cargo.toml) retains the
-existing MIT declaration; copyright ownership, the license file and third-party distribution
-notices must be finalized before this repository or binaries are published.
+The source became public on 2026-10-14, before its license review was finished; there is no
+release and no license file yet. [Cargo metadata](Cargo.toml) retains the existing MIT
+declaration. Copyright ownership, the license file and third-party distribution notices are
+still pending and must be finalized before binaries are published.

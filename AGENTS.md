@@ -5,7 +5,7 @@
 Rust workspace containing [`tiny-core`](crates/tiny-core/src/lib.rs), the [`tiny` CLI](crates/tiny/src/main.rs)
 and the [`tiny-ffi` UniFFI boundary](crates/tiny-ffi/src/lib.rs). Native presentation and the
 website live in the separate private app repository. Start with [docs](docs/README.md).
-This workspace's planned public GitHub name is `mxrsv/tinysift`; its local directory remains
+This workspace's public GitHub repository is `mxrsv/tinysift`; its local directory remains
 `tinysift-core`. The private app GitHub repository is `mxrsv/tinycore`, in the local `tiny-cli`
 directory. See the [repository names](README.md#repository-names) before changing remotes or links.
 

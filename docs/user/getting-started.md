@@ -7,10 +7,10 @@ defaults to Move to Trash. Processes and cache cleanup also have a [desktop app]
 
 ## Install
 
-`tiny` is built from source. You need Rust 1.91 or newer (`rustup` installs it).
+`tiny` is built from source. You need Rust 1.91 or newer (`rustup` installs it). From the
+root of a checkout of this repository:
 
 ```bash
-cd /path/to/tinysift-core
 cargo install --path crates/tiny     # puts `tiny` on your PATH (~/.cargo/bin)
 ```
 
