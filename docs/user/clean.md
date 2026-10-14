@@ -102,6 +102,10 @@ private-looking downloads and never ticks them for you.
   installed app, but a folder name does not prove the app is gone, so `tiny` never moves
   them. Check them in Finder.
 - **Symlinks are never followed**, so nothing outside the listed paths can be removed.
+- **Always keep rules from the [desktop app](../../../tiny-cli/docs/user/desktop.md#always-keep)
+  apply here too.** A kept path, or a folder that holds one, is reported as kept and left in
+  place, for Move to Trash and Hard delete alike. If the saved rules cannot be read, nothing
+  is cleaned.
 - **App checks run again before cleanup.** For file-based categories, the
   [executor](../../crates/tiny-core/src/clean/execute.rs) checks each item's owning apps and
   provider guard immediately before acting. A running app or a failed check keeps the item;

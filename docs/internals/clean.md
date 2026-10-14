@@ -99,7 +99,7 @@ canonicalizes it into a different path to move.
 
 ## Desktop persistent protection
 
-Always keep is a desktop-only policy owned by Rust. A
+Always keep is a policy owned by Rust; only the desktop app edits it. A
 [rule](../../crates/tiny-core/src/clean/protection.rs) is one absolute path plus a scope: `File`
 covers exactly that path, `Directory` also everything inside it. A candidate is held when it
 equals the rule path, lies inside a `Directory` rule, or is a strict ancestor of the rule path,
@@ -114,7 +114,9 @@ internal rules, so cleanup never moves them or an ancestor that holds them.
 Swift never writes rules and never sends a path: it names a discovered candidate ID to
 keep, or a rule ID to remove, with the revision it last read
 ([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The
-[CLI executor](../../crates/tiny-core/src/clean/execute.rs) does not read the rules.
+[CLI executor](../../crates/tiny-core/src/clean/execute.rs) loads the rules read-only before
+acting, reports every item they do not allow as kept, and refuses the whole run when they
+cannot be read.
 
 ### The store
 

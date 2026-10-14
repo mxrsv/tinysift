@@ -18,6 +18,8 @@ use crate::options::CleanOptions as CleanOpts;
 
 use super::discover::CategoryGroup;
 use super::process::{AppProbe, RunnerProbe};
+use super::protection::{Matcher, PolicySnapshot};
+use super::protection_store::ProtectionStore;
 use super::providers::{all_providers, CleanProvider};
 use super::types::{CleanAction, CleanItem, ExecAction, ExecReport};
 use crate::runner::RealRunner;
@@ -37,11 +39,20 @@ pub fn execute(
         ));
     }
 
+    // Always keep rules are saved by the desktop app; unreadable rules stop the run.
+    let policy = ProtectionStore::for_account()
+        .and_then(|store| store.load())
+        .map_err(|e| {
+            engine_error!(
+                "cannot read the kept paths saved by the TinySift app, so nothing was cleaned: {e}"
+            )
+        })?;
     let providers = all_providers(opts);
     execute_with_providers(
         groups,
         action,
         excluded_paths,
+        &policy,
         &providers,
         &RunnerProbe(&RealRunner),
     )
@@ -54,6 +65,7 @@ pub(crate) fn execute_with_providers(
     groups: &[&CategoryGroup],
     action: CleanAction,
     excluded_paths: &HashSet<PathBuf>,
+    policy: &PolicySnapshot,
     providers: &[Box<dyn CleanProvider>],
     probe: &dyn AppProbe,
 ) -> Result<ExecReport> {
@@ -67,6 +79,7 @@ pub(crate) fn execute_with_providers(
             &group.items,
             excluded_paths,
             &excluded_ancestors,
+            policy,
             &mut report,
         );
         if filtered.is_empty() {
@@ -119,21 +132,31 @@ fn reviewed_items(
     items: &[CleanItem],
     excluded: &HashSet<PathBuf>,
     ancestors: &HashSet<&std::path::Path>,
+    policy: &PolicySnapshot,
     report: &mut ExecReport,
 ) -> Vec<CleanItem> {
+    let matcher = Matcher::new();
     items
         .iter()
         .filter(|item| !excluded.contains(&item.path))
         .filter(|item| {
-            let overlaps = ancestors.contains(item.path.as_path())
-                || item.path.ancestors().any(|path| excluded.contains(path));
-            if overlaps {
-                report.failed.push((
-                    item.path.clone(),
-                    "kept: overlaps a path excluded during review".into(),
-                ));
-            }
-            !overlaps
+            let reason = if ancestors.contains(item.path.as_path())
+                || item.path.ancestors().any(|path| excluded.contains(path))
+            {
+                "kept: overlaps a path excluded during review"
+            } else {
+                let evaluation = policy.evaluate(&matcher, &item.path);
+                if evaluation.allows_move() {
+                    return true;
+                }
+                if evaluation.blocks.is_empty() {
+                    "kept: cannot confirm that no Always keep rule covers it"
+                } else {
+                    "kept: an Always keep rule in the TinySift app covers it"
+                }
+            };
+            report.failed.push((item.path.clone(), reason.into()));
+            false
         })
         .cloned()
         .collect()
@@ -322,6 +345,7 @@ mod tests {
             &groups,
             CleanAction::Trash,
             &excluded,
+            &PolicySnapshot::absent(Vec::new()),
             &providers,
             &MockChecker::none(),
         )
@@ -358,6 +382,7 @@ mod tests {
             &groups,
             CleanAction::Trash,
             &excluded,
+            &PolicySnapshot::absent(Vec::new()),
             &providers,
             &MockChecker::none(),
         )
@@ -368,6 +393,62 @@ mod tests {
             2,
             "filtered should pass 2 items, not 3"
         );
+    }
+
+    #[test]
+    fn always_keep_rules_hold_items_before_any_provider_runs() {
+        use crate::clean::protection::{ProtectionRule, RuleScope, RulesDocument};
+        let dir = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(dir.path()).unwrap();
+        let (kept, free) = (root.join("kept"), root.join("free"));
+        std::fs::write(&kept, b"k").unwrap();
+        std::fs::write(&free, b"f").unwrap();
+        let policy = PolicySnapshot::from_document(
+            RulesDocument {
+                version: 1,
+                revision: 1,
+                next_id: 2,
+                rules: vec![ProtectionRule {
+                    id: "r1".into(),
+                    path: kept.clone(),
+                    scope: RuleScope::File,
+                }],
+            },
+            Vec::new(),
+        );
+        let calls = Arc::new(AtomicUsize::new(0));
+        let last_len = Arc::new(AtomicUsize::new(0));
+        let providers: Vec<Box<dyn CleanProvider>> = vec![Box::new(CountingProvider {
+            id: "user-logs",
+            calls: calls.clone(),
+            last_len: last_len.clone(),
+        })];
+        let group = group_with(
+            vec![
+                item(kept.to_str().unwrap(), "user-logs"),
+                item(free.to_str().unwrap(), "user-logs"),
+            ],
+            "user-logs",
+        );
+        let report = execute_with_providers(
+            &[&group],
+            CleanAction::HardDelete,
+            &HashSet::new(),
+            &policy,
+            &providers,
+            &MockChecker::none(),
+        )
+        .unwrap();
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "only the free item reaches the provider"
+        );
+        assert_eq!(last_len.load(Ordering::SeqCst), 1);
+        assert!(report
+            .failed
+            .iter()
+            .any(|(path, reason)| path == &kept && reason.contains("Always keep")));
     }
 
     #[test]
@@ -389,6 +470,7 @@ mod tests {
                 &[&parent, &child],
                 action,
                 &excluded,
+                &PolicySnapshot::absent(Vec::new()),
                 &providers,
                 &MockChecker::none(),
             )
@@ -428,6 +510,7 @@ mod tests {
             &[&group],
             CleanAction::Trash,
             &excluded,
+            &PolicySnapshot::absent(Vec::new()),
             &providers,
             &MockChecker::none(),
         )
@@ -469,6 +552,7 @@ mod tests {
                 &[&group],
                 CleanAction::Trash,
                 &HashSet::new(),
+                &PolicySnapshot::absent(Vec::new()),
                 &providers,
                 probe,
             )
@@ -505,6 +589,7 @@ mod tests {
             &[&group],
             CleanAction::HardDelete,
             &HashSet::new(),
+            &PolicySnapshot::absent(Vec::new()),
             &providers,
             &OpensAfterFirst(calls.clone()),
         )
@@ -532,6 +617,7 @@ mod tests {
             &[&group],
             CleanAction::Trash,
             &HashSet::new(),
+            &PolicySnapshot::absent(Vec::new()),
             &providers,
             &MockChecker::none(),
         )
