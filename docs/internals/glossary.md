@@ -55,6 +55,22 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 
 ## Desktop clean
 
+- **Always keep** — A saved desktop rule: an exact path and a scope, `File` (that path) or
+  `Directory` (also everything inside it). It also keeps a containing folder from moving. Not:
+  a protected path (`protected_reason`: the root, the home folder and its ancestors, which no
+  cleanup moves), and not used by the CLI
+  ([rules](../../crates/tiny-core/src/clean/protection.rs)).
+- **Kept path** — The path a rule names; the UI says "kept" (`Kept`, `HoldsKept`). Missing
+  paths stay kept and apply again if they return; renames are not followed. Not: excluded
+  paths (the CLI's per-run review choice).
+- **Held** — A candidate a rule keeps in place: it is a kept path, lies inside a kept folder or
+  holds one, or could not be compared with a rule. A held row cannot be selected, and Rust
+  leaves it out of the preview and skips it at execution
+  ([`FfiProtectionGuard`](../../crates/tiny-ffi/src/clean/protection.rs)). Not: Review risk,
+  which selecting more can override.
+- **Protection store** — The folder `~/Library/Application Support/Tiny/clean-protection/` with
+  `rules.json`, plus the lock beside it. Unreadable or incomplete means cleanup is blocked, not
+  that no rules exist ([contract](clean.md#the-store)).
 - **Comes back** (`ComesBack`) — How a category's items return after Trash: `Rebuild` (with the
   command), `Redownload`, `AppRecreates`, `TrashOnly` or `NotRecoverable`, per id in
   `comes_back()`.

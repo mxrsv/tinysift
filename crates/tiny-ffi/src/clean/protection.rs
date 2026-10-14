@@ -247,7 +247,10 @@ impl TinySession {
         let home = self.clean_home()?;
         let store = self.protection_store(&home);
         let location = lossy(store.dir());
-        match store.load() {
+        match store.load().and_then(|policy| {
+            self.remember_policy(&policy)?;
+            Ok(policy)
+        }) {
             Ok(policy) => {
                 let view = self.protection_view(&policy, location);
                 self.clean_state().seen_policy = Some(policy);
@@ -296,9 +299,22 @@ impl TinySession {
     /// it: nothing is ever authorized against rules Tiny does not know.
     pub(super) fn load_policy(&self) -> Result<PolicySnapshot, FfiError> {
         let home = self.clean_home()?;
-        self.protection_store(&home)
+        let policy = self
+            .protection_store(&home)
             .load()
-            .map_err(protection_error)
+            .map_err(protection_error)?;
+        self.remember_policy(&policy).map_err(protection_error)?;
+        Ok(policy)
+    }
+
+    /// Unlike the last write revision, this history survives errors and rescans.
+    pub(super) fn remember_policy(&self, policy: &PolicySnapshot) -> Result<(), StoreError> {
+        let mut state = self.clean_state();
+        if state.stored_policy_seen && !policy.stored {
+            return Err(StoreError::StoreLost);
+        }
+        state.stored_policy_seen |= policy.stored;
+        Ok(())
     }
 
     /// The current discovery's ID and candidates in scan order. Short lock.
@@ -379,6 +395,7 @@ impl TinySession {
         let store = self.protection_store(&home);
         let mut lease = store.lease().map_err(protection_error)?;
         let current = lease.snapshot();
+        self.remember_policy(current).map_err(protection_error)?;
         let seen = self.clean_state().seen_policy.clone();
         if !seen.is_some_and(|seen| seen == *current && seen.revision == expected) {
             return Err(FfiError::ProtectionChanged);
@@ -398,6 +415,7 @@ impl TinySession {
         match written {
             Ok(()) => {
                 let policy = lease.snapshot().clone();
+                self.remember_policy(&policy).map_err(protection_error)?;
                 let view = self.protection_view(&policy, lossy(store.dir()));
                 self.clean_state().seen_policy = Some(policy);
                 Ok(view)

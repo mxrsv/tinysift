@@ -80,8 +80,9 @@ aborts the remaining groups, after earlier groups were already acted on.
 
 The app never calls `CleanProvider::execute`, so no tool command or hard delete runs from it.
 `clean_discover` keeps each candidate's path, fingerprint and discovery roots in the session
-under an opaque ID, so Swift never sends a path back. `clean_preview` drops paths another
-selected path covers and excludes any that would carry an unselected Review candidate along
+under an opaque ID, so Swift never sends a path back. `clean_preview` excludes paths the
+[saved rules](#desktop-persistent-protection) hold, drops paths another selected path covers and
+excludes any that would carry an unselected Review candidate along
 (the explicit-selection contract);
 a preview is single-use and expires. `clean_execute` consumes it, then
 [`execute_checked`](../../crates/tiny-core/src/clean/checked_execute.rs) revalidates each path,
@@ -89,6 +90,91 @@ and everything it covers, just before moving it through the
 [`Trash`](../../crates/tiny-core/src/clean/finder_trash.rs) seam. An Automation denial or
 cancellation stops the run. Scan and execute refuse to start when `HOME` is not the account's
 home folder (`FfiError::UntrustedHome`).
+
+The [path validator](../../crates/tiny-core/src/clean/checked_execute.rs) checks every parent
+with `symlink_metadata`, including parents above a discovery root. A provider's root is not
+a trusted boundary: a tool may return the candidate itself as its root. A path containing
+any symlink parent is skipped, including system aliases such as `/var`; the executor never
+canonicalizes it into a different path to move.
+
+## Desktop persistent protection
+
+Always keep is a desktop-only policy owned by Rust. A
+[rule](../../crates/tiny-core/src/clean/protection.rs) is one absolute path plus a scope: `File`
+covers exactly that path, `Directory` also everything inside it. A candidate is held when it
+equals the rule path, lies inside a `Directory` rule, or is a strict ancestor of the rule path,
+because moving it would carry the kept path along, found by discovery or not. Components are
+compared one by one, never as string prefixes. Symlinks are never replaced by their targets
+and renames are not tracked, so a rule for a path that is missing today applies again if that
+path returns. Equivalent spellings on a volume that folds case or Unicode are decided from the
+real directory entries; anything that cannot be decided (unreadable parent, several entries
+for one inode) counts as held, not as free. Tiny's own store, lock and staging paths are
+internal rules, so cleanup never moves them or an ancestor that holds them.
+
+Swift never writes rules and never sends a path: it names a discovered candidate ID to
+keep, or a rule ID to remove, with the revision it last read
+([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The
+[CLI executor](../../crates/tiny-core/src/clean/execute.rs) does not read the rules.
+
+### The store
+
+The [store](../../crates/tiny-core/src/clean/protection_store.rs) is
+`~/Library/Application Support/Tiny/clean-protection/`, an owner-only directory holding
+`rules.json` (versioned JSON: `version`, a `revision` that rises by one per commit, a
+`next_id` so rule ids are never reused, and the rules) and an `initialized` marker. The
+advisory lock is `clean-protection.lock` beside it, deliberately outside the directory that a
+first save replaces. A held lock never blocks: after eight short attempts it is `Busy`.
+
+- **Absent is first use.** A read of a missing store returns revision 0 and creates nothing.
+- **Anything else fails closed.** A store directory without its marker or rules, malformed or
+  unsupported JSON, invalid rules, a symlink or a file that is not owner-only is an error, never
+  empty rules. Do not recover by writing an empty store.
+- **Snapshots compare revision and content**, so an outside edit that keeps the revision is
+  still a change.
+- **The first save is staged.** Rules and marker are assembled in
+  `clean-protection.staging`, synced and renamed into place; a failure before the rename
+  commits nothing. Later saves replace `rules.json` through a synced temporary file and an
+  atomic rename. After the rename the outcome may be uncertain (`CommitUncertain`): reload,
+  never repeat the write.
+- **Removing the last rule** writes a valid empty store; it does not delete the directory.
+
+### Where it is enforced
+
+1. [`clean_preview`](../../crates/tiny-ffi/src/clean.rs) reads the rules under the shared lock
+   and removes held selections as typed exclusions before the PC-C3 check and before overlaps
+   are merged, so a held parent leaves its independently selected children in place. A store
+   that cannot be read fails the preview (`ProtectionUnavailable`). The preview remembers the
+   snapshot it was authorized against; a rule write drops the stored preview.
+2. [`clean_execute`](../../crates/tiny-ffi/src/clean.rs) takes the exclusive lease first, then
+   consumes the preview only if the stored snapshot equals the one it was authorized against
+   (else `ProtectionChanged` and the preview is dropped). A busy or unreadable store fails
+   without spending the preview.
+3. [`execute_checked`](../../crates/tiny-core/src/clean/checked_execute.rs) repeats the check
+   before every move: cancellation, the snapshot still unchanged, `validate` (rules first, then
+   provider eligibility, running-app probe, provider guards and the path checks), the snapshot
+   unchanged again, the rules again, cancellation, then the Trash call. A changed or unreadable
+   store stops the run and the rest is not attempted; a held path is skipped as `Kept`,
+   `HoldsKept` or `KeepUncertain`. Only the planned path is evaluated: a rule inside it makes
+   it `HoldsKept`, so what a merged item covers needs no second check.
+
+Every desktop cleanup run holds the lease: `ExecContext.policy` is required, and the lock stays
+until the report is built, so a rule write, a reload or another session's run meets `Busy`
+meanwhile. Lock order is the session gate, the store lock, then the clean-state lock. A new
+desktop path that moves files must go through `execute_checked` with a lease, or it bypasses
+the rules.
+
+### Session memory and Swift
+
+The [session](../../crates/tiny-ffi/src/clean/protection.rs) remembers that it has seen a
+committed store, across rescans and failed reads or writes. A store that later vanishes blocks
+reads, previews, writes and execution until valid settings return. A session that never saw
+the store cannot tell first use from the external removal of the whole directory, even when
+the lock remains: execution can create the lock before the first rule is saved. This is not
+tamper resistance, so never promise that deleting local settings keeps protection.
+
+Native clients must apply the returned protection state only to the discovery it describes;
+a failed rule read must never become an empty successful rule list. The
+[FFI response](../../crates/tiny-ffi/src/clean/protection.rs) carries the revision and guards.
 
 ## Test seams
 

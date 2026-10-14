@@ -355,17 +355,15 @@ fn gated_items<'a>(
         .collect()
 }
 
-/// `path` is `root` or below it, and `root` plus every directory between
-/// them is still a real directory, so no symlink redirects the move.
+/// `path` is `root` or below it, and every parent up to the filesystem root
+/// is a real directory. A discovery root is not a trusted symlink boundary:
+/// tools can report the candidate itself as its root.
 fn inside_root(path: &Path, root: &Path) -> bool {
     if !path.starts_with(root) {
         return false;
     }
     // Excludes `path` itself, which `validate` already checked.
-    path.ancestors()
-        .skip(1)
-        .take_while(|ancestor| ancestor.starts_with(root))
-        .all(is_real_dir)
+    path.ancestors().skip(1).all(is_real_dir)
 }
 
 fn is_real_dir(path: &Path) -> bool {

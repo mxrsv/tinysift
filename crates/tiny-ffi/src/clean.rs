@@ -69,6 +69,8 @@ pub(crate) struct CleanState {
     /// The saved rules `clean_protection` or the last write handed to Swift.
     /// A write needs the store to still equal them in revision and content.
     seen_policy: Option<PolicySnapshot>,
+    /// Sticky across read/write failures and rescans: lost settings are never first use.
+    stored_policy_seen: bool,
 }
 
 struct StoredDiscovery {
@@ -318,6 +320,8 @@ impl TinySession {
         let _gate = self.begin()?;
         let store = self.protection_store(&home);
         let policy = store.lease().map_err(protection_error)?;
+        self.remember_policy(policy.snapshot())
+            .map_err(protection_error)?;
         let (items, options) = self.consume_preview(preview_id, policy.snapshot())?;
         let providers = providers(&options);
         let plan: Vec<PlannedItem> = items.iter().map(|(_, plan)| plan.clone()).collect();

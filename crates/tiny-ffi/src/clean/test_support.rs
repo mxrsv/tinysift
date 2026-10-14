@@ -193,7 +193,8 @@ pub(super) fn fixture_dir(label: &str, names: &[&str], len: usize) -> PathBuf {
     for name in names {
         std::fs::write(dir.join(name), vec![b'x'; len]).unwrap();
     }
-    dir
+    // Test-owned fixtures use physical paths, not macOS's /var temp alias.
+    std::fs::canonicalize(dir).unwrap()
 }
 
 pub(super) fn remove(dir: &Path) {

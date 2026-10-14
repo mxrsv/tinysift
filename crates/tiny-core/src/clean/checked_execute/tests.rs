@@ -99,7 +99,8 @@ fn fixture_root(label: &str, names: &[&str]) -> PathBuf {
     for name in names {
         fs::write(dir.join(name), b"1234").unwrap();
     }
-    dir
+    // Test-owned fixtures use physical paths, not macOS's /var temp alias.
+    fs::canonicalize(dir).unwrap()
 }
 
 fn plan(category: &str, root: &Path, name: &str) -> PlannedItem {
@@ -313,6 +314,38 @@ fn a_symlinked_directory_on_the_way_from_the_root_is_refused() {
     );
     let _ = remove_recursive_safe(&root);
     let _ = remove_recursive_safe(&elsewhere);
+}
+
+#[test]
+fn symlinked_parents_above_a_discovery_root_never_reach_trash() {
+    let root = fixture_root("root-alias", &[]);
+    let elsewhere = fixture_root("alias-target", &[]);
+    fs::create_dir(elsewhere.join("cache")).unwrap();
+    fs::write(elsewhere.join("cache/keep"), b"1234").unwrap();
+    std::os::unix::fs::symlink(&elsewhere, root.join("hop")).unwrap();
+    let alias = root.join("hop/cache");
+    for name in ["hop/cache", "hop/cache/keep"] {
+        let item = PlannedItem {
+            roots: vec![alias.clone()],
+            ..plan("logs", &root, name)
+        };
+        let trash = FakeTrash::default();
+        let report = run(
+            &[item],
+            vec![Box::new(fixture("logs"))],
+            &MockChecker::none(),
+            &trash,
+            None,
+        );
+        assert_eq!(
+            outcomes(&report),
+            vec![ItemOutcome::Skipped(SkipReason::OutsideRoots)]
+        );
+        assert!(trash.moved.lock().unwrap().is_empty());
+        assert_eq!(fs::read(elsewhere.join("cache/keep")).unwrap(), b"1234");
+    }
+    remove_recursive_safe(&root).unwrap();
+    remove_recursive_safe(&elsewhere).unwrap();
 }
 
 #[test]

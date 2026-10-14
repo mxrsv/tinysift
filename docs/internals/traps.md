@@ -21,6 +21,28 @@ Things that are not obvious from reading one file.
 - **`category_family` panics** on an unknown id. Register a new category in all four registry
   functions ([clean.md](clean.md#the-provider-registry)).
 
+## Desktop protection
+
+- **A rule write needs a prior read in the same session.** `clean_keep` and `clean_unkeep`
+  fail with `ProtectionChanged` unless the stored rules equal what the last `clean_protection`
+  or successful write returned, in revision and content; a write that fails after taking the
+  lock clears that memory, so Swift reads again before the next one
+  ([`change_rules`](../../crates/tiny-ffi/src/clean/protection.rs)). A new caller cannot pass a
+  revision it got elsewhere.
+- **A same-revision outside edit still counts.** Snapshots compare content as well as the
+  revision, so a hand-edited `rules.json` invalidates previews and writes, and stops a running
+  cleanup ([`ensure_unchanged`](../../crates/tiny-core/src/clean/protection_store.rs)).
+- **Spelling depends on the volume.** Revalidate native case and Unicode matching on both
+  case-sensitive and case-insensitive volumes; in-memory checks alone do not verify the
+  host filesystem's behavior ([tests](../../crates/tiny-core/src/clean/protection.rs)).
+- **The CLI ignores the rules.** Nothing in `tiny` or [`execute.rs`](../../crates/tiny-core/src/clean/execute.rs)
+  reads the store, so `tiny clean` can still move a path the desktop keeps.
+- **An unreadable store is not an empty one.** Do not "repair" it by writing empty rules: moving,
+  saving and removing stay blocked until the original settings read again
+  ([clean](clean.md#desktop-persistent-protection)).
+- **Deleting the whole store looks like first use** to a session that never read it, and the
+  lock can exist before the first rule is saved.
+
 ## Running locally
 
 - **Real runs touch real data.** Only `--dry-run` and validation errors are side-effect free, so

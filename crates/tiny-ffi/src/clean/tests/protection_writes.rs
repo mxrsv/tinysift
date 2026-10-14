@@ -111,6 +111,128 @@ fn rules_survive_a_relaunch_and_removal_selects_nothing() {
 }
 
 #[test]
+fn stored_rules_cannot_be_forgotten_after_a_failed_read_and_store_loss() {
+    let dir = fixture_dir("lost-policy", &["a", "b"], 3);
+    let session = TestSession::new();
+    let discovery = discover(&session, &providers(&dir)).unwrap();
+    keep_candidate(&session, &id_of(&discovery, "/a"));
+    let before = session
+        .clean_preview(vec![id_of(&discovery, "/b")])
+        .unwrap();
+    let store = session.store();
+    let marker = store.dir().join("initialized");
+    let held_marker = store.dir().join("held-marker");
+    std::fs::rename(&marker, &held_marker).unwrap();
+    assert!(matches!(
+        session.clean_protection().unwrap().status,
+        FfiProtectionStatus::Unavailable { .. }
+    ));
+    std::fs::rename(&held_marker, &marker).unwrap();
+    let displaced = session.dir.join("displaced-store");
+    std::fs::rename(store.dir(), &displaced).unwrap();
+    assert!(store.lock_path().exists());
+    let discovery = discover(&session, &providers(&dir)).unwrap();
+    assert_lost_policy_blocks_cleanup(&session, &discovery, &dir, &before.preview_id);
+    assert!(!store.dir().exists());
+    std::fs::rename(&displaced, store.dir()).unwrap();
+    let restored = session.clean_protection().unwrap();
+    assert_eq!((revision(&restored), rules(&restored).len()), (1, 1));
+    assert!(session
+        .clean_preview(vec![id_of(&discovery, "/a")])
+        .unwrap()
+        .items
+        .is_empty());
+    remove(&dir);
+}
+
+fn assert_lost_policy_blocks_cleanup(
+    session: &TestSession,
+    discovery: &FfiDiscovery,
+    dir: &Path,
+    preview_id: &str,
+) {
+    for _ in 0..2 {
+        assert!(matches!(
+            session.clean_protection().unwrap().status,
+            FfiProtectionStatus::Unavailable { .. }
+        ));
+    }
+    assert!(matches!(
+        session.clean_preview(vec![id_of(discovery, "/a")]),
+        Err(FfiError::ProtectionUnavailable { .. })
+    ));
+    assert!(matches!(
+        session.clean_keep(id_of(discovery, "/b"), 0),
+        Err(FfiError::ProtectionUnavailable { .. })
+    ));
+    let trash = FakeTrash::default();
+    assert!(matches!(
+        run(session, preview_id, dir, &trash),
+        Err(FfiError::ProtectionUnavailable { .. })
+    ));
+    assert!(trash.moved.lock().unwrap().is_empty());
+}
+
+#[test]
+fn preview_remembers_rules_even_without_a_protection_read() {
+    let dir = fixture_dir("preview-policy", &["a", "b"], 3);
+    let session = TestSession::new();
+    let writer = session.sibling();
+    let written = discover(&writer, &providers(&dir)).unwrap();
+    keep_candidate(&writer, &id_of(&written, "/a"));
+    let discovery = discover(&session, &providers(&dir)).unwrap();
+    session
+        .clean_preview(vec![id_of(&discovery, "/b")])
+        .unwrap();
+    std::fs::rename(session.store().dir(), session.dir.join("displaced-store")).unwrap();
+    assert!(matches!(
+        session.clean_preview(vec![id_of(&discovery, "/a")]),
+        Err(FfiError::ProtectionUnavailable { .. })
+    ));
+    remove(&dir);
+}
+
+#[test]
+fn a_read_alone_remembers_committed_rules_through_errors_and_rescans() {
+    policy_observation_is_sticky(true);
+}
+
+#[test]
+fn a_write_alone_remembers_committed_rules_through_errors_and_rescans() {
+    policy_observation_is_sticky(false);
+}
+
+fn policy_observation_is_sticky(read_only: bool) {
+    let dir = fixture_dir("observed-policy", &["a", "b"], 3);
+    let writer = TestSession::new();
+    let written = discover(&writer, &providers(&dir)).unwrap();
+    keep_candidate(&writer, &id_of(&written, "/a"));
+    let reader = writer.sibling();
+    let session = if read_only { &reader } else { &writer };
+    discover(session, &providers(&dir)).unwrap();
+    if read_only {
+        assert_eq!(rules(&session.clean_protection().unwrap()).len(), 1);
+    }
+    // No preview has observed these rules in either session.
+    let store = session.store();
+    let marker = store.dir().join("initialized");
+    let held_marker = store.dir().join("held-marker");
+    std::fs::rename(&marker, &held_marker).unwrap();
+    assert!(matches!(
+        session.clean_protection().unwrap().status,
+        FfiProtectionStatus::Unavailable { .. }
+    ));
+    std::fs::rename(&held_marker, &marker).unwrap();
+    let displaced = session.dir.join("displaced-store");
+    std::fs::rename(store.dir(), &displaced).unwrap();
+    let discovery = discover(session, &providers(&dir)).unwrap();
+    assert_lost_policy_blocks_cleanup(session, &discovery, &dir, "never-issued");
+    std::fs::rename(&displaced, store.dir()).unwrap();
+    assert_eq!(rules(&session.clean_protection().unwrap()).len(), 1);
+    remove(&dir);
+}
+
+#[test]
 fn a_rule_write_drops_the_stored_preview_and_a_failed_validation_keeps_it() {
     let dir = fixture_dir("drop-preview", &["a", "b"], 3);
     let session = TestSession::new();
