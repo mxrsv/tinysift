@@ -13,6 +13,7 @@ uniffi::setup_scaffolding!();
 pub mod clean;
 pub mod processes;
 pub mod session;
+pub mod storage;
 
 pub use session::{CancellationToken, TinySession};
 

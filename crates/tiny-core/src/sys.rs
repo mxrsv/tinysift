@@ -22,6 +22,50 @@ pub struct SystemInfo {
     pub memory_used: u64,
     pub disks: Vec<DiskInfo>,
 }
+
+/// macOS user data lives on this volume; `/` is the sealed system volume of the same APFS container.
+const DATA_VOLUME: &str = "/System/Volumes/Data";
+const ROOT_VOLUME: &str = "/";
+
+/// Capacity of one volume. Built only from a sample that reports a usable total.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiskCapacity {
+    pub name: String,
+    pub mount_point: String,
+    pub total_bytes: u64,
+    pub available_bytes: u64,
+}
+
+/// Disk-only sample: no CPU sampling and no sleep, so it is cheap to repeat.
+pub fn disks() -> Vec<DiskInfo> {
+    Disks::new_with_refreshed_list()
+        .iter()
+        .map(|disk| DiskInfo {
+            name: disk.name().to_string_lossy().into_owned(),
+            mount_point: disk.mount_point().display().to_string(),
+            total_bytes: disk.total_space(),
+            available_bytes: disk.available_space(),
+        })
+        .collect()
+}
+
+/// The volume holding the user's data, or `None` when no sample is trustworthy.
+/// Volumes of one APFS container report the same shared capacity, so exactly one
+/// is returned and they are never summed. Zero or inconsistent samples are unavailable.
+pub fn startup_capacity(disks: &[DiskInfo]) -> Option<DiskCapacity> {
+    [DATA_VOLUME, ROOT_VOLUME]
+        .iter()
+        .find_map(|mount| disks.iter().find(|disk| disk.mount_point == *mount))
+        .filter(|disk| disk.total_bytes > 0 && disk.available_bytes <= disk.total_bytes)
+        .map(|disk| DiskCapacity {
+            name: disk.name.clone(),
+            mount_point: disk.mount_point.clone(),
+            total_bytes: disk.total_bytes,
+            available_bytes: disk.available_bytes,
+        })
+}
+
 pub fn information() -> SystemInfo {
     let mut system = System::new_all();
     std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
@@ -40,14 +84,51 @@ pub fn information() -> SystemInfo {
         cpu_usage: system.global_cpu_usage(),
         memory_total: system.total_memory(),
         memory_used: system.used_memory(),
-        disks: Disks::new_with_refreshed_list()
-            .iter()
-            .map(|disk| DiskInfo {
-                name: disk.name().to_string_lossy().into_owned(),
-                mount_point: disk.mount_point().display().to_string(),
-                total_bytes: disk.total_space(),
-                available_bytes: disk.available_space(),
-            })
-            .collect(),
+        disks: disks(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn disk(mount: &str, total: u64, available: u64) -> DiskInfo {
+        DiskInfo {
+            name: mount.into(),
+            mount_point: mount.into(),
+            total_bytes: total,
+            available_bytes: available,
+        }
+    }
+
+    #[test]
+    fn data_volume_is_chosen_once_over_the_shared_system_volume() {
+        let capacity = startup_capacity(&[
+            disk("/", 500, 60),
+            disk(DATA_VOLUME, 500, 60),
+            disk("/x", 9, 9),
+        ])
+        .unwrap();
+        assert_eq!(capacity.mount_point, DATA_VOLUME);
+        assert_eq!((capacity.total_bytes, capacity.available_bytes), (500, 60));
+    }
+
+    #[test]
+    fn root_is_used_without_a_data_volume() {
+        let capacity = startup_capacity(&[disk("/mnt", 9, 9), disk("/", 500, 60)]).unwrap();
+        assert_eq!(capacity.mount_point, "/");
+    }
+
+    #[test]
+    fn missing_or_invalid_samples_are_unavailable_not_zero() {
+        assert!(startup_capacity(&[]).is_none());
+        assert!(startup_capacity(&[disk("/mnt", 9, 9)]).is_none());
+        assert!(startup_capacity(&[disk(DATA_VOLUME, 0, 0)]).is_none());
+        assert!(startup_capacity(&[disk(DATA_VOLUME, 100, 101)]).is_none());
+    }
+
+    #[test]
+    fn invalid_data_volume_does_not_fall_back_to_a_different_volume() {
+        assert!(startup_capacity(&[disk(DATA_VOLUME, 0, 0), disk("/", 500, 60)]).is_none());
     }
 }
