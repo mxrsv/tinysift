@@ -1,5 +1,7 @@
 mod ownership;
 
+pub use ownership::{valid_bundle_id, Consent, LeftoverClass, Ownership};
+
 use crate::engine_error;
 use crate::error::{Context, Result};
 use crate::options::{SortBy, UninstallOptions as UninstallOpts};
@@ -88,6 +90,7 @@ pub struct RemovalItem {
     pub path: PathBuf,
     pub size: u64,
     pub kind: ItemKind,
+    pub ownership: Ownership,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -98,8 +101,17 @@ pub enum ItemKind {
 }
 
 impl Plan {
+    /// Size of everything an explicit selection may remove. Report-only and
+    /// uncertain items are listed but never counted.
     pub fn total_size(&self) -> u64 {
-        self.items.iter().map(|i| i.size).sum()
+        self.items_for(Consent::Explicit).map(|i| i.size).sum()
+    }
+
+    /// Items an action taken with `consent` may touch (O2/O5).
+    pub fn items_for(&self, consent: Consent) -> impl Iterator<Item = &RemovalItem> {
+        self.items
+            .iter()
+            .filter(move |i| i.ownership.allows(consent))
     }
 }
 
@@ -252,7 +264,13 @@ pub fn sort_apps(mut apps: Vec<AppEntry>, sort: &SortBy) -> Vec<AppEntry> {
 
 // ---------- Planning ----------
 
-pub fn build_plan(app: &AppEntry, opts: &UninstallOpts) -> Result<Plan> {
+/// `inventory` is the installed-app list used to spot another copy of the same
+/// bundle id (O5); `None` means it could not be read.
+pub fn build_plan(
+    app: &AppEntry,
+    opts: &UninstallOpts,
+    inventory: Option<&[AppEntry]>,
+) -> Result<Plan> {
     let mut items: Vec<RemovalItem> = Vec::new();
     let mut blocked: Option<String> = None;
 
@@ -281,12 +299,18 @@ pub fn build_plan(app: &AppEntry, opts: &UninstallOpts) -> Result<Plan> {
             path: app.path.clone(),
             size: app.size,
             kind: ItemKind::AppBundle,
+            ownership: Ownership::AppBundle,
         });
     }
 
     if !opts.shallow {
         if let Some(home) = crate::clean::trash_plan::account_home() {
-            items.extend(find_leftovers(&home, &app.name, app.bundle_id.as_deref()));
+            items.extend(ownership::find_leftovers(
+                &home,
+                app.bundle_id.as_deref(),
+                inventory,
+                &app.path,
+            ));
         }
     }
 
@@ -303,89 +327,15 @@ fn is_brew_cask(name: &str) -> bool {
     path.is_dir()
 }
 
-fn find_leftovers(home: &Path, _app_name: &str, bundle_id: Option<&str>) -> Vec<RemovalItem> {
-    // Only scan when we have a valid bundle ID. Name-keyed fallback was removed
-    // because it can collide with system folders for apps with generic names
-    // (e.g. "Mail", "Notes" → /Library/Application Support/<system-folder>).
-    let Some(bid) = bundle_id.filter(|b| ownership::valid_bundle_id(b)) else {
-        return Vec::new();
-    };
-    let library = home.join("Library");
-    leftover_candidates(&library, bid)
-        .into_iter()
-        .filter_map(|path| leftover_item(home, &library, path))
-        .collect()
-}
-
-fn leftover_candidates(library: &Path, bid: &str) -> Vec<PathBuf> {
-    let mut candidates: Vec<PathBuf> = vec![
-        library.join("Application Support").join(bid),
-        library.join("Caches").join(bid),
-        library.join("Preferences").join(format!("{}.plist", bid)),
-        library.join("Containers").join(bid),
-        library
-            .join("Saved Application State")
-            .join(format!("{}.savedState", bid)),
-        library.join("HTTPStorages").join(bid),
-        library
-            .join("HTTPStorages")
-            .join(format!("{}.binarycookies", bid)),
-        library.join("WebKit").join(bid),
-    ];
-    // LaunchAgents pattern <bundle_id>*.plist
-    candidates.extend(matching_entries(&library.join("LaunchAgents"), |n| {
-        n.starts_with(bid)
-    }));
-    // Group Containers — substring match on bundle id
-    candidates.extend(matching_entries(&library.join("Group Containers"), |n| {
-        n.contains(bid)
-    }));
-    candidates
-}
-
-fn matching_entries(dir: &Path, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
-    let Ok(entries) = fs::read_dir(dir) else {
-        return Vec::new();
-    };
-    entries
-        .flatten()
-        .map(|e| e.path())
-        .filter(|p| p.file_name().and_then(|s| s.to_str()).is_some_and(&keep))
-        .collect()
-}
-
-/// Accepts a candidate only if it is strictly inside `library`, not protected,
-/// exists and is not a symlink.
-fn leftover_item(home: &Path, library: &Path, path: PathBuf) -> Option<RemovalItem> {
-    if path == library || !path.starts_with(library) {
-        return None;
-    }
-    if crate::clean::trash_plan::protected_reason(&path, Some(home), false).is_some() {
-        return None;
-    }
-    let meta = fs::symlink_metadata(&path).ok()?;
-    if meta.file_type().is_symlink() {
-        return None;
-    }
-    let size = if meta.is_dir() {
-        dir_size(&path)
-    } else {
-        meta.len()
-    };
-    Some(RemovalItem {
-        path,
-        size,
-        kind: ItemKind::Leftover,
-    })
-}
-
 // ---------- Execution ----------
 
-pub fn execute_plan(plan: &Plan, hard: bool) -> Result<()> {
+/// Removes the items `consent` allows; report-only and uncertain items are
+/// never touched.
+pub fn execute_plan(plan: &Plan, hard: bool, consent: Consent) -> Result<()> {
     if let Some(reason) = &plan.blocked {
         return Err(engine_error!("{}", reason));
     }
-    for item in &plan.items {
+    for item in plan.items_for(consent) {
         if hard {
             hard_remove(&item.path)?;
         } else {
@@ -432,52 +382,45 @@ mod tests {
         assert_eq!(s[2].name, "A");
     }
 
-    fn fixture_home() -> tempfile::TempDir {
-        let home = tempfile::tempdir().unwrap();
-        for sub in ["Application Support", "Caches", "Group Containers"] {
-            fs::create_dir_all(home.path().join("Library").join(sub)).unwrap();
-        }
-        fs::create_dir_all(home.path().join("Library/Caches/com.example.App")).unwrap();
-        home
-    }
-
-    #[test]
-    fn traversal_ids_list_nothing() {
-        let home = fixture_home();
-        for id in ["../..", ".", "..", "a/b"] {
-            assert!(
-                find_leftovers(home.path(), "X", Some(id)).is_empty(),
-                "{id}"
-            );
+    fn item(name: &str, ownership: Ownership) -> RemovalItem {
+        RemovalItem {
+            path: PathBuf::from(name),
+            size: 10,
+            kind: ItemKind::Leftover,
+            ownership,
         }
     }
 
     #[test]
-    fn valid_id_finds_exact_leftover() {
-        let home = fixture_home();
-        let items = find_leftovers(home.path(), "X", Some("com.example.App"));
-        assert_eq!(items.len(), 1);
-        assert_eq!(
-            items[0].path,
-            home.path().join("Library/Caches/com.example.App")
-        );
-        assert!(find_leftovers(home.path(), "X", None).is_empty());
-    }
-
-    #[test]
-    fn symlinked_leftover_is_skipped() {
-        let home = fixture_home();
-        let target = home.path().join("elsewhere");
-        fs::create_dir(&target).unwrap();
-        std::os::unix::fs::symlink(
-            &target,
-            home.path()
-                .join("Library/Application Support/com.example.App"),
-        )
-        .unwrap();
-        let items = find_leftovers(home.path(), "X", Some("com.example.App"));
-        assert_eq!(items.len(), 1);
-        assert!(items[0].path.ends_with("Caches/com.example.App"));
+    fn items_for_filters_by_consent_and_total_excludes_unremovable() {
+        let plan = Plan {
+            app: mk("A", 0),
+            blocked: None,
+            items: vec![
+                item(
+                    "cache",
+                    Ownership::Owned {
+                        class: LeftoverClass::Regenerable,
+                    },
+                ),
+                item(
+                    "data",
+                    Ownership::Owned {
+                        class: LeftoverClass::DataRisk,
+                    },
+                ),
+                item("shared", Ownership::ReportOnly { reason: "r".into() }),
+                item("odd", Ownership::Uncertain { reason: "r".into() }),
+            ],
+        };
+        let paths = |c| {
+            plan.items_for(c)
+                .map(|i| i.path.to_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(paths(Consent::Unattended), ["cache"]);
+        assert_eq!(paths(Consent::Explicit), ["cache", "data"]);
+        assert_eq!(plan.total_size(), 20);
     }
 
     fn mk(name: &str, size: u64) -> AppEntry {

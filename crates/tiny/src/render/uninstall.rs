@@ -5,9 +5,12 @@ use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use tiny_core::uninstall::*;
 
 pub fn run(opts: crate::cli::UninstallOpts) -> Result<()> {
+    // One listing serves the picker and the duplicate-bundle-id check (O5).
+    // `--shallow` plans no leftovers, so it skips the (slow) listing.
+    let inventory = (!opts.shallow).then(|| list_applications().ok());
     let targets = match opts.name.clone() {
         Some(name) => vec![resolve_app_by_name(&name)?],
-        None => pick_interactive(&opts)?,
+        None => pick_interactive(&opts, inventory.clone().flatten())?,
     };
 
     if targets.is_empty() {
@@ -17,7 +20,13 @@ pub fn run(opts: crate::cli::UninstallOpts) -> Result<()> {
 
     let plans: Vec<Plan> = targets
         .iter()
-        .map(|app| build_plan(app, &(&opts).into()))
+        .map(|app| {
+            let apps = match &inventory {
+                Some(listed) => listed.as_deref(),
+                None => Some(&[][..]),
+            };
+            build_plan(app, &(&opts).into(), apps)
+        })
         .collect::<tiny_core::error::Result<_>>()?;
 
     print_plans(&plans, &opts);
@@ -43,11 +52,17 @@ pub fn run(opts: crate::cli::UninstallOpts) -> Result<()> {
         }
         Action::Trash | Action::Hard => {
             let hard = matches!(action, Action::Hard);
+            let consent = if opts.yes {
+                Consent::Unattended
+            } else {
+                Consent::Explicit
+            };
             if hard && !opts.yes && !confirm_hard_delete(&plans)? {
                 println!("Aborted.");
                 return Ok(());
             }
-            run_removal(&plans, hard)
+            print_kept(&plans, consent);
+            run_removal(&plans, hard, consent)
         }
     }
 }
@@ -96,7 +111,13 @@ fn confirm_hard_delete(plans: &[Plan]) -> Result<bool> {
     let total: u64 = plans.iter().map(|p| p.total_size()).sum();
     let prompt = format!(
         "PERMANENTLY DELETE {} ({}) — this CANNOT be undone. Are you sure?",
-        plural(plans.iter().map(|p| p.items.len()).sum::<usize>(), "item"),
+        plural(
+            plans
+                .iter()
+                .map(|p| p.items_for(Consent::Explicit).count())
+                .sum::<usize>(),
+            "item"
+        ),
         format_bytes(total)
     );
     Confirm::with_theme(&ColorfulTheme::default())
@@ -114,10 +135,10 @@ fn plural(n: usize, label: &str) -> String {
     }
 }
 
-fn run_removal(plans: &[Plan], hard: bool) -> Result<()> {
+fn run_removal(plans: &[Plan], hard: bool, consent: Consent) -> Result<()> {
     let mut failures: Vec<String> = Vec::new();
     for plan in plans {
-        match execute_plan(plan, hard) {
+        match execute_plan(plan, hard, consent) {
             Ok(()) => println!("✓ removed {}", plan.app.name),
             Err(e) => {
                 println!("✗ {}: {}", plan.app.name, e);
@@ -131,8 +152,11 @@ fn run_removal(plans: &[Plan], hard: bool) -> Result<()> {
     Ok(())
 }
 
-fn pick_interactive(opts: &UninstallOpts) -> Result<Vec<AppEntry>> {
-    let apps = list_applications()?;
+fn pick_interactive(opts: &UninstallOpts, listed: Option<Vec<AppEntry>>) -> Result<Vec<AppEntry>> {
+    let apps = match listed {
+        Some(apps) => apps,
+        None => list_applications()?,
+    };
     let apps = sort_apps(apps, &opts.sort.clone().into());
 
     if apps.is_empty() {
@@ -177,6 +201,38 @@ fn truncate(s: &str, max: usize) -> String {
 
 // ---------- Reporting & confirm ----------
 
+fn item_label(item: &RemovalItem) -> &'static str {
+    match &item.ownership {
+        Ownership::AppBundle => "app",
+        Ownership::Owned {
+            class: LeftoverClass::Regenerable,
+        } => "cache",
+        Ownership::Owned {
+            class: LeftoverClass::DataRisk,
+        } => "data",
+        Ownership::ReportOnly { .. } => "report-only",
+        Ownership::Uncertain { .. } => "uncertain",
+    }
+}
+
+/// Tells the user which leftovers an unattended run leaves in place.
+fn print_kept(plans: &[Plan], consent: Consent) {
+    if consent != Consent::Unattended {
+        return;
+    }
+    let kept = plans
+        .iter()
+        .flat_map(|p| p.items.iter())
+        .filter(|i| matches!(i.ownership, Ownership::Owned { .. }) && !i.ownership.allows(consent))
+        .count();
+    if kept > 0 {
+        println!(
+            "Keeping {} (data) — `-y` removes only the app and caches. Run without -y and choose an action to remove them.",
+            plural(kept, "leftover")
+        );
+    }
+}
+
 fn print_plans(plans: &[Plan], opts: &UninstallOpts) {
     println!(
         "Mode: {}",
@@ -195,26 +251,32 @@ fn print_plans(plans: &[Plan], opts: &UninstallOpts) {
         if let Some(reason) = &plan.blocked {
             println!("  BLOCKED: {}", reason);
         }
-        if let Some(bid) = &plan.app.bundle_id {
-            println!("  bundle: {}", bid);
+        match plan.app.bundle_id.as_deref() {
+            Some(bid) if valid_bundle_id(bid) => println!("  bundle: {}", bid),
+            Some(bid) => println!(
+                "  bundle: {} (not a valid identifier; leftovers not searched)",
+                bid
+            ),
+            None => println!("  bundle: unknown (leftovers not searched)"),
         }
         if plan.items.is_empty() {
             println!("  (nothing to remove)");
         }
         for item in &plan.items {
-            let kind = match item.kind {
-                ItemKind::AppBundle => "app  ",
-                ItemKind::Leftover => "left.",
-            };
             println!(
-                "  {} {:>10}  {}",
-                kind,
+                "  {:<11} {:>10}  {}",
+                item_label(item),
                 format_bytes(item.size),
                 item.path.display()
             );
+            if let Ownership::ReportOnly { reason } | Ownership::Uncertain { reason } =
+                &item.ownership
+            {
+                println!("              ↳ {}", reason);
+            }
         }
         let total = plan.total_size();
-        println!("  → subtotal: {}", format_bytes(total));
+        println!("  → removable subtotal: {}", format_bytes(total));
         grand_total = grand_total.saturating_add(total);
         println!();
     }

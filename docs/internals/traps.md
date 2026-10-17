@@ -7,8 +7,8 @@ Things that are not obvious from reading one file.
 ## Deletion
 
 - **`uninstall --hard -y` asks nothing.** `clean` and `processes quit --force` demand an
-  environment variable with `-y`; `uninstall` deletes permanently on the flags alone
-  ([`uninstall.rs`](../../crates/tiny/src/render/uninstall.rs)).
+  environment variable with `-y`; `uninstall` deletes the app and its cache leftovers permanently on the
+  flags alone ([`uninstall.rs`](../../crates/tiny/src/render/uninstall.rs)).
 - **An `uninstall` plan stops at its first failing path**, leaving that app partly removed;
   later apps still run ([`execute_plan`](../../crates/tiny-core/src/uninstall.rs)).
 - **Move to Trash is not always recoverable.** With "Empty Trash automatically" on, Finder

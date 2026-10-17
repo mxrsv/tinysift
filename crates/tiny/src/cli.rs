@@ -152,7 +152,8 @@ pub struct UninstallOpts {
     #[arg(long)]
     pub dry_run: bool,
 
-    /// Skip the action menu and execute immediately (Trash, or rm -rf if --hard).
+    /// Skip the action menu: remove the app and its caches now (Trash, or rm -rf if --hard).
+    /// Data leftovers are kept; choose an action in the menu to remove them.
     #[arg(short = 'y', long)]
     pub yes: bool,
 
