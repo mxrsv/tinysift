@@ -40,7 +40,7 @@ The report labels every line:
   a symbolic link rather than a real file or folder.
 
 Folders derived from the app's display name, top-level dot folders and system `/Library` are
-never looked at. The subtotal counts only what an action can remove.
+never looked at. The subtotal counts only what the run can remove: with `-y` it leaves out `data` entries.
 
 If `tiny` cannot read the app's bundle identifier, or it is not a valid reverse-DNS name
 (at least two dot-separated parts of letters, digits and `-`, with no `/` or `..`), it lists

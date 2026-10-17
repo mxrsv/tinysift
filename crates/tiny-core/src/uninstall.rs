@@ -118,26 +118,43 @@ impl Plan {
 // ---------- App discovery ----------
 
 pub fn list_applications() -> Result<Vec<AppEntry>> {
-    let mut apps = Vec::new();
+    Ok(app_paths()?.iter().map(|p| load_app_entry(p)).collect())
+}
+
+/// Like `list_applications`, but reads only each app's bundle identifier, for
+/// the duplicate-bundle-id check (O5). Size and last use are left empty.
+pub fn list_app_identities() -> Result<Vec<AppEntry>> {
+    Ok(app_paths()?
+        .into_iter()
+        .map(|path| AppEntry {
+            name: app_name(&path),
+            bundle_id: read_bundle_id(&path),
+            path,
+            size: 0,
+            last_used_days: None,
+        })
+        .collect())
+}
+
+fn app_paths() -> Result<Vec<PathBuf>> {
     let entries = fs::read_dir(APPLICATIONS_DIR)
         .with_context(|| format!("failed to read {}", APPLICATIONS_DIR))?;
+    Ok(entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|e| e == "app"))
+        .collect())
+}
 
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.extension().map(|e| e == "app").unwrap_or(false) {
-            apps.push(load_app_entry(&path));
-        }
-    }
-    Ok(apps)
+fn app_name(path: &Path) -> String {
+    path.file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
 }
 
 fn load_app_entry(path: &Path) -> AppEntry {
-    let name = path
-        .file_stem()
-        .map(|s| s.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
     AppEntry {
-        name,
+        name: app_name(path),
         path: path.to_path_buf(),
         bundle_id: read_bundle_id(path),
         size: dir_size(path),

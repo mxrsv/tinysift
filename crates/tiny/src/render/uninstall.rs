@@ -5,9 +5,13 @@ use dialoguer::{theme::ColorfulTheme, Confirm, MultiSelect, Select};
 use tiny_core::uninstall::*;
 
 pub fn run(opts: crate::cli::UninstallOpts) -> Result<()> {
-    // One listing serves the picker and the duplicate-bundle-id check (O5).
-    // `--shallow` plans no leftovers, so it skips the (slow) listing.
-    let inventory = (!opts.shallow).then(|| list_applications().ok());
+    // The duplicate-bundle-id check (O5) needs the installed apps. The picker
+    // lists them fully anyway; a named app needs only their bundle ids.
+    // `--shallow` plans no leftovers, so it skips the listing.
+    let inventory = (!opts.shallow).then(|| match opts.name {
+        Some(_) => list_app_identities().ok(),
+        None => list_applications().ok(),
+    });
     let targets = match opts.name.clone() {
         Some(name) => vec![resolve_app_by_name(&name)?],
         None => pick_interactive(&opts, inventory.clone().flatten())?,
@@ -234,6 +238,12 @@ fn print_kept(plans: &[Plan], consent: Consent) {
 }
 
 fn print_plans(plans: &[Plan], opts: &UninstallOpts) {
+    // `-y` keeps data leftovers, so its subtotal leaves them out.
+    let consent = if opts.yes {
+        Consent::Unattended
+    } else {
+        Consent::Explicit
+    };
     println!(
         "Mode: {}",
         match (opts.shallow, opts.leftovers_only, opts.hard) {
@@ -275,7 +285,7 @@ fn print_plans(plans: &[Plan], opts: &UninstallOpts) {
                 println!("              ↳ {}", reason);
             }
         }
-        let total = plan.total_size();
+        let total: u64 = plan.items_for(consent).map(|i| i.size).sum();
         println!("  → removable subtotal: {}", format_bytes(total));
         grand_total = grand_total.saturating_add(total);
         println!();

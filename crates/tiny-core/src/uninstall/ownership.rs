@@ -96,9 +96,27 @@ fn doubt_reason(app_path: &Path, id: &str, inventory: Option<&[AppEntry]>) -> Op
     let Some(apps) = inventory else {
         return Some(REASON_NO_INVENTORY);
     };
+    // Library folders resolve case-insensitively on the default volume, so
+    // `com.foo.Bar` and `com.foo.bar` share every leftover.
     apps.iter()
-        .any(|a| a.path != app_path && a.bundle_id.as_deref() == Some(id))
+        .any(|a| {
+            !same_entry(&a.path, app_path)
+                && a.bundle_id
+                    .as_deref()
+                    .is_some_and(|other| other.eq_ignore_ascii_case(id))
+        })
         .then_some(REASON_DUPLICATE_ID)
+}
+
+/// The same directory entry, even when spelled differently (`claude.app` and
+/// `Claude.app` on a case-insensitive volume). Unreadable means "not the same".
+fn same_entry(a: &Path, b: &Path) -> bool {
+    use std::os::unix::fs::MetadataExt;
+    a == b
+        || matches!(
+            (fs::symlink_metadata(a), fs::symlink_metadata(b)),
+            (Ok(x), Ok(y)) if x.dev() == y.dev() && x.ino() == y.ino()
+        )
 }
 
 enum Match {
@@ -295,6 +313,32 @@ mod tests {
 
     fn scan(home: &Path, inv: Option<&[AppEntry]>) -> Vec<RemovalItem> {
         find_leftovers(home, Some(ID), inv, &app_path())
+    }
+
+    #[test]
+    fn a_twin_differing_only_in_case_is_a_duplicate() {
+        let other = [entry("/Applications/Other.app", Some("COM.example.app"))];
+        assert_eq!(
+            doubt_reason(&app_path(), ID, Some(&other)),
+            Some(REASON_DUPLICATE_ID)
+        );
+    }
+
+    #[test]
+    fn the_same_app_spelled_differently_is_not_its_own_twin() {
+        let dir = tempfile::tempdir().unwrap();
+        let app = dir.path().join("App.app");
+        fs::create_dir_all(dir.path().join("sub")).unwrap();
+        fs::create_dir(&app).unwrap();
+        let listed = dir.path().join("sub/../App.app");
+        let inventory = [entry(listed.to_str().unwrap(), Some(ID))];
+        assert_eq!(doubt_reason(&app, ID, Some(&inventory)), None);
+        let missing = [entry("/nowhere/App.app", Some(ID))];
+        assert_eq!(
+            doubt_reason(&app, ID, Some(&missing)),
+            Some(REASON_DUPLICATE_ID),
+            "an entry that cannot be read counts as another copy"
+        );
     }
 
     #[test]
