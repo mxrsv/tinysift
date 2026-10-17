@@ -172,13 +172,38 @@ pub(crate) fn to_info(raw: RawProcess, cpu_measured: bool, current_uid: u32) -> 
 /// and reports a real value only from the third; earlier values read 0.
 const REFRESHES_FOR_CPU: u32 = 3;
 
+/// One pid as earlier refreshes saw it.
+struct Seen {
+    start: u64,
+    /// Refreshes this process has been seen in.
+    count: u32,
+    exe: Option<PathBuf>,
+    /// The name after an `exec` under the same pid and start time, which the
+    /// shared `System` would otherwise keep from before it.
+    name: Option<String>,
+}
+
+/// The name a fresh lookup reports for `pid`, as `terminate` sees it.
+fn fresh_name(pid: u32) -> Option<String> {
+    let pid = sysinfo::Pid::from_u32(pid);
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::Some(&[pid]),
+        true,
+        ProcessRefreshKind::new().with_exe(UpdateKind::Always),
+    );
+    system
+        .process(pid)
+        .map(|process| process.name().to_string_lossy().into_owned())
+}
+
 /// Keeps one `System` alive so later samples have measured CPU.
 pub struct Sampler {
     system: System,
     users: Users,
     refreshes: u32,
-    /// pid -> (start time, refreshes this process has been seen in).
-    seen: HashMap<u32, (u64, u32)>,
+    /// What earlier refreshes saw of each pid.
+    seen: HashMap<u32, Seen>,
     current_uid: u32,
     system_cpu_samples: u32,
     last_system_cpu_sample: Option<Instant>,
@@ -243,11 +268,28 @@ impl Sampler {
         for process in self.system.processes().values() {
             let pid = process.pid().as_u32();
             let start = process.start_time();
-            let count = match self.seen.get(&pid) {
-                Some(&(previous_start, count)) if previous_start == start => count + 1,
-                _ => 1,
+            let exe = process.exe().map(PathBuf::from);
+            let entry = match self.seen.get(&pid) {
+                Some(previous) if previous.start == start => Seen {
+                    start,
+                    count: previous.count + 1,
+                    // `sysinfo` keeps a known process's name across `exec`;
+                    // only a fresh lookup reads the new one.
+                    name: if previous.exe.is_some() && previous.exe != exe {
+                        fresh_name(pid)
+                    } else {
+                        previous.name.clone()
+                    },
+                    exe,
+                },
+                _ => Seen {
+                    start,
+                    count: 1,
+                    exe,
+                    name: None,
+                },
             };
-            seen.insert(pid, (start, count));
+            seen.insert(pid, entry);
         }
         self.seen = seen;
     }
@@ -295,9 +337,13 @@ impl Sampler {
                     .user_id()
                     .and_then(|uid| self.users.get_user_by_id(uid))
                     .map(|user| user.name().to_string());
-                let raw = raw_process(process, user);
-                let seen = self.seen.get(&raw.pid).map_or(0, |&(_, count)| count);
-                to_info(raw, seen >= REFRESHES_FOR_CPU, self.current_uid)
+                let mut raw = raw_process(process, user);
+                let seen = self.seen.get(&raw.pid);
+                if let Some(name) = seen.and_then(|s| s.name.clone()) {
+                    raw.name = name;
+                }
+                let count = seen.map_or(0, |s| s.count);
+                to_info(raw, count >= REFRESHES_FOR_CPU, self.current_uid)
             })
             .collect();
         ProcessSnapshot {
@@ -543,6 +589,10 @@ mod tests {
             after.exe.as_ref().and_then(|path| path.file_name()),
             Some(std::ffi::OsStr::new("sleep"))
         );
+        // The name follows the exec too: `terminate` probes a fresh `System`,
+        // so a name kept from before the exec would read as a changed identity.
+        assert_ne!(before.name, "sleep");
+        assert_eq!(after.name, "sleep");
     }
 
     #[test]
