@@ -46,9 +46,10 @@ Swift target. Neither the private app nor its website is part of this repository
 Read the [native safety contract](docs/internals/clean.md), [architecture](docs/internals/overview.md)
 and [documentation index](docs/README.md) before extending the interface.
 
-## Publication
+## License
 
-The source became public on 2026-10-14, before its license review was finished; there is no
-release and no license file yet. [Cargo metadata](Cargo.toml) retains the existing MIT
-declaration. Copyright ownership, the license file and third-party distribution notices are
-still pending and must be finalized before binaries are published.
+This repository is licensed under [GPL-3.0-only](LICENSE). The code is open source; the
+TinySift name and logo are not, see the [trademark policy](TRADEMARK.md). The source became
+public on 2026-10-14 under the earlier MIT declaration, so copies obtained before the
+relicense on 2026-10-17 remain under MIT. There is no release yet; third-party distribution notices
+are still pending and must be finalized before binaries are published.
