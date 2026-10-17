@@ -45,7 +45,11 @@ fn scan_converts_the_tree_and_reports_progress() {
         .unwrap();
     assert!(sub.is_directory);
     assert_eq!(sub.children[0].bytes, 5);
-    assert!(!report.truncated && !report.incomplete);
+    assert!(!report.incomplete);
+    assert_eq!(
+        (report.depth_limited_count, report.other_volume_count),
+        (0, 0)
+    );
     assert!(!listener.0.lock().unwrap().is_empty());
     assert!(!session.is_busy(), "the gate is released");
     std::fs::remove_dir_all(dir).unwrap();
@@ -146,6 +150,7 @@ fn node(name: &str, seed: u64, children: Vec<SpaceNode>) -> SpaceNode {
         omitted_count: seed + 3,
         omitted_bytes: seed + 4,
         unreadable: seed.is_multiple_of(3),
+        depth_limited: seed.is_multiple_of(5),
     }
 }
 
@@ -161,6 +166,7 @@ fn expected(name: &str, seed: u64, children: Vec<FfiSpaceNode>) -> FfiSpaceNode 
         omitted_count: seed + 3,
         omitted_bytes: seed + 4,
         unreadable: seed.is_multiple_of(3),
+        depth_limited: seed.is_multiple_of(5),
     }
 }
 
@@ -172,7 +178,8 @@ fn every_report_and_node_field_is_converted_at_every_depth() {
         files_scanned: 7,
         skipped_paths: vec!["/x".into(), "/y".into()],
         skipped_count: 9,
-        truncated: true,
+        depth_limited_count: 4,
+        other_volume_count: 5,
         incomplete: true,
         cancelled: false,
     };
@@ -188,7 +195,8 @@ fn every_report_and_node_field_is_converted_at_every_depth() {
             files_scanned: 7,
             skipped_paths: vec!["/x".into(), "/y".into()],
             skipped_count: 9,
-            truncated: true,
+            depth_limited_count: 4,
+            other_volume_count: 5,
             incomplete: true,
         }
     );

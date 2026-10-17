@@ -6,9 +6,13 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::{
     cmp::Reverse,
-    fs,
+    collections::HashSet,
+    fs, io,
     path::{Path, PathBuf},
-    sync::atomic::{AtomicBool, AtomicU64, Ordering},
+    sync::{
+        atomic::{AtomicBool, AtomicU64, Ordering},
+        Mutex,
+    },
     time::SystemTime,
 };
 
@@ -18,6 +22,8 @@ const MAX_CHILDREN: usize = 100;
 const RETAIN_DEPTH: usize = 1;
 const MAX_DEPTH: usize = 64;
 const MAX_SKIPPED: usize = 200;
+/// On macOS the data volume is also reachable through firmlinks under `/`, with the same `st_dev`.
+const DATA_VOLUME: &str = "/System/Volumes/Data";
 
 /// One file or folder. `bytes` always covers the whole subtree that could be read,
 /// including children that are not retained in `children`.
@@ -34,8 +40,11 @@ pub struct SpaceNode {
     /// Entries counted in `bytes` but left out of `children` (depth or size limit).
     pub omitted_count: u64,
     pub omitted_bytes: u64,
-    /// Something below could not be read or walked, so `bytes` is a lower bound.
+    /// Something at or below could not be read, so `bytes` is a lower bound.
     pub unreadable: bool,
+    /// This folder, or one below it, was not walked because it is deeper than the depth limit,
+    /// so `bytes` is a lower bound. Unlike `unreadable`, nothing failed.
+    pub depth_limited: bool,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,9 +54,11 @@ pub struct SpaceReport {
     /// First paths that could not be read; `skipped_count` is the full total.
     pub skipped_paths: Vec<String>,
     pub skipped_count: u64,
-    /// Some node left children out (see `omitted_*`); totals are still complete.
-    pub truncated: bool,
-    /// Some size is a lower bound (see `unreadable`).
+    /// Folders not walked because of the depth limit (see `depth_limited`).
+    pub depth_limited_count: u64,
+    /// Mount points on other volumes that were not entered; their bytes are not counted.
+    pub other_volume_count: u64,
+    /// Some size is a lower bound (see `unreadable` and `depth_limited`).
     pub incomplete: bool,
     /// Stopped early; the tree is partial and must not be presented as a result.
     pub cancelled: bool,
@@ -76,16 +87,38 @@ pub fn validate_path(path: &Path) -> Result<()> {
 }
 
 /// Scans `root` into a depth-limited size tree. Stops early once `cancel` is set.
+///
+/// A regular file with several hard links counts once per scan. Other volumes are not entered
+/// (see [`is_other_volume`]).
 pub fn scan(
     root: &Path,
     cancel: Option<&AtomicBool>,
     progress: ProgressCallback<'_>,
 ) -> Result<SpaceReport> {
+    scan_with_depth(root, cancel, progress, MAX_DEPTH)
+}
+
+fn scan_with_depth(
+    root: &Path,
+    cancel: Option<&AtomicBool>,
+    progress: ProgressCallback<'_>,
+    max_depth: usize,
+) -> Result<SpaceReport> {
     validate_path(root)?;
-    if !fs::symlink_metadata(root)?.is_dir() {
+    let root_meta = fs::symlink_metadata(root)?;
+    if !root_meta.is_dir() {
         return Err(Error::InvalidInput("Choose a directory to scan.".into()));
     }
     let counter = AtomicU64::new(0);
+    let links = Mutex::new(HashSet::new());
+    let shared = Shared {
+        counter: &counter,
+        cancel,
+        links: &links,
+        root,
+        root_dev: device(&root_meta),
+        max_depth,
+    };
     let mut top = Top::default();
     let mut entries: Vec<PathBuf> = Vec::new();
     for entry in fs::read_dir(root)? {
@@ -106,7 +139,7 @@ pub fn scan(
     let results: Vec<_> = entries
         .par_iter()
         .map(|path| {
-            let mut walker = Walker::new(&counter, cancel);
+            let mut walker = Walker::new(shared);
             let visit = walker.walk(path, 0);
             report(
                 progress,
@@ -118,7 +151,7 @@ pub fn scan(
             (visit, walker)
         })
         .collect();
-    let mut root_node = new_node(root, &fs::symlink_metadata(root)?);
+    let mut root_node = new_node(root, &root_meta);
     root_node.age_seconds = 0;
     for (visit, walker) in results {
         match visit {
@@ -130,14 +163,14 @@ pub fn scan(
     }
     root_node.unreadable |= top.skipped_count > 0;
     trim(&mut root_node);
-    let truncated = top.truncated || root_node.omitted_count > 0;
     Ok(SpaceReport {
-        incomplete: root_node.unreadable || top.incomplete,
+        incomplete: root_node.unreadable || root_node.depth_limited || top.incomplete,
         root: root_node,
         files_scanned: counter.load(Ordering::Relaxed),
         skipped_paths: top.skipped,
         skipped_count: top.skipped_count,
-        truncated,
+        depth_limited_count: top.depth_limited_count,
+        other_volume_count: top.other_volume_count,
         cancelled: cancel.is_some_and(|flag| flag.load(Ordering::Acquire)),
     })
 }
@@ -147,7 +180,8 @@ pub fn scan(
 struct Top {
     skipped: Vec<String>,
     skipped_count: u64,
-    truncated: bool,
+    depth_limited_count: u64,
+    other_volume_count: u64,
     incomplete: bool,
 }
 
@@ -163,7 +197,8 @@ impl Top {
         self.skipped_count += walker.skipped_count;
         let room = MAX_SKIPPED.saturating_sub(self.skipped.len());
         self.skipped.extend(walker.skipped.into_iter().take(room));
-        self.truncated |= walker.truncated;
+        self.depth_limited_count += walker.depth_limited_count;
+        self.other_volume_count += walker.other_volume_count;
         self.incomplete |= walker.incomplete;
     }
 }
@@ -176,29 +211,43 @@ enum Visit {
     Failed,
 }
 
-struct Walker<'a> {
+/// Read-only state shared by every parallel branch of one scan.
+#[derive(Clone, Copy)]
+struct Shared<'a> {
     counter: &'a AtomicU64,
     cancel: Option<&'a AtomicBool>,
+    /// `(dev, ino)` of multi-link files already counted in this scan.
+    links: &'a Mutex<HashSet<(u64, u64)>>,
+    root: &'a Path,
+    root_dev: u64,
+    max_depth: usize,
+}
+
+struct Walker<'a> {
+    shared: Shared<'a>,
     skipped: Vec<String>,
     skipped_count: u64,
-    truncated: bool,
+    depth_limited_count: u64,
+    other_volume_count: u64,
     incomplete: bool,
 }
 
 impl<'a> Walker<'a> {
-    fn new(counter: &'a AtomicU64, cancel: Option<&'a AtomicBool>) -> Self {
+    fn new(shared: Shared<'a>) -> Self {
         Self {
-            counter,
-            cancel,
+            shared,
             skipped: Vec::new(),
             skipped_count: 0,
-            truncated: false,
+            depth_limited_count: 0,
+            other_volume_count: 0,
             incomplete: false,
         }
     }
 
     fn cancelled(&self) -> bool {
-        self.cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
+        self.shared
+            .cancel
+            .is_some_and(|flag| flag.load(Ordering::Acquire))
     }
 
     fn skip(&mut self, path: &Path) {
@@ -213,9 +262,9 @@ impl<'a> Walker<'a> {
         if self.cancelled() {
             return Visit::Ignored;
         }
-        let Ok(meta) = fs::symlink_metadata(path) else {
-            self.skip(path);
-            return Visit::Failed;
+        let meta = match fs::symlink_metadata(path) {
+            Ok(meta) => meta,
+            Err(err) => return self.stat_failed(path, &err),
         };
         if meta.file_type().is_symlink() || !(meta.is_file() || meta.is_dir()) {
             return Visit::Ignored;
@@ -223,23 +272,52 @@ impl<'a> Walker<'a> {
         if path.file_name().is_none() {
             return Visit::Ignored;
         }
-        let mut node = new_node(path, &meta);
         if meta.is_file() {
-            self.counter.fetch_add(1, Ordering::Relaxed);
-            node.bytes = meta.len();
-            node.allocated_bytes = allocated(&meta);
-            return Visit::Node(node);
+            return self.walk_file(path, &meta);
         }
-        if depth >= MAX_DEPTH {
-            self.mark_unreadable(&mut node, path, false);
+        if is_other_volume(self.shared.root, self.shared.root_dev, path, device(&meta)) {
+            self.other_volume_count += 1;
+            return Visit::Ignored;
+        }
+        self.walk_dir(path, &meta, depth)
+    }
+
+    /// A vanished entry is not an error; anything else makes the parent a lower bound.
+    fn stat_failed(&mut self, path: &Path, err: &io::Error) -> Visit {
+        if err.kind() == io::ErrorKind::NotFound {
+            return Visit::Ignored;
+        }
+        self.skip(path);
+        Visit::Failed
+    }
+
+    fn walk_file(&mut self, path: &Path, meta: &fs::Metadata) -> Visit {
+        if let Some(id) = shared_link_id(meta) {
+            let mut seen = self.shared.links.lock().unwrap_or_else(|e| e.into_inner());
+            if !seen.insert(id) {
+                return Visit::Ignored;
+            }
+        }
+        let mut node = new_node(path, meta);
+        self.shared.counter.fetch_add(1, Ordering::Relaxed);
+        node.bytes = meta.len();
+        node.allocated_bytes = allocated(meta);
+        Visit::Node(node)
+    }
+
+    fn walk_dir(&mut self, path: &Path, meta: &fs::Metadata, depth: usize) -> Visit {
+        let mut node = new_node(path, meta);
+        if depth >= self.shared.max_depth {
+            node.depth_limited = true;
+            self.depth_limited_count += 1;
+            self.incomplete = true;
             return Visit::Node(node);
         }
         match fs::read_dir(path) {
             Ok(entries) => self.walk_entries(&mut node, path, entries, depth),
-            Err(_) => self.mark_unreadable(&mut node, path, true),
+            Err(_) => self.mark_unreadable(&mut node, path),
         }
         trim(&mut node);
-        self.truncated |= node.omitted_count > 0;
         Visit::Node(node)
     }
 
@@ -253,7 +331,7 @@ impl<'a> Walker<'a> {
         // No cancel check here: `walk` checks before reading each entry, which stops the loop's work.
         for entry in entries {
             let Ok(entry) = entry else {
-                self.mark_unreadable(node, path, true);
+                self.mark_unreadable(node, path);
                 continue;
             };
             match self.walk(&entry.path(), depth + 1) {
@@ -269,13 +347,10 @@ impl<'a> Walker<'a> {
         }
     }
 
-    /// Records a lower-bound size; `record` also lists the path as skipped.
-    fn mark_unreadable(&mut self, node: &mut SpaceNode, path: &Path, record: bool) {
+    /// Records a lower-bound size and lists the path as skipped.
+    fn mark_unreadable(&mut self, node: &mut SpaceNode, path: &Path) {
         node.unreadable = true;
-        self.incomplete = true;
-        if record {
-            self.skip(path);
-        }
+        self.skip(path);
     }
 }
 
@@ -299,7 +374,37 @@ fn new_node(path: &Path, meta: &fs::Metadata) -> SpaceNode {
         omitted_count: 0,
         omitted_bytes: 0,
         unreadable: false,
+        depth_limited: false,
     }
+}
+
+/// True for a directory on another volume than the scan root. The device check alone is not
+/// enough for `/`: on macOS `/System/Volumes/Data` has the same device, so it is named explicitly.
+fn is_other_volume(root: &Path, root_dev: u64, path: &Path, dev: u64) -> bool {
+    dev != root_dev || (root == Path::new("/") && path == Path::new(DATA_VOLUME))
+}
+
+/// `(dev, ino)` of a regular file with more than one hard link; `None` when it needs no dedup.
+#[cfg(unix)]
+fn shared_link_id(meta: &fs::Metadata) -> Option<(u64, u64)> {
+    use std::os::unix::fs::MetadataExt;
+    (meta.nlink() > 1).then(|| (meta.dev(), meta.ino()))
+}
+
+#[cfg(not(unix))]
+fn shared_link_id(_: &fs::Metadata) -> Option<(u64, u64)> {
+    None
+}
+
+#[cfg(unix)]
+fn device(meta: &fs::Metadata) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    meta.dev()
+}
+
+#[cfg(not(unix))]
+fn device(_: &fs::Metadata) -> u64 {
+    0
 }
 
 #[cfg(unix)]
@@ -318,6 +423,7 @@ fn absorb(node: &mut SpaceNode, child: SpaceNode, retain: bool) {
     node.bytes = node.bytes.saturating_add(child.bytes);
     node.allocated_bytes = node.allocated_bytes.saturating_add(child.allocated_bytes);
     node.unreadable |= child.unreadable;
+    node.depth_limited |= child.depth_limited;
     if retain {
         node.children.push(child);
     } else {
@@ -338,206 +444,4 @@ fn trim(node: &mut SpaceNode) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use std::os::unix::fs::PermissionsExt;
-
-    fn temp() -> tempfile::TempDir {
-        let root = std::fs::canonicalize(std::env::temp_dir()).unwrap();
-        tempfile::tempdir_in(root).unwrap()
-    }
-
-    fn find<'a>(node: &'a SpaceNode, name: &str) -> &'a SpaceNode {
-        node.children.iter().find(|c| c.name == name).unwrap()
-    }
-
-    #[test]
-    fn lens_counts_nested_files_without_following_symlinks() {
-        let dir = temp();
-        let outside = temp();
-        fs::write(dir.path().join("a"), b"abc").unwrap();
-        fs::write(outside.path().join("b"), b"secret").unwrap();
-        std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
-        let result = scan(dir.path(), None, None).unwrap();
-        assert_eq!(result.root.bytes, 3);
-        assert_eq!(result.files_scanned, 1);
-        assert!(!result.incomplete && !result.truncated && !result.cancelled);
-        assert!(scan(&dir.path().join("link"), None, None).is_err());
-        assert!(validate_path(&dir.path().join("link/b")).is_err());
-    }
-
-    #[test]
-    fn omitted_children_keep_totals_and_are_summarized() {
-        let dir = temp();
-        let big = dir.path().join("big");
-        fs::create_dir(&big).unwrap();
-        // More than twice the cap, so the streaming trim runs as well as the final one.
-        let count = MAX_CHILDREN * 2 + 50;
-        for i in 0..count {
-            fs::write(big.join(format!("f{i:03}")), vec![0u8; i + 1]).unwrap();
-        }
-        let result = scan(dir.path(), None, None).unwrap();
-        let node = find(&result.root, "big");
-        let total: u64 = (1..=count as u64).sum();
-        assert_eq!(node.bytes, total);
-        assert_eq!(node.children.len(), MAX_CHILDREN);
-        assert_eq!(node.omitted_count, (count - MAX_CHILDREN) as u64);
-        let retained: u64 = node.children.iter().map(|c| c.bytes).sum();
-        assert_eq!(retained + node.omitted_bytes, node.bytes);
-        assert_eq!(
-            node.children[0].bytes, count as u64,
-            "largest entries are kept"
-        );
-        assert!(result.truncated && !result.incomplete);
-    }
-
-    #[test]
-    fn root_children_beyond_the_cap_are_summarized() {
-        let dir = temp();
-        for i in 0..MAX_CHILDREN + 5 {
-            fs::write(dir.path().join(format!("f{i}")), b"x").unwrap();
-        }
-        let result = scan(dir.path(), None, None).unwrap();
-        assert_eq!(result.root.bytes, (MAX_CHILDREN + 5) as u64);
-        assert_eq!(result.root.children.len(), MAX_CHILDREN);
-        assert_eq!(result.root.omitted_count, 5);
-        assert_eq!(result.root.omitted_bytes, 5);
-        assert!(result.truncated);
-    }
-
-    #[test]
-    fn depth_limited_folder_reports_what_it_hides() {
-        let dir = temp();
-        let deep = dir.path().join("a/b/c");
-        fs::create_dir_all(&deep).unwrap();
-        fs::write(deep.join("file"), b"12345").unwrap();
-        let result = scan(dir.path(), None, None).unwrap();
-        let b = find(find(&result.root, "a"), "b");
-        assert_eq!(b.bytes, 5);
-        assert!(b.children.is_empty());
-        assert_eq!((b.omitted_count, b.omitted_bytes), (1, 5));
-        assert!(result.truncated && !result.incomplete);
-        let drilled = scan(&dir.path().join("a/b"), None, None).unwrap();
-        assert_eq!(find(&drilled.root, "c").bytes, 5);
-    }
-
-    struct Restore(Vec<PathBuf>);
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            for path in &self.0 {
-                let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o755));
-            }
-        }
-    }
-
-    fn lock(path: &Path) {
-        fs::create_dir(path).unwrap();
-        fs::set_permissions(path, fs::Permissions::from_mode(0o000)).unwrap();
-    }
-
-    #[test]
-    fn unreadable_folder_is_a_lower_bound_not_zero() {
-        let dir = temp();
-        fs::write(dir.path().join("ok"), b"abc").unwrap();
-        let locked = dir.path().join("locked");
-        fs::create_dir(&locked).unwrap();
-        fs::write(locked.join("hidden"), b"secret").unwrap();
-        let _restore = Restore(vec![locked.clone()]);
-        fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
-        let result = scan(dir.path(), None, None).unwrap();
-        let node = find(&result.root, "locked");
-        assert!(node.unreadable && result.root.unreadable && result.incomplete);
-        assert_eq!(result.skipped_count, 1);
-        assert_eq!(result.skipped_paths, vec![locked.display().to_string()]);
-        assert_eq!(result.root.bytes, 3);
-    }
-
-    #[test]
-    fn folders_deeper_than_the_walk_limit_are_marked_not_empty() {
-        let dir = temp();
-        let mut deep = dir.path().to_path_buf();
-        for _ in 0..MAX_DEPTH + 3 {
-            deep.push("d");
-        }
-        fs::create_dir_all(&deep).unwrap();
-        fs::write(deep.join("file"), b"x").unwrap();
-        let result = scan(dir.path(), None, None).unwrap();
-        assert!(result.incomplete && result.root.unreadable);
-        assert_eq!(
-            result.skipped_count, 0,
-            "not walked is not the same as skipped"
-        );
-        assert_eq!(result.files_scanned, 0);
-    }
-
-    #[test]
-    fn a_preset_flag_scans_nothing_and_flags_the_report() {
-        let dir = temp();
-        let sub = dir.path().join("sub");
-        fs::create_dir(&sub).unwrap();
-        for i in 0..20 {
-            fs::write(sub.join(format!("f{i}")), b"x").unwrap();
-        }
-        let full = scan(dir.path(), None, None).unwrap();
-        assert_eq!(full.files_scanned, 20);
-        let flag = AtomicBool::new(true);
-        let stopped = scan(dir.path(), Some(&flag), None).unwrap();
-        assert!(stopped.cancelled);
-        assert_eq!(stopped.files_scanned, 0);
-    }
-
-    #[test]
-    fn cancelling_while_scanning_stops_the_remaining_branches() {
-        let dir = temp();
-        for branch in 0..8 {
-            let sub = dir.path().join(format!("b{branch}"));
-            fs::create_dir(&sub).unwrap();
-            for i in 0..5 {
-                fs::write(sub.join(format!("f{i}")), b"x").unwrap();
-            }
-        }
-        let flag = AtomicBool::new(false);
-        // One thread makes the branch order sequential: the flag flips after the first branch ends.
-        let cancel_after_first_branch = |progress: crate::progress::Progress| {
-            if progress.completed >= 1 {
-                flag.store(true, Ordering::Release);
-            }
-        };
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(1)
-            .build()
-            .unwrap();
-        let report = pool
-            .install(|| scan(dir.path(), Some(&flag), Some(&cancel_after_first_branch)))
-            .unwrap();
-        assert!(report.cancelled);
-        assert_eq!(
-            report.files_scanned, 5,
-            "only the branch that was running finished"
-        );
-    }
-
-    #[test]
-    fn skipped_paths_are_capped_but_counted_in_full_across_branches() {
-        let dir = temp();
-        let many = dir.path().join("many");
-        fs::create_dir(&many).unwrap();
-        let mut locked = Vec::new();
-        // One branch alone exceeds the cap, and the top-level ones push the merged total past it.
-        for i in 0..MAX_SKIPPED + 5 {
-            let path = many.join(format!("l{i}"));
-            lock(&path);
-            locked.push(path);
-        }
-        for i in 0..10 {
-            let path = dir.path().join(format!("t{i}"));
-            lock(&path);
-            locked.push(path);
-        }
-        let _restore = Restore(locked);
-        let report = scan(dir.path(), None, None).unwrap();
-        assert_eq!(report.skipped_paths.len(), MAX_SKIPPED);
-        assert_eq!(report.skipped_count, (MAX_SKIPPED + 5 + 10) as u64);
-        assert!(report.incomplete);
-    }
-}
+mod tests;

@@ -36,8 +36,11 @@ pub struct FfiSpaceNode {
     /// Entries counted in `bytes` but not in `children`.
     pub omitted_count: u64,
     pub omitted_bytes: u64,
-    /// Something below could not be read, so `bytes` is a lower bound.
+    /// Something at or below could not be read, so `bytes` is a lower bound.
     pub unreadable: bool,
+    /// This folder or one below it was not walked (too deep), so `bytes` is a lower bound.
+    /// Nothing failed; drill down by scanning the folder.
+    pub depth_limited: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -47,8 +50,10 @@ pub struct FfiStorageReport {
     /// First unreadable paths; `skipped_count` is the full total.
     pub skipped_paths: Vec<String>,
     pub skipped_count: u64,
-    /// Some folder leaves children out; totals stay complete.
-    pub truncated: bool,
+    /// Folders not walked because they are too deep.
+    pub depth_limited_count: u64,
+    /// Mount points on other volumes that were not entered; their bytes are not counted.
+    pub other_volume_count: u64,
     /// Some size is a lower bound.
     pub incomplete: bool,
 }
@@ -77,6 +82,7 @@ impl From<SpaceNode> for FfiSpaceNode {
             omitted_count: node.omitted_count,
             omitted_bytes: node.omitted_bytes,
             unreadable: node.unreadable,
+            depth_limited: node.depth_limited,
         }
     }
 }
@@ -88,7 +94,8 @@ impl From<SpaceReport> for FfiStorageReport {
             files_scanned: report.files_scanned,
             skipped_paths: report.skipped_paths,
             skipped_count: report.skipped_count,
-            truncated: report.truncated,
+            depth_limited_count: report.depth_limited_count,
+            other_volume_count: report.other_volume_count,
             incomplete: report.incomplete,
         }
     }
