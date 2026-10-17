@@ -69,8 +69,9 @@ Things that are not obvious from reading one file.
 - **Totals are deliberately not "everything under the path".** A multi-link file counts once per
   scan, and another volume is never entered, so a size can be smaller than `du`. On macOS `/`
   and `/System/Volumes/Data` share one `st_dev`; the device check alone would count the data
-  volume twice, so [`space_lens.rs`](../../crates/tiny-core/src/space_lens.rs) names that path
-  explicitly. Foreign mounts are counted in `other_volume_count`, never marked unreadable.
+  volume twice, so [`space_lens.rs`](../../crates/tiny-core/src/space_lens.rs) skips that path
+  from every root above it (`/`, `/System`, `/System/Volumes`), not only from `/`. Foreign
+  mounts are counted in `other_volume_count`, never marked unreadable.
 - **Three different "not fully measured" signals.** `unreadable` (a read failed) and
   `depth_limited` (a folder past the depth limit was not walked) both make `bytes` a lower
   bound and set `incomplete`; `omitted_*` only hides entries that are still in the totals.

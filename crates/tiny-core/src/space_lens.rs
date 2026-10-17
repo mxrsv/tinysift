@@ -381,7 +381,9 @@ fn new_node(path: &Path, meta: &fs::Metadata) -> SpaceNode {
 /// True for a directory on another volume than the scan root. The device check alone is not
 /// enough for `/`: on macOS `/System/Volumes/Data` has the same device, so it is named explicitly.
 fn is_other_volume(root: &Path, root_dev: u64, path: &Path, dev: u64) -> bool {
-    dev != root_dev || (root == Path::new("/") && path == Path::new(DATA_VOLUME))
+    // Any root that reaches the data volume is an ancestor of it (`/`, `/System`, ...).
+    let data = Path::new(DATA_VOLUME);
+    dev != root_dev || (path == data && root != data)
 }
 
 /// `(dev, ino)` of a regular file with more than one hard link; `None` when it needs no dedup.

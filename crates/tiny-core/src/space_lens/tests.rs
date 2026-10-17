@@ -228,7 +228,7 @@ fn vanished_entries_are_ignored_but_other_errors_are_lower_bounds() {
 }
 
 #[test]
-fn volume_rule_skips_the_data_volume_only_when_scanning_the_root() {
+fn volume_rule_skips_the_data_volume_from_any_ancestor() {
     let (root, data) = (Path::new("/"), Path::new(DATA_VOLUME));
     assert!(
         is_other_volume(root, 7, data, 7),
@@ -240,6 +240,12 @@ fn volume_rule_skips_the_data_volume_only_when_scanning_the_root() {
         !is_other_volume(data, 7, data, 7),
         "scanning the data volume itself"
     );
+    for ancestor in ["/System", "/System/Volumes"] {
+        assert!(
+            is_other_volume(Path::new(ancestor), 7, data, 7),
+            "drill-down into {ancestor}"
+        );
+    }
     let users = Path::new("/Users");
     assert!(!is_other_volume(users, 7, &users.join("me"), 7));
     assert!(is_other_volume(users, 7, &users.join("mnt"), 9));
