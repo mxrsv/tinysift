@@ -189,17 +189,17 @@ fn act_on(
         return stop(StopReason::Cancelled);
     }
     // Before the slow checks, so a changed policy never spends a probe.
-    if let Err(reason) = policy_unchanged(ctx) {
+    if let Err(reason) = policy_unchanged(ctx.policy) {
         return stop(reason);
     }
     if let Err(reason) = validate(planned, ctx) {
         return ItemOutcome::Skipped(reason);
     }
     // After them, which can take long enough for the rules to change.
-    if let Err(reason) = policy_unchanged(ctx) {
+    if let Err(reason) = policy_unchanged(ctx.policy) {
         return stop(reason);
     }
-    if let Err(reason) = protection_skip(&planned.item.path, ctx) {
+    if let Err(reason) = protection_skip(ctx.policy, &planned.item.path) {
         return ItemOutcome::Skipped(reason);
     }
     // Last check before the mutation.
@@ -222,8 +222,8 @@ fn act_on(
 }
 
 /// The stored rules are still exactly the ones this run holds.
-fn policy_unchanged(ctx: &ExecContext<'_>) -> Result<(), StopReason> {
-    ctx.policy.ensure_unchanged().map_err(|error| match error {
+pub(crate) fn policy_unchanged(policy: &StoreLease<'_>) -> Result<(), StopReason> {
+    policy.ensure_unchanged().map_err(|error| match error {
         StoreError::Changed | StoreError::StoreLost => StopReason::ProtectionChanged,
         other => StopReason::ProtectionUnavailable(other.to_string()),
     })
@@ -233,16 +233,16 @@ fn policy_unchanged(ctx: &ExecContext<'_>) -> Result<(), StopReason> {
 /// enough: a rule inside it makes it `HoldsKept`, so nothing it would carry
 /// (a covered candidate, or a kept path discovery never listed) needs its own
 /// check. A fresh `Matcher` per call, since its cache describes one moment.
-fn protection_skip(path: &Path, ctx: &ExecContext<'_>) -> Result<(), SkipReason> {
-    let evaluation = ctx.policy.snapshot().evaluate(&Matcher::new(), path);
+pub(crate) fn protection_skip(policy: &StoreLease<'_>, path: &Path) -> Result<(), SkipReason> {
+    let evaluation = policy.snapshot().evaluate(&Matcher::new(), path);
     if evaluation.allows_move() {
         return Ok(());
     }
-    Err(skip_for(ctx, &evaluation))
+    Err(skip_for(policy, &evaluation))
 }
 
-fn skip_for(ctx: &ExecContext<'_>, evaluation: &Evaluation) -> SkipReason {
-    let snapshot = ctx.policy.snapshot();
+fn skip_for(policy: &StoreLease<'_>, evaluation: &Evaluation) -> SkipReason {
+    let snapshot = policy.snapshot();
     let rule_path = |id: &str| {
         snapshot
             .guarded()
@@ -276,7 +276,7 @@ fn skip_for(ctx: &ExecContext<'_>, evaluation: &Evaluation) -> SkipReason {
 /// paths. Guards and app gates of every item merged into this one apply too.
 pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), SkipReason> {
     let item = &planned.item;
-    protection_skip(&item.path, ctx)?;
+    protection_skip(ctx.policy, &item.path)?;
     let gated = gated_items(planned, ctx)?;
     let apps: BTreeSet<String> = gated
         .iter()
@@ -326,7 +326,7 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
 }
 
 /// Device of the home folder, whose volume is known to have a Trash.
-fn home_device(home: Option<&Path>) -> Result<u64, SkipReason> {
+pub(crate) fn home_device(home: Option<&Path>) -> Result<u64, SkipReason> {
     let home = home.ok_or_else(|| SkipReason::SafetyCheckFailed("home folder unknown".into()))?;
     fs::metadata(home)
         .map(|m| m.dev())
@@ -362,7 +362,13 @@ fn inside_root(path: &Path, root: &Path) -> bool {
     if !path.starts_with(root) {
         return false;
     }
-    // Excludes `path` itself, which `validate` already checked.
+    ancestors_are_real_dirs(path)
+}
+
+/// Every parent of `path` up to the filesystem root is a real directory, so
+/// no symlink can redirect a move. Excludes `path` itself, which callers
+/// check with their own `symlink_metadata`.
+pub(crate) fn ancestors_are_real_dirs(path: &Path) -> bool {
     path.ancestors().skip(1).all(is_real_dir)
 }
 

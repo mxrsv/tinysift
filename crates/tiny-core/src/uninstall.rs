@@ -1,5 +1,10 @@
+mod checked;
 mod ownership;
 
+pub use checked::{
+    build_checked_plan, execute_checked_uninstall, CheckedItem, CheckedPlan, ItemResult,
+    StopReason, UninstallContext, UninstallRefusal, UninstallReport,
+};
 pub use ownership::{valid_bundle_id, Consent, LeftoverClass, Ownership};
 
 use crate::engine_error;
@@ -188,9 +193,19 @@ pub fn resolve_app_by_name(name: &str) -> Result<AppEntry> {
 }
 
 fn read_bundle_id(app_path: &Path) -> Option<String> {
+    read_info_key(app_path, "CFBundleIdentifier")
+}
+
+/// The process name of a running copy of the app (`CFBundleExecutable`), the
+/// name `pgrep -x` matches. `None` when it cannot be read.
+pub fn read_bundle_executable(app_path: &Path) -> Option<String> {
+    read_info_key(app_path, "CFBundleExecutable")
+}
+
+fn read_info_key(app_path: &Path, key: &str) -> Option<String> {
     let info = app_path.join("Contents/Info");
     let output = Command::new("defaults")
-        .args(["read", info.to_str()?, "CFBundleIdentifier"])
+        .args(["read", info.to_str()?, key])
         .output()
         .ok()?;
     if !output.status.success() {

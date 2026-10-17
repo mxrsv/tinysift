@@ -162,8 +162,19 @@ first save replaces. A held lock never blocks: after eight short attempts it is 
 Every desktop cleanup run holds the lease: `ExecContext.policy` is required, and the lock stays
 until the report is built, so a rule write, a reload or another session's run meets `Busy`
 meanwhile. Lock order is the session gate, the store lock, then the clean-state lock. A new
-desktop path that moves files must go through `execute_checked` with a lease, or it bypasses
-the rules.
+desktop path that moves files must go through a checked executor with a lease, or it bypasses
+the rules. There are two: `execute_checked`, and
+[`execute_checked_uninstall`](../../crates/tiny-core/src/uninstall/checked.rs) for an app and its
+leftovers. The second takes a plan frozen at discovery (fingerprint, ownership and expected
+container per item) plus a set of item indexes, never a path. Report-only and uncertain items
+refuse the whole run; the app must not be running (its `CFBundleExecutable`, unknown means
+refuse); the bundle moves first, so a bundle that does not move leaves every leftover untouched.
+Leftovers-only runs are allowed. The bundle too must be on the home volume (Finder may delete
+permanently on a volume without a Trash). The plan must be built at discovery, because its
+fingerprints are taken there; build it only from a core-built `Plan`, never from client input.
+Every plan item keeps its index, so an unreadable leftover is skipped, not dropped. The per-item
+order matches Clean's, and it shares the policy, protection and ancestor-walk helpers of
+`checked_execute`, so a change to those applies to both.
 
 ### Session memory and Swift
 
