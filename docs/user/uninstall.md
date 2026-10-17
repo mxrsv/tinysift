@@ -24,8 +24,11 @@ The `.app` bundle, plus whatever exists of these for the app's bundle identifier
 Application Support, Caches, Preferences, Containers, Saved Application State, HTTP storage
 and cookies, WebKit data, LaunchAgents and Group Containers — all under `~/Library`.
 
-If `tiny` cannot read the app's bundle identifier it removes only the `.app`, because guessing
-by name could hit folders that belong to macOS.
+If `tiny` cannot read the app's bundle identifier, or it is not a valid reverse-DNS name
+(at least two dot-separated parts of letters, digits and `-`, with no `/` or `..`), it removes
+only the `.app`, because guessing by name could hit folders that belong to macOS. Leftovers are
+looked up under your account's home folder from the user database, not the `HOME` variable, and
+a leftover that is a symbolic link is skipped rather than followed.
 
 ## Choosing an action
 

@@ -1,3 +1,5 @@
+mod ownership;
+
 use crate::engine_error;
 use crate::error::{Context, Result};
 use crate::options::{SortBy, UninstallOptions as UninstallOpts};
@@ -283,8 +285,9 @@ pub fn build_plan(app: &AppEntry, opts: &UninstallOpts) -> Result<Plan> {
     }
 
     if !opts.shallow {
-        let leftovers = find_leftovers(&app.name, app.bundle_id.as_deref());
-        items.extend(leftovers);
+        if let Some(home) = crate::clean::trash_plan::account_home() {
+            items.extend(find_leftovers(&home, &app.name, app.bundle_id.as_deref()));
+        }
     }
 
     Ok(Plan {
@@ -300,79 +303,80 @@ fn is_brew_cask(name: &str) -> bool {
     path.is_dir()
 }
 
-fn find_leftovers(_app_name: &str, bundle_id: Option<&str>) -> Vec<RemovalItem> {
-    let mut items = Vec::new();
-    let home = match std::env::var_os("HOME").map(PathBuf::from) {
-        Some(h) => h,
-        None => return items,
-    };
-
-    // Only scan when we have a bundle ID. Name-keyed fallback was removed
+fn find_leftovers(home: &Path, _app_name: &str, bundle_id: Option<&str>) -> Vec<RemovalItem> {
+    // Only scan when we have a valid bundle ID. Name-keyed fallback was removed
     // because it can collide with system folders for apps with generic names
     // (e.g. "Mail", "Notes" → /Library/Application Support/<system-folder>).
-    let bid = match bundle_id {
-        Some(b) => b,
-        None => return items,
+    let Some(bid) = bundle_id.filter(|b| ownership::valid_bundle_id(b)) else {
+        return Vec::new();
     };
+    let library = home.join("Library");
+    leftover_candidates(&library, bid)
+        .into_iter()
+        .filter_map(|path| leftover_item(home, &library, path))
+        .collect()
+}
 
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    candidates.push(home.join("Library/Application Support").join(bid));
-    candidates.push(home.join("Library/Caches").join(bid));
-    candidates.push(
-        home.join("Library/Preferences")
-            .join(format!("{}.plist", bid)),
-    );
-    candidates.push(home.join("Library/Containers").join(bid));
-    candidates.push(
-        home.join("Library/Saved Application State")
+fn leftover_candidates(library: &Path, bid: &str) -> Vec<PathBuf> {
+    let mut candidates: Vec<PathBuf> = vec![
+        library.join("Application Support").join(bid),
+        library.join("Caches").join(bid),
+        library.join("Preferences").join(format!("{}.plist", bid)),
+        library.join("Containers").join(bid),
+        library
+            .join("Saved Application State")
             .join(format!("{}.savedState", bid)),
-    );
-    candidates.push(home.join("Library/HTTPStorages").join(bid));
-    candidates.push(
-        home.join("Library/HTTPStorages")
+        library.join("HTTPStorages").join(bid),
+        library
+            .join("HTTPStorages")
             .join(format!("{}.binarycookies", bid)),
-    );
-    candidates.push(home.join("Library/WebKit").join(bid));
-
+        library.join("WebKit").join(bid),
+    ];
     // LaunchAgents pattern <bundle_id>*.plist
-    if let Ok(entries) = fs::read_dir(home.join("Library/LaunchAgents")) {
-        for e in entries.flatten() {
-            let p = e.path();
-            if let Some(stem) = p.file_name().and_then(|s| s.to_str()) {
-                if stem.starts_with(bid) {
-                    candidates.push(p);
-                }
-            }
-        }
-    }
+    candidates.extend(matching_entries(&library.join("LaunchAgents"), |n| {
+        n.starts_with(bid)
+    }));
     // Group Containers — substring match on bundle id
-    if let Ok(entries) = fs::read_dir(home.join("Library/Group Containers")) {
-        for e in entries.flatten() {
-            let p = e.path();
-            if let Some(stem) = p.file_name().and_then(|s| s.to_str()) {
-                if stem.contains(bid) {
-                    candidates.push(p);
-                }
-            }
-        }
-    }
+    candidates.extend(matching_entries(&library.join("Group Containers"), |n| {
+        n.contains(bid)
+    }));
+    candidates
+}
 
-    for path in candidates {
-        if !path.exists() {
-            continue;
-        }
-        let size = if crate::clean::fs_safe::is_dir_safe(&path) {
-            dir_size(&path)
-        } else {
-            fs::symlink_metadata(&path).map(|m| m.len()).unwrap_or(0)
-        };
-        items.push(RemovalItem {
-            path,
-            size,
-            kind: ItemKind::Leftover,
-        });
+fn matching_entries(dir: &Path, keep: impl Fn(&str) -> bool) -> Vec<PathBuf> {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.file_name().and_then(|s| s.to_str()).is_some_and(&keep))
+        .collect()
+}
+
+/// Accepts a candidate only if it is strictly inside `library`, not protected,
+/// exists and is not a symlink.
+fn leftover_item(home: &Path, library: &Path, path: PathBuf) -> Option<RemovalItem> {
+    if path == library || !path.starts_with(library) {
+        return None;
     }
-    items
+    if crate::clean::trash_plan::protected_reason(&path, Some(home), false).is_some() {
+        return None;
+    }
+    let meta = fs::symlink_metadata(&path).ok()?;
+    if meta.file_type().is_symlink() {
+        return None;
+    }
+    let size = if meta.is_dir() {
+        dir_size(&path)
+    } else {
+        meta.len()
+    };
+    Some(RemovalItem {
+        path,
+        size,
+        kind: ItemKind::Leftover,
+    })
 }
 
 // ---------- Execution ----------
@@ -426,6 +430,54 @@ mod tests {
         let s = sort_apps(apps, &SortBy::Size);
         assert_eq!(s[0].name, "B");
         assert_eq!(s[2].name, "A");
+    }
+
+    fn fixture_home() -> tempfile::TempDir {
+        let home = tempfile::tempdir().unwrap();
+        for sub in ["Application Support", "Caches", "Group Containers"] {
+            fs::create_dir_all(home.path().join("Library").join(sub)).unwrap();
+        }
+        fs::create_dir_all(home.path().join("Library/Caches/com.example.App")).unwrap();
+        home
+    }
+
+    #[test]
+    fn traversal_ids_list_nothing() {
+        let home = fixture_home();
+        for id in ["../..", ".", "..", "a/b"] {
+            assert!(
+                find_leftovers(home.path(), "X", Some(id)).is_empty(),
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn valid_id_finds_exact_leftover() {
+        let home = fixture_home();
+        let items = find_leftovers(home.path(), "X", Some("com.example.App"));
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].path,
+            home.path().join("Library/Caches/com.example.App")
+        );
+        assert!(find_leftovers(home.path(), "X", None).is_empty());
+    }
+
+    #[test]
+    fn symlinked_leftover_is_skipped() {
+        let home = fixture_home();
+        let target = home.path().join("elsewhere");
+        fs::create_dir(&target).unwrap();
+        std::os::unix::fs::symlink(
+            &target,
+            home.path()
+                .join("Library/Application Support/com.example.App"),
+        )
+        .unwrap();
+        let items = find_leftovers(home.path(), "X", Some("com.example.App"));
+        assert_eq!(items.len(), 1);
+        assert!(items[0].path.ends_with("Caches/com.example.App"));
     }
 
     fn mk(name: &str, size: u64) -> AppEntry {
