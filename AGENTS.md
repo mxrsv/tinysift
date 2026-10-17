@@ -50,5 +50,9 @@ Every living behavior claim links to its implementation or canonical local guide
 
 ## Language
 
-Docs, comments and CLI copy are English. Commit messages use conventional scope prefixes
-with Vietnamese descriptions; PR titles/bodies are Vietnamese. Follow the shared global rules.
+Open-source standard: everything committed to the repository is English — docs, comments,
+CLI copy, commit messages, PR titles/bodies, issues and review comments. Commits use
+[Conventional Commits](https://www.conventionalcommits.org) with a scope, e.g.
+`fix(core): skip symlinked app bundles`. Conversation with the maintainer may stay
+Vietnamese; it never leaks into repository artifacts. Existing Vietnamese history is not
+rewritten. Follow the shared global rules, except where this section overrides their language.
