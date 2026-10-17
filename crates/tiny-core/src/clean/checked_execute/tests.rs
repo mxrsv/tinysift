@@ -7,9 +7,15 @@ use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{ExecAction, ExecReport, RiskLevel};
 use crate::error::Result;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicU64;
 use std::sync::Mutex;
 
+/// Makes every fixture directory unique within the process, even for
+/// parallel tests that read the same clock tick.
+static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
+
 mod protection;
+mod races;
 
 struct Fixture {
     id: &'static str,
@@ -88,8 +94,9 @@ impl Trash for FakeTrash {
 
 fn fixture_root(label: &str, names: &[&str]) -> PathBuf {
     let dir = std::env::temp_dir().join(format!(
-        "tiny-checked-exec-{label}-{}-{}",
+        "tiny-checked-exec-{label}-{}-{}-{}",
         std::process::id(),
+        FIXTURE_SEQ.fetch_add(1, Ordering::Relaxed),
         std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap()
