@@ -44,6 +44,14 @@ The clean pipeline, its registry and the desktop's checked Trash are in [clean.m
 
 ## Platform
 
+Process sampling must remain independent of filesystem scan workers.
+[`tiny-core` disables sysinfo's optional `multithread` feature](../../crates/tiny-core/Cargo.toml)
+while retaining its other capabilities: otherwise process refresh queues behind the
+same global Rayon pool used by [Storage scans](../../crates/tiny-core/src/space_lens.rs).
+The [sampler contention regression](../../crates/tiny-core/src/processes/snapshot.rs)
+holds that pool busy in an isolated test process and requires a real sample to finish
+before releasing the scan worker.
+
 `clean`, `uninstall` and port lookups assume macOS tools: Finder, `pgrep`, `mdls`, `tmutil`,
 `xcrun`, `lsof`, `git`. Code the app reaches spawns them by absolute path or through
 `ToolLookup::app`, because a Finder-launched app gets a minimal `PATH`

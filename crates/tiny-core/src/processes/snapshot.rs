@@ -541,6 +541,80 @@ mod tests {
         assert!(json.get("systemUsage").is_none());
     }
 
+    /// Use a child test process so occupying Rayon's global pool cannot delay
+    /// unrelated tests. A scan worker held at a checkpoint must not stop sampling.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn sampler_does_not_wait_for_scan_workers() {
+        const CHILD: &str = "TINY_SAMPLER_CONTENTION_TEST";
+        if std::env::var_os(CHILD).is_some() {
+            sample_with_occupied_scan_pool();
+            return;
+        }
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "processes::snapshot::tests::sampler_does_not_wait_for_scan_workers",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        print!("{stdout}");
+        eprint!("{}", String::from_utf8_lossy(&output.stderr));
+        assert!(
+            output.status.success(),
+            "sampling waited for the occupied scan pool"
+        );
+        assert!(
+            stdout.contains("Sample completed with scan pool occupied"),
+            "the child must execute the regression, not pass with zero matching tests"
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    fn sample_with_occupied_scan_pool() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        const WORKER_START_TIMEOUT: Duration = Duration::from_secs(5);
+        const SAMPLE_TIMEOUT: Duration = Duration::from_secs(2);
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(1)
+            .build_global()
+            .unwrap();
+        let (started, ready) = mpsc::channel();
+        let (release, held) = mpsc::channel();
+        rayon::spawn(move || {
+            started.send(()).unwrap();
+            held.recv().unwrap();
+        });
+        ready.recv_timeout(WORKER_START_TIMEOUT).unwrap();
+        let (send, receive) = mpsc::channel();
+        let sampling = std::thread::spawn(move || {
+            let mut sampler = Sampler::new();
+            let start = Instant::now();
+            let snapshot = sampler.sample();
+            let contains_self = snapshot
+                .processes
+                .iter()
+                .any(|p| p.pid == std::process::id());
+            send.send((start.elapsed(), contains_self)).unwrap();
+        });
+        let result = receive.recv_timeout(SAMPLE_TIMEOUT);
+        // Always unblock and join before asserting, including the failing case.
+        release.send(()).unwrap();
+        sampling.join().unwrap();
+        let (elapsed, contains_self) =
+            result.expect("sample must finish while scan workers are held");
+        assert!(
+            contains_self,
+            "the independent sample still contains real processes"
+        );
+        println!("Sample completed with scan pool occupied in {elapsed:?}");
+    }
+
     #[test]
     fn executable_path_refreshes_after_same_identity_exec() {
         use std::io::Write;
