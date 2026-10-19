@@ -69,6 +69,11 @@ pub struct CheckedPlan {
 }
 
 impl CheckedPlan {
+    /// The process name a running copy is matched by, if it is known.
+    pub fn executable(&self) -> Option<&str> {
+        self.executable.as_deref()
+    }
+
     pub fn items(&self) -> &[CheckedItem] {
         &self.items
     }

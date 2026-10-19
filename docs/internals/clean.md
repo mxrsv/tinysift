@@ -97,6 +97,48 @@ a trusted boundary: a tool may return the candidate itself as its root. A path c
 any symlink parent is skipped, including system aliases such as `/var`; the executor never
 canonicalizes it into a different path to move.
 
+## The desktop's checked uninstall
+
+[`tiny-ffi/src/uninstall.rs`](../../crates/tiny-ffi/src/uninstall.rs) is the app's uninstall,
+built like Clean's Trash path: Swift names IDs and never sends a path.
+
+1. `uninstall_list_apps` lists the installed apps under opaque app IDs (name, bundle id, path for
+   display, size, last-used days, and a `blocked_reason` for a system app or Homebrew cask). It
+   replaces the previous listing and any preview.
+2. `uninstall_preview(app_id)` reads the app's identity again, builds core's `Plan` with the fresh
+   installed-app inventory (the O5 twin check), freezes it with `build_checked_plan` (trusted home,
+   `/Applications`, the bundle's `CFBundleExecutable`) and stores it under a single-use preview ID
+   that expires after 15 minutes. It reports the bundle id it used and whether leftovers were
+   searched (`leftovers_searched`; with a missing or invalid id, O1, only the app is listed and
+   `leftovers_skipped_reason` says why). Items carry opaque item IDs, the ownership class (app,
+   cache, data, report-only or uncertain with its reason) and `selectable`. A path held by a
+   saved "always keep" rule, by Tiny's own storage or by an undecidable rule check shows `held_by`
+   and is not selectable, like Clean. The reply also says whether the app is running now
+   (`Running`, `NotRunning` or `Unknown`). A new preview replaces the old one.
+3. `uninstall_execute(preview_id, item_ids, token, progress)` takes the exclusive rules lease
+   (`Busy` or `ProtectionUnavailable` spend nothing), then refuses with `InvalidInput`, still
+   without spending the preview, for an unknown item ID, an empty selection, a report-only,
+   uncertain or held item, or a selection without the app bundle (the desktop never removes
+   leftovers alone). Rules that differ from the preview's snapshot give `ProtectionChanged` and
+   drop the preview. It then consumes the preview, repeats the O5 check with a fresh inventory
+   when a leftover is selected (another installed copy of the bundle id, or an unreadable
+   inventory, refuses; a bundle-only run is not rechecked) and runs
+   [`execute_checked_uninstall`](../../crates/tiny-core/src/uninstall/checked.rs) through the
+   `Trash` seam. Only refusals after the preview is spent (`AppRunning`, `AppCheckFailed`,
+   `ExecutableUnknown`, the twin check, `InconsistentPlan`) arrive as
+   `FfiError::UninstallRefused` with a typed `FfiUninstallRefusal`; the client must build a new
+   preview. Once moving starts the reply is a per-item report (`MovedToTrash`, `Failed` with
+   `source_still_present`, `Skipped` with a reason, `NotAttempted`) plus an optional
+   `FfiUninstallStop` (cancellation, Automation denial, rules changed or unreadable, the app
+   started mid-run). The run-time `Kept` skip stays as defence in depth.
+
+List, preview and execute share the session gate with Clean and Storage; process reads stay
+outside it. Preview and execute also take the `UntrustedHome` check and the saved-rules store;
+the list reads neither. Lock order is the gate, the
+rules lease, then the short uninstall-state lock, which is never held across a probe, Trash call
+or callback. Tests inject the inventory (`AppCatalog`), probe and Trash, so none reads
+`/Applications`, calls `defaults`/`mdls` or Finder.
+
 ## Desktop persistent protection
 
 Always keep is a policy owned by Rust; only the desktop app edits it. A

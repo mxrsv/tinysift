@@ -47,7 +47,7 @@ mod tests;
 pub use protection::*;
 pub use records::*;
 
-use protection::{candidate_scope, protection_error, split_protected};
+use protection::{candidate_scope, split_protected};
 
 /// How long a confirmed preview stays executable.
 pub const PREVIEW_TTL: Duration = Duration::from_secs(15 * 60);
@@ -229,11 +229,23 @@ impl TinySession {
 }
 
 /// The app's runner: `PATH`, then the Homebrew prefixes.
-fn app_runner() -> Arc<dyn CommandRunner> {
+pub(crate) fn app_runner() -> Arc<dyn CommandRunner> {
     Arc::new(ToolRunner::new(ToolLookup::app()))
 }
 
 type ProviderFactory<'a> = &'a dyn Fn(&CleanOptions) -> Vec<Box<dyn CleanProvider>>;
+
+#[cfg(test)]
+impl TinySession {
+    /// Points the session at a temp (`HOME`, account home) pair and a temp
+    /// saved-rules store, for tests of features that share Clean's home and
+    /// rules. A trusted home passes the same path twice.
+    pub(crate) fn inject_clean_inputs(&self, env: &Path, account: &Path, rules: PathBuf) {
+        let mut state = self.clean_state();
+        state.home_inputs = Some((Some(env.to_path_buf()), Some(account.to_path_buf())));
+        state.protection_dir = Some(rules);
+    }
+}
 
 impl TinySession {
     /// Lock on cleanup state. Locked sections never run foreign or provider
@@ -340,7 +352,7 @@ impl TinySession {
     }
 
     /// `HOME` checked against the account home before any scan or move.
-    fn clean_home(&self) -> Result<PathBuf, FfiError> {
+    pub(crate) fn clean_home(&self) -> Result<PathBuf, FfiError> {
         let (env, account) = self
             .clean_state()
             .home_inputs
@@ -353,7 +365,7 @@ impl TinySession {
     /// The saved-rules store of the trusted `home`. Tests must inject a temp
     /// one: falling back to the account's real storage would make them read
     /// and create files in the user's Application Support.
-    fn protection_store(&self, home: &Path) -> ProtectionStore {
+    pub(crate) fn protection_store(&self, home: &Path) -> ProtectionStore {
         match self.clean_state().protection_dir.clone() {
             Some(dir) => ProtectionStore::at(dir),
             None if cfg!(test) => panic!("a test must set `protection_dir` before executing"),

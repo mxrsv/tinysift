@@ -78,7 +78,7 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   `NotPerPathTrash` (cleanup is a tool command) or `UnreliableMatch`. Not: skipped, disabled.
 - **Preview** — The app's reviewed selection, built in Rust from candidate IDs; single-use,
   expires after 15 minutes (`PREVIEW_TTL` in [`clean.rs`](../../crates/tiny-ffi/src/clean.rs)).
-  Not: plan.
+  Not: plan. The uninstall flow has its own, built from an app ID (see **Uninstall preview**).
 - **Checked execute** — The app's Move to Trash, revalidating each path right before it moves
   ([`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)). Not: execute
   (the CLI's provider path).
@@ -100,3 +100,6 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   may be preferences or containers).
 - **Blocked** — A plan that must not run: a system app, or a Homebrew cask without `--force`.
   One blocked plan stops the whole invocation.
+- **Uninstall preview** — The app's reviewed uninstall of one installed app: core's plan frozen by
+  `build_checked_plan`, with opaque item IDs; single-use, expires after 15 minutes, replaced by the
+  next preview or listing ([`uninstall.rs`](../../crates/tiny-ffi/src/uninstall.rs)). Not: plan.

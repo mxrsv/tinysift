@@ -5,7 +5,7 @@ pub use checked::{
     build_checked_plan, execute_checked_uninstall, CheckedItem, CheckedPlan, ItemResult,
     StopReason, UninstallContext, UninstallRefusal, UninstallReport,
 };
-pub use ownership::{valid_bundle_id, Consent, LeftoverClass, Ownership};
+pub use ownership::{doubt_reason, valid_bundle_id, Consent, LeftoverClass, Ownership};
 
 use crate::engine_error;
 use crate::error::{Context, Result};
@@ -14,7 +14,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-const APPLICATIONS_DIR: &str = "/Applications";
+/// The installed-app folder both the CLI and the desktop list.
+pub const APPLICATIONS_DIR: &str = "/Applications";
 const SYSTEM_BUNDLE_PREFIX: &str = "com.apple.";
 
 /// Apple-managed apps that may appear in /Applications across macOS versions.
@@ -296,6 +297,29 @@ pub fn sort_apps(mut apps: Vec<AppEntry>, sort: &SortBy) -> Vec<AppEntry> {
 
 // ---------- Planning ----------
 
+/// Why an app may not be removed at all, if it may not: a system app, or a
+/// Homebrew cask unless `force`.
+pub fn blocked_reason(app: &AppEntry, force: bool) -> Option<String> {
+    match &app.bundle_id {
+        Some(bid) if bid.starts_with(SYSTEM_BUNDLE_PREFIX) => {
+            return Some(format!("system app ({}) — refuse", bid));
+        }
+        None if is_known_system_app_name(&app.name) => {
+            return Some(format!(
+                "looks like a system app ({}) and CFBundleIdentifier could not be read — refuse",
+                app.name
+            ));
+        }
+        _ => {}
+    }
+    (is_brew_cask(&app.name) && !force).then(|| {
+        format!(
+            "looks like a Homebrew cask — use `brew uninstall --cask {}` (or pass --force)",
+            app.name.to_lowercase()
+        )
+    })
+}
+
 /// `inventory` is the installed-app list used to spot another copy of the same
 /// bundle id (O5); `None` means it could not be read.
 pub fn build_plan(
@@ -303,29 +327,23 @@ pub fn build_plan(
     opts: &UninstallOpts,
     inventory: Option<&[AppEntry]>,
 ) -> Result<Plan> {
+    build_plan_in(
+        app,
+        opts,
+        inventory,
+        crate::clean::trash_plan::account_home().as_deref(),
+    )
+}
+
+/// `build_plan` with the home folder the leftovers are looked up under. No
+/// home means no leftovers.
+pub fn build_plan_in(
+    app: &AppEntry,
+    opts: &UninstallOpts,
+    inventory: Option<&[AppEntry]>,
+    home: Option<&Path>,
+) -> Result<Plan> {
     let mut items: Vec<RemovalItem> = Vec::new();
-    let mut blocked: Option<String> = None;
-
-    match &app.bundle_id {
-        Some(bid) if bid.starts_with(SYSTEM_BUNDLE_PREFIX) => {
-            blocked = Some(format!("system app ({}) — refuse", bid));
-        }
-        None if is_known_system_app_name(&app.name) => {
-            blocked = Some(format!(
-                "looks like a system app ({}) and CFBundleIdentifier could not be read — refuse",
-                app.name
-            ));
-        }
-        _ => {}
-    }
-
-    if blocked.is_none() && is_brew_cask(&app.name) && !opts.force {
-        blocked = Some(format!(
-            "looks like a Homebrew cask — use `brew uninstall --cask {}` (or pass --force)",
-            app.name.to_lowercase()
-        ));
-    }
-
     if !opts.leftovers_only {
         items.push(RemovalItem {
             path: app.path.clone(),
@@ -335,21 +353,19 @@ pub fn build_plan(
         });
     }
 
-    if !opts.shallow {
-        if let Some(home) = crate::clean::trash_plan::account_home() {
-            items.extend(ownership::find_leftovers(
-                &home,
-                app.bundle_id.as_deref(),
-                inventory,
-                &app.path,
-            ));
-        }
+    if let (false, Some(home)) = (opts.shallow, home) {
+        items.extend(ownership::find_leftovers(
+            home,
+            app.bundle_id.as_deref(),
+            inventory,
+            &app.path,
+        ));
     }
 
     Ok(Plan {
         app: app.clone(),
         items,
-        blocked,
+        blocked: blocked_reason(app, opts.force),
     })
 }
 
@@ -453,6 +469,34 @@ mod tests {
         assert_eq!(paths(Consent::Unattended), ["cache"]);
         assert_eq!(paths(Consent::Explicit), ["cache", "data"]);
         assert_eq!(plan.total_size(), 20);
+    }
+
+    #[test]
+    fn blocked_reason_refuses_system_apps_only() {
+        let mut app = mk("Zzz Fixture Tool", 0);
+        assert_eq!(blocked_reason(&app, false), None);
+        app.bundle_id = Some("com.apple.fixture".into());
+        assert!(blocked_reason(&app, false).unwrap().contains("system app"));
+        assert!(blocked_reason(&app, true).unwrap().contains("system app"));
+    }
+
+    #[test]
+    fn build_plan_in_looks_under_the_given_home_only() {
+        let home = tempfile::tempdir().unwrap();
+        let cache = home.path().join("Library/Caches/com.example.Fixture");
+        fs::create_dir_all(&cache).unwrap();
+        let mut app = mk("Zzz Fixture Tool", 0);
+        app.bundle_id = Some("com.example.Fixture".into());
+        let opts = UninstallOpts {
+            shallow: false,
+            leftovers_only: true,
+            force: false,
+        };
+        let plan = build_plan_in(&app, &opts, Some(&[]), Some(home.path())).unwrap();
+        assert_eq!(plan.items.len(), 1);
+        assert_eq!(plan.items[0].path, cache);
+        let none = build_plan_in(&app, &opts, Some(&[]), None).unwrap();
+        assert!(none.items.is_empty());
     }
 
     fn mk(name: &str, size: u64) -> AppEntry {

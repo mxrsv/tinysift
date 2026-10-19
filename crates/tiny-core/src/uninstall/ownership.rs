@@ -91,8 +91,13 @@ fn group_container_boundary(name: &str, id: &str) -> bool {
         || name.contains(&format!(".{id}."))
 }
 
-/// Why every leftover must be report-only, if it must (O5).
-fn doubt_reason(app_path: &Path, id: &str, inventory: Option<&[AppEntry]>) -> Option<&'static str> {
+/// Why every leftover must be report-only, if it must (O5): `inventory` is
+/// unreadable (`None`) or lists another app with the same bundle id.
+pub fn doubt_reason(
+    app_path: &Path,
+    id: &str,
+    inventory: Option<&[AppEntry]>,
+) -> Option<&'static str> {
     let Some(apps) = inventory else {
         return Some(REASON_NO_INVENTORY);
     };

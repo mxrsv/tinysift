@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use tiny_core::processes::Sampler;
 
 use crate::clean::CleanState;
+use crate::uninstall::UninstallState;
 use crate::FfiError;
 
 /// One per app session. Rejects overlapping scans and mutations instead of
@@ -16,6 +17,7 @@ pub struct TinySession {
     busy: AtomicBool,
     sampler: Mutex<Sampler>,
     pub(crate) clean: Mutex<CleanState>,
+    pub(crate) uninstall: Mutex<UninstallState>,
 }
 
 #[uniffi::export]

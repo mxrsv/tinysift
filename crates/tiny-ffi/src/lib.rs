@@ -14,6 +14,7 @@ pub mod clean;
 pub mod processes;
 pub mod session;
 pub mod storage;
+pub mod uninstall;
 
 pub use session::{CancellationToken, TinySession};
 
@@ -61,6 +62,14 @@ pub enum FfiError {
     /// trusting either state; never repeat the write automatically.
     #[error("the protection change may or may not have been saved: {detail}")]
     ProtectionSaveUncertain { detail: String },
+    /// An uninstall run was refused after its preview was spent and before
+    /// anything moved (a running app, an unknown process name, a second copy
+    /// of the app...). Build a new preview. A bad selection is
+    /// `InvalidInput` instead and leaves the preview usable.
+    #[error("uninstall refused: {refusal:?}")]
+    UninstallRefused {
+        refusal: uninstall::FfiUninstallRefusal,
+    },
 }
 
 impl From<tiny_core::error::Error> for FfiError {

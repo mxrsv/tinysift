@@ -113,7 +113,7 @@ fn lossy(path: &Path) -> String {
 
 /// Why the rules hold the path `evaluation` describes: saved rules, then
 /// Tiny's own storage, then doubts. Empty means nothing holds it.
-fn guards(policy: &PolicySnapshot, evaluation: &Evaluation) -> Vec<FfiProtectionGuard> {
+pub(crate) fn guards(policy: &PolicySnapshot, evaluation: &Evaluation) -> Vec<FfiProtectionGuard> {
     let mut found = Vec::new();
     let mut storage = false;
     for block in &evaluation.blocks {
@@ -168,7 +168,7 @@ pub(super) fn split_protected(
 
 /// Contention is `Busy`, like any overlapping operation. Anything else means
 /// the saved rules cannot be trusted, so nothing may be previewed or moved.
-pub(super) fn protection_error(error: StoreError) -> FfiError {
+pub(crate) fn protection_error(error: StoreError) -> FfiError {
     match error {
         StoreError::Busy => FfiError::Busy,
         other => FfiError::ProtectionUnavailable {
@@ -297,7 +297,7 @@ impl TinySession {
 impl TinySession {
     /// Reads the saved rules for a preview. A store that cannot be read fails
     /// it: nothing is ever authorized against rules Tiny does not know.
-    pub(super) fn load_policy(&self) -> Result<PolicySnapshot, FfiError> {
+    pub(crate) fn load_policy(&self) -> Result<PolicySnapshot, FfiError> {
         let home = self.clean_home()?;
         let policy = self
             .protection_store(&home)
@@ -308,7 +308,7 @@ impl TinySession {
     }
 
     /// Unlike the last write revision, this history survives errors and rescans.
-    pub(super) fn remember_policy(&self, policy: &PolicySnapshot) -> Result<(), StoreError> {
+    pub(crate) fn remember_policy(&self, policy: &PolicySnapshot) -> Result<(), StoreError> {
         let mut state = self.clean_state();
         if state.stored_policy_seen && !policy.stored {
             return Err(StoreError::StoreLost);
