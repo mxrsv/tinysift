@@ -122,6 +122,9 @@ fn scan_with_depth(
     let mut top = Top::default();
     let mut entries: Vec<PathBuf> = Vec::new();
     for entry in fs::read_dir(root)? {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            break;
+        }
         match entry {
             Ok(entry) => entries.push(entry.path()),
             Err(_) => top.skip(root),
@@ -141,13 +144,15 @@ fn scan_with_depth(
         .map(|path| {
             let mut walker = Walker::new(shared);
             let visit = walker.walk(path, 0);
-            report(
-                progress,
-                "space-lens",
-                done.fetch_add(1, Ordering::Relaxed) + 1,
-                Some(entries.len() as u64),
-                &path.display().to_string(),
-            );
+            if !walker.cancelled() {
+                report(
+                    progress,
+                    "space-lens",
+                    done.fetch_add(1, Ordering::Relaxed) + 1,
+                    Some(entries.len() as u64),
+                    &path.display().to_string(),
+                );
+            }
             (visit, walker)
         })
         .collect();
@@ -325,11 +330,14 @@ impl<'a> Walker<'a> {
         &mut self,
         node: &mut SpaceNode,
         path: &Path,
-        entries: fs::ReadDir,
+        entries: impl Iterator<Item = io::Result<fs::DirEntry>>,
         depth: usize,
     ) {
-        // No cancel check here: `walk` checks before reading each entry, which stops the loop's work.
         for entry in entries {
+            // Do not drain a large directory or construct paths after cancellation.
+            if self.cancelled() {
+                break;
+            }
             let Ok(entry) = entry else {
                 self.mark_unreadable(node, path);
                 continue;

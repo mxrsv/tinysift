@@ -61,8 +61,17 @@ fn cancelled_scan_returns_cancelled_and_releases_the_gate() {
     let session = TinySession::new();
     let token = CancellationToken::default();
     token.cancel();
-    let result = session.scan_storage(&dir, &token, &Listener::default());
+    let listener = Listener::default();
+    let result = session.scan_storage(&dir, &token, &listener);
     assert!(matches!(result, Err(FfiError::Cancelled)));
+    let updates = listener.0.lock().unwrap();
+    assert_eq!(
+        updates.len(),
+        1,
+        "cancelled work must not flood Swift callbacks"
+    );
+    assert_eq!((updates[0].completed, updates[0].total), (0, Some(0)));
+    drop(updates);
     assert!(!session.is_busy());
     assert!(session
         .scan_storage(&dir, &CancellationToken::default(), &Listener::default())

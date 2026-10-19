@@ -282,9 +282,21 @@ fn a_preset_flag_scans_nothing_and_flags_the_report() {
     let full = scan(dir.path(), None, None).unwrap();
     assert_eq!(full.files_scanned, 20);
     let flag = AtomicBool::new(true);
-    let stopped = scan(dir.path(), Some(&flag), None).unwrap();
+    let updates = Mutex::new(Vec::new());
+    let progress = |update: crate::progress::Progress| {
+        updates
+            .lock()
+            .unwrap()
+            .push((update.completed, update.total));
+    };
+    let stopped = scan(dir.path(), Some(&flag), Some(&progress)).unwrap();
     assert!(stopped.cancelled);
     assert_eq!(stopped.files_scanned, 0);
+    assert_eq!(
+        *updates.lock().unwrap(),
+        vec![(0, Some(0))],
+        "a cancelled scan must not queue branches or announce completed work"
+    );
 }
 
 #[test]
@@ -298,9 +310,11 @@ fn cancelling_while_scanning_stops_the_remaining_branches() {
         }
     }
     let flag = AtomicBool::new(false);
+    let completed_updates = AtomicU64::new(0);
     // One thread makes the branch order sequential: the flag flips after the first branch ends.
     let cancel_after_first_branch = |progress: crate::progress::Progress| {
         if progress.completed >= 1 {
+            completed_updates.fetch_add(1, Ordering::Relaxed);
             flag.store(true, Ordering::Release);
         }
     };
@@ -315,6 +329,39 @@ fn cancelling_while_scanning_stops_the_remaining_branches() {
     assert_eq!(
         report.files_scanned, 5,
         "only the branch that was running finished"
+    );
+    assert_eq!(
+        completed_updates.load(Ordering::Relaxed),
+        1,
+        "cancelled branches must not flood the progress listener"
+    );
+}
+
+#[test]
+fn cancelled_directory_iterator_is_not_drained() {
+    let dir = temp();
+    for i in 0..20 {
+        fs::write(dir.path().join(format!("f{i}")), b"x").unwrap();
+    }
+    let meta = fs::symlink_metadata(dir.path()).unwrap();
+    let (counter, links) = (AtomicU64::new(0), Mutex::new(HashSet::new()));
+    let flag = AtomicBool::new(false);
+    let mut walker = Walker::new(Shared {
+        cancel: Some(&flag),
+        ..shared_for(dir.path(), device(&meta), &counter, &links)
+    });
+    let consumed = AtomicU64::new(0);
+    let entries = fs::read_dir(dir.path()).unwrap().inspect(|_| {
+        consumed.fetch_add(1, Ordering::Relaxed);
+        flag.store(true, Ordering::Release);
+    });
+    let mut node = new_node(dir.path(), &meta);
+    walker.walk_entries(&mut node, dir.path(), entries, 0);
+    assert_eq!(counter.load(Ordering::Relaxed), 0);
+    assert_eq!(
+        consumed.load(Ordering::Relaxed),
+        1,
+        "cancellation during enumeration must leave the remaining entries unread"
     );
 }
 
