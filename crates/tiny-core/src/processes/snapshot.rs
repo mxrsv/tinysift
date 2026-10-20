@@ -81,7 +81,7 @@ struct SystemReadings {
     brand: String,
     load: [f64; 3],
     memory_total: u64,
-    memory_used: u64,
+    memory_used: Option<u64>,
     swap_used: u64,
     swap_total: u64,
     pressure: Option<MemoryPressure>,
@@ -89,7 +89,8 @@ struct SystemReadings {
 
 impl SystemUsage {
     fn from_readings(raw: SystemReadings) -> Self {
-        let memory_ok = raw.memory_total > 0 && raw.memory_used <= raw.memory_total;
+        let memory_ok =
+            raw.memory_total > 0 && raw.memory_used.is_some_and(|used| used <= raw.memory_total);
         let swap_ok = raw.swap_used <= raw.swap_total;
         let load_ok = raw.load.iter().all(|v| v.is_finite() && *v >= 0.0);
         let [one, five, fifteen] = raw.load;
@@ -108,7 +109,7 @@ impl SystemUsage {
             cpu_brand: (!raw.cores.is_empty() && !raw.brand.is_empty()).then_some(raw.brand),
             logical_cores: u32::try_from(raw.cores.len()).ok().filter(|n| *n > 0),
             load_average: load_ok.then_some(LoadAverage { one, five, fifteen }),
-            memory_used_bytes: memory_ok.then_some(raw.memory_used),
+            memory_used_bytes: raw.memory_used.filter(|_| memory_ok),
             memory_total_bytes: memory_ok.then_some(raw.memory_total),
             swap_used_bytes: swap_ok.then_some(raw.swap_used),
             swap_total_bytes: swap_ok.then_some(raw.swap_total),
@@ -320,7 +321,7 @@ impl Sampler {
                 .map_or_else(String::new, |c| c.brand().to_string()),
             load: [load.one, load.five, load.fifteen],
             memory_total: self.system.total_memory(),
-            memory_used: self.system.used_memory(),
+            memory_used: crate::sys::used_memory(&self.system),
             swap_used: self.system.used_swap(),
             swap_total: self.system.total_swap(),
             pressure: read_memory_pressure(),
@@ -388,7 +389,7 @@ mod tests {
             brand: "Apple M3 Pro".into(),
             load: [1.0, 2.0, 3.0],
             memory_total: 1000,
-            memory_used: 250,
+            memory_used: Some(250),
             swap_total: 0,
             ..Default::default()
         }
@@ -432,7 +433,7 @@ mod tests {
         assert_eq!(clamped.cpu_percent, Some(100.0));
         let overfull = SystemUsage::from_readings(SystemReadings {
             memory_total: 10,
-            memory_used: 11,
+            memory_used: Some(11),
             ..readings()
         });
         assert_eq!(overfull.memory_used_bytes, None);

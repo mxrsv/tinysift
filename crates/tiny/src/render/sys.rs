@@ -22,13 +22,15 @@ pub fn run() -> Result<()> {
     );
     println!(
         "\n== Memory ==\nUsed:      {}\nTotal:     {}",
-        format_bytes(info.memory_used),
+        info.memory_used
+            .map(format_bytes)
+            .unwrap_or_else(|| "unavailable".into()),
         format_bytes(info.memory_total)
     );
-    if info.memory_total > 0 {
+    if let Some(used) = info.memory_used.filter(|_| info.memory_total > 0) {
         println!(
             "Usage:     {:.1}%",
-            info.memory_used as f64 / info.memory_total as f64 * 100.0
+            used as f64 / info.memory_total as f64 * 100.0
         );
     }
     println!("\n== Disks ==");

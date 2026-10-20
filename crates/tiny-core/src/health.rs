@@ -31,17 +31,14 @@ pub fn score(system: &SystemInfo, discovery: &DiscoveryReport) -> HealthScore {
         Some(p) if p < 20.0 => 15,
         _ => 0,
     };
-    let memory_percent = if system.memory_total > 0 {
-        system.memory_used as f64 / system.memory_total as f64 * 100.0
-    } else {
-        0.0
-    };
-    let memory_penalty = if memory_percent > 90.0 {
-        15
-    } else if memory_percent > 80.0 {
-        8
-    } else {
-        0
+    let memory_percent = system
+        .memory_used
+        .filter(|_| system.memory_total > 0)
+        .map(|used| used as f64 / system.memory_total as f64 * 100.0);
+    let memory_penalty = match memory_percent {
+        Some(p) if p > 90.0 => 15,
+        Some(p) if p > 80.0 => 8,
+        _ => 0,
     };
     let reclaimable_bytes = discovery
         .groups
@@ -53,7 +50,7 @@ pub fn score(system: &SystemInfo, discovery: &DiscoveryReport) -> HealthScore {
     HealthScore { score: 100 - disk_penalty - memory_penalty - cleanup_penalty, reclaimable_bytes,
         factors: vec![
             HealthFactor { label: "Free disk space".into(), penalty: disk_penalty, explanation: free_percent.map(|p| format!("{p:.1}% free; penalties apply below 20%, 10%, and 5%.")).unwrap_or_else(|| "Disk capacity unavailable; no penalty applied.".into()) },
-            HealthFactor { label: "Memory use".into(), penalty: memory_penalty, explanation: format!("{memory_percent:.1}% used; pressure indicator only, includes OS caches.") },
+            HealthFactor { label: "Memory use".into(), penalty: memory_penalty, explanation: memory_percent.map(|p| format!("{p:.1}% used by apps, wired and compressed memory; pressure indicator only.")).unwrap_or_else(|| "Memory use unavailable; no penalty applied.".into()) },
             HealthFactor { label: "Cleanup opportunities".into(), penalty: cleanup_penalty, explanation: "2 points per GiB of recoverable candidates, capped at 20. Categories ranked by safety, then size.".into() },
         ] }
 }
@@ -76,7 +73,7 @@ mod tests {
             cpu_model: String::new(),
             cpu_usage: 0.0,
             memory_total: 100,
-            memory_used: 95,
+            memory_used: Some(95),
             disks: vec![DiskInfo {
                 name: "disk".into(),
                 mount_point: "/".into(),

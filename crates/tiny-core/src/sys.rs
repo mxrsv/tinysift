@@ -19,7 +19,8 @@ pub struct SystemInfo {
     pub cpu_model: String,
     pub cpu_usage: f32,
     pub memory_total: u64,
-    pub memory_used: u64,
+    /// `None` when the kernel refuses the read.
+    pub memory_used: Option<u64>,
     pub disks: Vec<DiskInfo>,
 }
 
@@ -66,6 +67,59 @@ pub fn startup_capacity(disks: &[DiskInfo]) -> Option<DiskCapacity> {
         })
 }
 
+/// Used pages: app memory (anonymous pages less purgeable ones), wired memory and the
+/// compressor's pages, the three parts Activity Monitor lists. File cache is not used memory.
+#[cfg(any(target_os = "macos", test))]
+fn used_pages(internal: u64, purgeable: u64, wired: u64, compressor: u64) -> u64 {
+    internal
+        .saturating_sub(purgeable)
+        .saturating_add(wired)
+        .saturating_add(compressor)
+}
+
+/// Memory in use as app, wired and compressed memory. `sysinfo`'s macOS figure is
+/// active + wired + compressed + speculative, which misses inactive app memory and
+/// counts active file cache, so it can read gigabytes apart. `None` when the kernel
+/// refuses the read.
+#[cfg(target_os = "macos")]
+pub fn used_memory(_system: &System) -> Option<u64> {
+    use std::sync::OnceLock;
+    // One send right for the process's lifetime instead of a new reference per sample.
+    static HOST: OnceLock<libc::mach_port_t> = OnceLock::new();
+    // `libc` points to the `mach2` crate; one call does not justify the dependency.
+    #[allow(deprecated)]
+    // SAFETY: takes no arguments and returns this host's port.
+    let host = *HOST.get_or_init(|| unsafe { libc::mach_host_self() });
+    // SAFETY: an all-zero `vm_statistics64` is a valid value of plain integers.
+    let mut stats: libc::vm_statistics64 = unsafe { std::mem::zeroed() };
+    let mut count = libc::HOST_VM_INFO64_COUNT;
+    // SAFETY: `stats` is the HOST_VM_INFO64 structure and `count` is its size in integers.
+    let status = unsafe {
+        libc::host_statistics64(
+            host,
+            libc::HOST_VM_INFO64,
+            (&mut stats as *mut libc::vm_statistics64).cast(),
+            &mut count,
+        )
+    };
+    // SAFETY: reads a constant system value.
+    let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok()?;
+    (status == libc::KERN_SUCCESS && page > 0).then(|| {
+        used_pages(
+            stats.internal_page_count.into(),
+            stats.purgeable_count.into(),
+            stats.wire_count.into(),
+            stats.compressor_page_count.into(),
+        )
+        .saturating_mul(page)
+    })
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn used_memory(system: &System) -> Option<u64> {
+    Some(system.used_memory())
+}
+
 pub fn information() -> SystemInfo {
     let mut system = System::new_all();
     std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
@@ -83,7 +137,7 @@ pub fn information() -> SystemInfo {
             .unwrap_or_default(),
         cpu_usage: system.global_cpu_usage(),
         memory_total: system.total_memory(),
-        memory_used: system.used_memory(),
+        memory_used: used_memory(&system),
         disks: disks(),
     }
 }
@@ -125,6 +179,24 @@ mod tests {
         assert!(startup_capacity(&[disk("/mnt", 9, 9)]).is_none());
         assert!(startup_capacity(&[disk(DATA_VOLUME, 0, 0)]).is_none());
         assert!(startup_capacity(&[disk(DATA_VOLUME, 100, 101)]).is_none());
+    }
+
+    #[test]
+    fn used_memory_is_app_wired_and_compressed_not_active_pages() {
+        // Inactive app memory counts and file cache does not, whatever the queue.
+        assert_eq!(used_pages(500, 20, 300, 400), 1180);
+        assert_eq!(used_pages(10, 20, 300, 400), 700);
+        assert_eq!(used_pages(u64::MAX, 0, 1, 0), u64::MAX);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn live_used_memory_fits_in_physical_memory() {
+        let system = System::new_with_specifics(
+            sysinfo::RefreshKind::new().with_memory(sysinfo::MemoryRefreshKind::new().with_ram()),
+        );
+        let used = used_memory(&system).expect("host_statistics64 succeeds");
+        assert!(used > 0 && used <= system.total_memory());
     }
 
     #[test]
