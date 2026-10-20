@@ -16,6 +16,10 @@ satisfy.
 | Asset | exactly one `TinySift-<version>.dmg` | `TinySift-0.1.2.dmg` |
 | Flag | mark as **pre-release** until the app leaves beta | |
 
+GitHub's repository sidebar only shows a non-pre-release as "Latest", so while every release is a
+pre-release the sidebar shows tags only. Link users to the
+[Releases page](https://github.com/mxrsv/tinysift/releases) instead of relying on the sidebar.
+
 Versions follow [SemVer](https://semver.org). The app version is independent of the crate
 versions in [Cargo.toml](../../Cargo.toml); never reuse or move a published tag.
 

@@ -8,7 +8,8 @@ or process identity can be tested across the engine and native interface in one 
 
 This Rust workspace is the public GitHub repository `mxrsv/tinysift`, matching the TinySift
 brand. Its [GitHub Releases](https://github.com/mxrsv/tinysift/releases) host the signed app
-DMGs; the [release guide](docs/operations/release.md) holds the rules.
+DMGs (all are beta pre-releases, so the sidebar shows only tags; open the Releases page);
+the [release guide](docs/operations/release.md) holds the rules.
 The private SwiftUI app and website belong to `mxrsv/tinycore`.
 Local directories remain `tinysift-core` for Rust and `tiny-cli` for the app;
 the [native builder](scripts/build-ffi.sh) does not depend on GitHub naming.
