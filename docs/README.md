@@ -15,5 +15,7 @@
 - [Glossary](internals/glossary.md) — canonical Rust/FFI vocabulary.
 - [Traps](internals/traps.md) — platform and safety constraints.
 - [Development](operations/development.md) — Cargo gates and native bindings.
+- [Releases](operations/release.md) — tags, DMG assets, notes and checks.
+- [Contributing](../CONTRIBUTING.md) — commit and PR rules.
 
 The private app owns native UI/design/update documentation and cross-repository task records.

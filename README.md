@@ -7,11 +7,12 @@ or process identity can be tested across the engine and native interface in one 
 ## Repository names
 
 This Rust workspace is the public GitHub repository `mxrsv/tinysift`, matching the TinySift
-brand. Its GitHub Releases are intended to host app binaries; none are published yet.
+brand. Its [GitHub Releases](https://github.com/mxrsv/tinysift/releases) host the signed app
+DMGs; the [release guide](docs/operations/release.md) holds the rules.
 The private SwiftUI app and website belong to `mxrsv/tinycore`.
 Local directories remain `tinysift-core` for Rust and `tiny-cli` for the app;
 the [native builder](scripts/build-ffi.sh) does not depend on GitHub naming.
-See [Publication](#publication) for what remains before a release.
+Commit and PR rules are in [CONTRIBUTING](CONTRIBUTING.md).
 
 ## Build and check
 
@@ -51,5 +52,5 @@ and [documentation index](docs/README.md) before extending the interface.
 This repository is licensed under [GPL-3.0-only](LICENSE). The code is open source; the
 TinySift name and logo are not, see the [trademark policy](TRADEMARK.md). The source became
 public on 2026-10-14 under the earlier MIT declaration, so copies obtained before the
-relicense on 2026-10-17 remain under MIT. There is no release yet; third-party distribution notices
-are still pending and must be finalized before binaries are published.
+relicense on 2026-10-17 remain under MIT. Third-party distribution notices for the released binaries are
+still pending.

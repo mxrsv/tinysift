@@ -41,6 +41,11 @@ directory. See the [repository names](README.md#repository-names) before changin
 - Never enable `test-hooks` in a shipped static library. Generate bindings from the same
   archive/revision the client links, using [build-ffi.sh](scripts/build-ffi.sh).
 
+## Commits and releases
+
+Commit and PR rules are in [CONTRIBUTING](CONTRIBUTING.md); app DMG releases follow the
+[release guide](docs/operations/release.md).
+
 ## Documentation
 
 CLI guides live in `docs/user/`; contracts/traps in `docs/internals/`; maintainer commands in
