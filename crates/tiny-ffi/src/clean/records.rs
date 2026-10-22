@@ -17,8 +17,9 @@ pub struct FfiCleanOptions {
     pub idle_days: u64,
     /// List every project's build output (`node-modules`, `rust-targets`),
     /// not only projects idle for `idle_days`: a candidate is Safe when its
-    /// project has no edits, commits or uncommitted changes for 7 days, every
-    /// fact checked, and Review otherwise. The CLI never sets it.
+    /// project is in a git work tree and has no edits, commits or uncommitted
+    /// changes for 7 days, every fact checked, and Review otherwise (outside
+    /// git too). The CLI never sets it.
     #[uniffi(default = false)]
     pub all_build_output: bool,
 }
@@ -150,7 +151,8 @@ pub struct FfiCleanCategory {
     /// Listing or search paths with unreadable entries.
     pub unreadable: Vec<FfiUnreadablePath>,
     /// Paths the provider found but that are never offered: the root, the
-    /// home folder or its ancestors, or tool output outside the home folder.
+    /// home folder or its ancestors, tool output outside the home folder, or
+    /// build output whose tracked files git could not list.
     pub refused: Vec<FfiRefusedPath>,
     /// `None` for an unregistered ID.
     pub comes_back: Option<FfiComesBack>,

@@ -55,8 +55,9 @@ pub enum CategoryOutcome {
         unreadable: Vec<(PathBuf, Unreadable)>,
         /// Directories discovery listed or walked for this category.
         roots: Vec<PathBuf>,
-        /// Paths left out because they must never be cleaned, with why
-        /// (`trash_plan::protected_reason`). Desktop discovery only.
+        /// Paths left out, with why: they must never be cleaned (desktop
+        /// discovery only, `trash_plan::protected_reason`), or a safety
+        /// check could not answer (`ScanContext::note_refused`).
         refused: Vec<(PathBuf, String)>,
     },
     /// The owning app is running, so the category was not scanned.
@@ -292,7 +293,7 @@ fn found(
     protected: impl Fn(&std::path::Path) -> Option<String>,
 ) -> CategoryOutcome {
     let mut unreadable = findings.unreadable;
-    let mut refused = Vec::new();
+    let mut refused: Vec<(PathBuf, String)> = findings.refused.into_iter().collect();
     let mut kept = Vec::new();
     for item in items {
         match protected(&item.path) {

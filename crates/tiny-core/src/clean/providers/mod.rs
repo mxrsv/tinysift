@@ -709,27 +709,62 @@ mod tests {
         assert_eq!(comes_back("not-a-category"), None);
     }
 
+    /// Deliberate desktop section for every category. A new provider fails
+    /// this test until it is added here, so build output never lands in
+    /// Rebuilt just because `comes_back` says a build restores it.
+    const SECTIONS: &[(&str, Section)] = &[
+        ("user-logs", Section::Rebuilt),
+        ("xcode-derived", Section::Rebuilt),
+        ("user-caches", Section::Rebuilt),
+        ("xcode-archives", Section::YourFiles),
+        ("xcode-devicesupport", Section::Rebuilt),
+        ("cargo", Section::Rebuilt),
+        ("npm", Section::Rebuilt),
+        ("pnpm", Section::Rebuilt),
+        ("yarn", Section::Rebuilt),
+        ("uv", Section::Rebuilt),
+        ("puppeteer", Section::Rebuilt),
+        ("huggingface", Section::Rebuilt),
+        ("codex-runtimes", Section::Rebuilt),
+        ("codex-releases", Section::Rebuilt),
+        ("node-modules", Section::BuildOutput),
+        // Keeps its idle rule on the desktop too (`all_build_output` does not
+        // reach it), so it is not listed per project like build output.
+        ("python-caches", Section::Rebuilt),
+        ("rust-targets", Section::BuildOutput),
+        ("gradle-maven", Section::Rebuilt),
+        ("jetbrains", Section::Rebuilt),
+        ("vscode", Section::Rebuilt),
+        ("ios-simulators", Section::Rebuilt),
+        ("simulator-devices", Section::YourFiles),
+        ("android-sdk", Section::Rebuilt),
+        ("go-cache", Section::Rebuilt),
+        ("docker", Section::Rebuilt),
+        ("docker-volumes", Section::YourFiles),
+        ("downloads-old", Section::YourFiles),
+        ("screenshots-old", Section::YourFiles),
+        ("mail-attachments", Section::YourFiles),
+        ("streaming-caches", Section::Rebuilt),
+        ("chat-caches", Section::Rebuilt),
+        ("browser-caches", Section::Rebuilt),
+        ("quarantine", Section::Rebuilt),
+        ("crash-reports", Section::Rebuilt),
+        ("app-orphans", Section::YourFiles),
+        ("time-machine-local", Section::YourFiles),
+        ("font-quicklook-caches", Section::Rebuilt),
+        ("trash", Section::YourFiles),
+    ];
+
     #[test]
-    fn every_category_has_a_desktop_section_and_build_output_its_own() {
-        for id in known_category_ids() {
-            assert!(category_section(id).is_some(), "{id}");
-        }
-        for (id, section) in [
-            ("node-modules", Section::BuildOutput),
-            ("rust-targets", Section::BuildOutput),
-            ("python-caches", Section::Rebuilt),
-            ("xcode-derived", Section::Rebuilt),
-            ("cargo", Section::Rebuilt),
-            ("uv", Section::Rebuilt),
-            ("puppeteer", Section::Rebuilt),
-            ("huggingface", Section::Rebuilt),
-            ("codex-releases", Section::Rebuilt),
-            ("user-caches", Section::Rebuilt),
-            ("downloads-old", Section::YourFiles),
-            ("app-orphans", Section::YourFiles),
-            ("trash", Section::YourFiles),
-        ] {
-            assert_eq!(category_section(id), Some(section), "{id}");
+    fn every_category_has_a_deliberate_desktop_section() {
+        let decided: Vec<&str> = SECTIONS.iter().map(|(id, _)| *id).collect();
+        assert_eq!(
+            decided,
+            known_category_ids(),
+            "every category needs a deliberate section in SECTIONS"
+        );
+        for (id, section) in SECTIONS {
+            assert_eq!(category_section(id), Some(*section), "{id}");
         }
         assert_eq!(category_section("not-a-category"), None);
     }

@@ -10,15 +10,23 @@ use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{Evidence, RiskLevel};
 use crate::engine_error;
 use crate::error::Result;
-use crate::runner::{CommandError, CommandRunner, TOOL_TIMEOUT};
+use crate::runner::{CommandError, CommandOutcome, CommandRunner, TOOL_TIMEOUT};
 
 /// Absolute on purpose: a Finder-launched app has a minimal `PATH`.
 const GIT: &str = "/usr/bin/git";
 const SECS_PER_DAY: i64 = 86_400;
 
 /// Days without edits, commits or uncommitted changes after which the
-/// desktop's build output is Safe, so the app preselects it.
+/// desktop's build output inside a git work tree is Safe, so the app
+/// preselects it. Outside git it stays Review: a manifest's age alone does
+/// not prove a project idle.
 pub const BUILD_OUTPUT_SAFE_DAYS: u64 = 7;
+
+/// Why build output is not offered when git cannot list its tracked files.
+/// The app shows refusal reasons as they are.
+const UNLISTED: &str = "git could not tell whether it holds tracked files";
+/// Bound on the git error quoted in that reason.
+const DETAIL_CHARS: usize = 200;
 
 /// What the manifest and git say about a project.
 #[derive(Debug, Default, PartialEq)]
@@ -107,10 +115,11 @@ pub(crate) fn activity(
 /// Risk and evidence for a project's build output `folder` (`target/`,
 /// `node_modules`) beside `manifest`, or `None` when it is not offered.
 /// `Some(days)` (the CLI) offers only a project idle for more than `days`,
-/// as Review. `None` (the desktop) offers every project: Safe when idle for
-/// more than `BUILD_OUTPUT_SAFE_DAYS` with every fact checked, Review when
-/// active or when that cannot be told. Either way a folder holding a file
-/// git tracks, or whose tracked files git cannot list, is never offered.
+/// as Review. `None` (the desktop) offers every project: Safe when git shows
+/// it idle for more than `BUILD_OUTPUT_SAFE_DAYS` with every fact checked,
+/// Review when active, outside git, or when that cannot be told. Either way
+/// a folder holding a file git tracks is never offered, nor one whose
+/// tracked files git cannot list; that one is noted as refused, with why.
 pub(crate) fn assess_build_output(
     runner: &dyn CommandRunner,
     folder: &Path,
@@ -123,7 +132,8 @@ pub(crate) fn assess_build_output(
         None => {
             let Activity { evidence, idle } =
                 activity(runner, manifest, BUILD_OUTPUT_SAFE_DAYS, ctx)?;
-            let risk = if idle {
+            // Outside git only the manifest's age is known (`NotGitRepo`).
+            let risk = if idle && !evidence.contains(&Evidence::NotGitRepo) {
                 RiskLevel::Safe
             } else {
                 RiskLevel::Review
@@ -134,25 +144,50 @@ pub(crate) fn assess_build_output(
     let Some(offered) = offered else {
         return Ok(None);
     };
-    if ctx.is_cancelled() || holds_tracked_files(runner, folder)? {
+    if ctx.is_cancelled() {
         return Ok(None);
     }
-    Ok(Some(offered))
+    match tracked_files(runner, folder)? {
+        Tracked::No => Ok(Some(offered)),
+        Tracked::Yes => Ok(None),
+        // Fail closed, but say why rather than drop the project silently.
+        Tracked::Unknown(detail) => {
+            ctx.note_refused(folder, unlisted(&detail));
+            Ok(None)
+        }
+    }
 }
 
-/// True when git tracks a file inside `folder`, or cannot say (fail closed).
+/// What git says about the files it tracks inside a build output folder.
+enum Tracked {
+    No,
+    Yes,
+    /// Git did not answer; the detail says why.
+    Unknown(String),
+}
+
 /// A folder outside every git work tree holds no tracked file and runs no
 /// git. `Err` only when git cannot run at all.
-pub(crate) fn holds_tracked_files(runner: &dyn CommandRunner, folder: &Path) -> Result<bool> {
+fn tracked_files(runner: &dyn CommandRunner, folder: &Path) -> Result<Tracked> {
     // The folder's own `.git` counts: a `node_modules` may itself be a repo.
     if !in_git_work_tree(folder) {
-        return Ok(false);
+        return Ok(Tracked::No);
     }
     let Some(folder_arg) = folder.to_str() else {
-        return Ok(true);
+        return Ok(Tracked::Unknown(
+            "its path is not UTF-8, so git was not asked".into(),
+        ));
     };
-    let listed = git(runner, folder_arg, &["ls-files", "--", "."])?;
-    Ok(listed.is_none_or(|files| !files.trim().is_empty()))
+    let listed = git_answer(runner, folder_arg, &["ls-files", "--", "."])?;
+    Ok(match listed {
+        Ok(files) if files.trim().is_empty() => Tracked::No,
+        Ok(_) => Tracked::Yes,
+        Err(detail) => Tracked::Unknown(detail),
+    })
+}
+
+fn unlisted(detail: &str) -> String {
+    format!("{UNLISTED} ({detail})")
 }
 
 /// `check_item` for build output: refuses a folder that holds a file git
@@ -165,9 +200,10 @@ pub(crate) fn refuse_tracked(
     if std::fs::symlink_metadata(folder).is_err() {
         return Ok(());
     }
-    match holds_tracked_files(runner, folder) {
-        Ok(false) => Ok(()),
-        Ok(true) => Err("git tracks files inside it, or could not list them".into()),
+    match tracked_files(runner, folder) {
+        Ok(Tracked::No) => Ok(()),
+        Ok(Tracked::Yes) => Err("git tracks files inside it".into()),
+        Ok(Tracked::Unknown(detail)) => Err(unlisted(&detail)),
         Err(e) => Err(e.to_string()),
     }
 }
@@ -200,15 +236,49 @@ fn work_tree_clean(runner: &dyn CommandRunner, project: &str) -> Result<bool> {
 /// Stdout of a successful git call. A non-zero exit, timeout or non-UTF-8
 /// output is `None`; only a git that cannot be started is an error.
 fn git(runner: &dyn CommandRunner, project: &str, args: &[&str]) -> Result<Option<String>> {
+    Ok(git_answer(runner, project, args)?.ok())
+}
+
+/// `git`, keeping why git did not answer.
+fn git_answer(
+    runner: &dyn CommandRunner,
+    project: &str,
+    args: &[&str],
+) -> Result<std::result::Result<String, String>> {
     // --no-optional-locks: status must not write the index of a repo we only inspect.
     let mut full = vec!["--no-optional-locks", "-C", project];
     full.extend_from_slice(args);
     match runner.output(GIT, &full, TOOL_TIMEOUT) {
-        Ok(outcome) if outcome.success() => Ok(Some(outcome.stdout)),
-        Ok(_) | Err(CommandError::Timeout { .. } | CommandError::NonUtf8(_)) => Ok(None),
+        Ok(outcome) if outcome.success() => Ok(Ok(outcome.stdout)),
+        Ok(outcome) => Ok(Err(exit_detail(&outcome))),
+        Err(e @ (CommandError::Timeout { .. } | CommandError::NonUtf8(_))) => {
+            Ok(Err(e.to_string()))
+        }
         Err(CommandError::NotFound(_) | CommandError::Spawn { .. }) => Err(engine_error!(
             "git is unavailable, so projects inside git repositories cannot be checked"
         )),
+    }
+}
+
+/// The exit status and git's first stderr line, e.g. the `/usr/bin/git`
+/// shim's "xcrun: error: invalid active developer path" without the
+/// Command Line Tools.
+fn exit_detail(outcome: &CommandOutcome) -> String {
+    let status = match outcome.status {
+        Some(code) => format!("git exited with status {code}"),
+        None => "git was stopped by a signal".into(),
+    };
+    let first_line = outcome
+        .stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty());
+    match first_line {
+        Some(line) => {
+            let line: String = line.chars().take(DETAIL_CHARS).collect();
+            format!("{status}: {line}")
+        }
+        None => status,
     }
 }
 
@@ -560,16 +630,21 @@ mod tests {
     }
 
     #[test]
-    fn desktop_marks_an_idle_project_outside_git_safe_without_running_git() {
-        let project = rust_project(&tempdir("bo-idle"), 8);
+    fn desktop_lists_an_idle_project_outside_git_as_review_without_running_git() {
+        // Only the manifest's age is known outside git; it does not prove idle.
+        let project = rust_project(&tempdir("bo-idle"), 40);
         let runner = MockRunner::new();
-        let (risk, evidence) = desktop(&runner, &project).unwrap().expect("offered");
-        assert_eq!(risk, RiskLevel::Safe);
+        let (risk, evidence) = desktop(&runner, &project).unwrap().expect("listed");
+        assert_eq!(risk, RiskLevel::Review);
         assert!(matches!(
             evidence.as_slice(),
             [Evidence::ManifestModified { .. }, Evidence::NotGitRepo]
         ));
         assert!(runner.output_calls.lock().unwrap().is_empty());
+        // The CLI still offers it, as before.
+        let (risk, evidence) = cli(&runner, &project).unwrap().expect("offered");
+        assert_eq!(risk, RiskLevel::Review);
+        assert_eq!(evidence.last(), Some(&Evidence::NotGitRepo));
     }
 
     #[test]
@@ -665,26 +740,87 @@ mod tests {
         let project = rust_project(&root, 40);
         let dir = project.1.parent().unwrap();
         let runner = ls_files(mock_git(dir, 40, ""), &project.0, 0, "fixture.bin\n");
-        assert_eq!(desktop(&runner, &project).unwrap(), None);
+        let ctx = ScanContext::unchecked();
+        assert_eq!(
+            assess_build_output(&runner, &project.0, &project.1, None, &ctx).unwrap(),
+            None
+        );
         assert_eq!(cli(&runner, &project).unwrap(), None);
+        // The user's own files: left out without a refusal note.
+        assert!(ctx.take_findings().refused.is_empty());
     }
 
+    /// `ls-files` in `folder` exits 1 the way the `/usr/bin/git` shim does
+    /// without the Command Line Tools.
+    fn ls_files_without_clt(runner: MockRunner, folder: &Path) -> MockRunner {
+        let args = git_args(folder, &["ls-files", "--", "."]);
+        let outcome = CommandOutcome {
+            status: Some(1),
+            stdout: String::new(),
+            stderr: format!("{XCRUN_ERROR}\nsecond line\n"),
+        };
+        runner.with_output(GIT, &as_strs(&args), Ok(outcome))
+    }
+
+    const XCRUN_ERROR: &str =
+        "xcrun: error: invalid active developer path (/Library/Developer/CommandLineTools)";
+
     #[test]
-    fn build_output_is_not_offered_when_git_cannot_list_tracked_files() {
+    fn build_output_git_cannot_list_is_refused_with_the_reason() {
         let root = tempdir("bo-ls-fails");
         mark_repo(&root);
         let project = rust_project(&root, 40);
         let dir = project.1.parent().unwrap();
+        let refusals = |runner: &MockRunner, idle_days| {
+            let ctx = ScanContext::unchecked();
+            let listed =
+                assess_build_output(runner, &project.0, &project.1, idle_days, &ctx).unwrap();
+            assert_eq!(listed, None, "never offered");
+            ctx.take_findings().refused
+        };
+        let shim = ls_files_without_clt(mock_git(dir, 40, ""), &project.0);
+        for idle_days in [None, Some(IDLE_DAYS)] {
+            let refused = refusals(&shim, idle_days);
+            let reason = &refused[&project.0];
+            assert!(reason.starts_with(UNLISTED), "{reason}");
+            assert!(reason.contains(XCRUN_ERROR), "{reason}");
+            assert!(!reason.contains("second line"), "{reason}");
+        }
         let failed = ls_files(mock_git(dir, 40, ""), &project.0, 128, "");
-        assert_eq!(desktop(&failed, &project).unwrap(), None);
-        assert_eq!(cli(&failed, &project).unwrap(), None);
+        assert!(refusals(&failed, None)[&project.0].contains("status 128"));
         let ls = git_args(&project.0, &["ls-files", "--", "."]);
         let timeout = CommandError::Timeout {
             bin: GIT.to_string(),
             timeout_ms: 30_000,
         };
         let timed_out = mock_git(dir, 40, "").with_output(GIT, &as_strs(&ls), Err(timeout));
-        assert_eq!(desktop(&timed_out, &project).unwrap(), None);
+        assert!(refusals(&timed_out, None)[&project.0].contains("did not finish"));
+    }
+
+    #[test]
+    fn a_category_says_which_projects_git_could_not_check() {
+        let root = tempdir("bo-refused-category");
+        mark_repo(&root);
+        let (folder, manifest) = rust_project(&root, 40);
+        let runner = ls_files_without_clt(mock_git(manifest.parent().unwrap(), 40, ""), &folder);
+        let opts = crate::options::CleanOptions {
+            all_build_output: true,
+            ..Default::default()
+        };
+        let mut provider = RustTargets::with_options(&opts, Arc::new(runner));
+        provider.search_roots = vec![root.clone()];
+        let providers: Vec<Box<dyn CleanProvider>> = vec![Box::new(provider)];
+        let probe = MockChecker::none();
+        let report = discover_checked(&providers, &ScanContext::new(None, &probe), None);
+        match &report.categories[0].outcome {
+            crate::clean::discover::CategoryOutcome::Found { items, refused, .. } => {
+                assert!(items.is_empty());
+                assert_eq!(refused.len(), 1);
+                assert_eq!(refused[0].0, folder);
+                assert!(refused[0].1.contains(XCRUN_ERROR), "{}", refused[0].1);
+            }
+            other => panic!("unexpected {other:?}"),
+        }
     }
 
     #[test]
@@ -732,8 +868,10 @@ mod tests {
         assert!(refuse_tracked(&ls_files(MockRunner::new(), &folder, 0, ""), &folder).is_ok());
         let tracked = ls_files(MockRunner::new(), &folder, 0, "fixture.bin\n");
         assert!(refuse_tracked(&tracked, &folder).is_err());
-        let failed = ls_files(MockRunner::new(), &folder, 128, "");
-        assert!(refuse_tracked(&failed, &folder).is_err());
+        let failed = ls_files_without_clt(MockRunner::new(), &folder);
+        assert!(refuse_tracked(&failed, &folder)
+            .unwrap_err()
+            .starts_with(UNLISTED));
         assert!(refuse_tracked(&MockRunner::new(), &folder)
             .unwrap_err()
             .contains("git is unavailable"));

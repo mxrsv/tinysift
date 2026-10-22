@@ -33,6 +33,9 @@ pub struct ScanFindings {
     /// Items whose size counts blocks the volume could not show as unshared,
     /// so deleting one may free less.
     pub size_upper_bound: BTreeSet<PathBuf>,
+    /// Paths found but never offered because a safety check could not
+    /// answer, with why.
+    pub refused: BTreeMap<PathBuf, String>,
 }
 
 pub struct ScanContext<'a> {
@@ -113,6 +116,15 @@ impl<'a> ScanContext<'a> {
                 entries: 1,
                 first_error: error.to_string(),
             });
+    }
+
+    /// Records a path left out because a safety check could not answer, so
+    /// the category says why instead of looking empty.
+    pub fn note_refused(&self, path: &Path, reason: String) {
+        self.findings
+            .borrow_mut()
+            .refused
+            .insert(path.to_path_buf(), reason);
     }
 
     pub fn note_size_upper_bound(&self, item: &Path) {

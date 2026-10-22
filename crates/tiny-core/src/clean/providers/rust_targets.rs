@@ -65,7 +65,7 @@ impl CleanProvider for RustTargets {
     }
     fn inclusion_reason(&self) -> String {
         if self.all_projects {
-            return format!("Rust target/ folders in your projects; cargo build restores them. Safe once a project has no edits, commits or uncommitted changes for {BUILD_OUTPUT_SAFE_DAYS} days");
+            return format!("Rust target/ folders in your projects; cargo build restores them. Safe once a project in git has no edits, commits or uncommitted changes for {BUILD_OUTPUT_SAFE_DAYS} days");
         }
         format!("Rust target/ folders in projects with no edits, commits or uncommitted changes for {} days; cargo build restores them", self.idle_days)
     }
@@ -264,7 +264,7 @@ mod tests {
     }
 
     #[test]
-    fn desktop_lists_every_project_and_only_idle_ones_are_safe() {
+    fn desktop_lists_every_project_and_none_outside_git_is_safe() {
         let root = tempdir("desktop");
         let old = project(&root, "old", 40);
         let idle = project(&root, "idle", 8);
@@ -284,9 +284,12 @@ mod tests {
         assert!(desktop.inclusion_reason().contains("7 days"));
         let items = desktop.discover(&ScanContext::unchecked()).unwrap();
         let risk = |path: &Path| items.iter().find(|i| i.path == path).map(|i| i.risk);
-        assert_eq!(risk(&old), Some(RiskLevel::Safe));
-        assert_eq!(risk(&idle), Some(RiskLevel::Safe));
+        // Outside git a manifest's age alone never makes a project Safe.
+        assert_eq!(risk(&old), Some(RiskLevel::Review));
+        assert_eq!(risk(&idle), Some(RiskLevel::Review));
         assert_eq!(risk(&active), Some(RiskLevel::Review));
+        let old_item = items.iter().find(|i| i.path == old).unwrap();
+        assert_eq!(old_item.evidence.last(), Some(&Evidence::NotGitRepo));
         assert!(items.iter().all(|i| i.category_label == "Rust target/"));
         // The CLI's scope on the same fixture: idle for 30 days, Review.
         let cli = provider(&root, MockRunner::new())
