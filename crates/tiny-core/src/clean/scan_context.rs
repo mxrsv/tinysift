@@ -30,6 +30,9 @@ pub struct ScanFindings {
     pub unreadable: BTreeMap<PathBuf, Unreadable>,
     /// Directories discovery listed or walked; execution only acts inside them.
     pub roots: BTreeSet<PathBuf>,
+    /// Items whose size counts blocks the volume could not show as unshared,
+    /// so deleting one may free less.
+    pub size_upper_bound: BTreeSet<PathBuf>,
 }
 
 pub struct ScanContext<'a> {
@@ -110,6 +113,13 @@ impl<'a> ScanContext<'a> {
                 entries: 1,
                 first_error: error.to_string(),
             });
+    }
+
+    pub fn note_size_upper_bound(&self, item: &Path) {
+        self.findings
+            .borrow_mut()
+            .size_upper_bound
+            .insert(item.to_path_buf());
     }
 
     pub fn add_root(&self, root: &Path) {

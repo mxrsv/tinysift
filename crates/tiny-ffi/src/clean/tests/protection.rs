@@ -124,7 +124,11 @@ fn a_direct_rule_holds_one_path_and_leaves_its_siblings() {
     let mut moved = kept_paths(&preview);
     moved.sort();
     assert_eq!(moved, ["d"], "x and y move with d; a is held back");
-    assert_eq!(preview.bytes_selected, 8, "d's own measured size only");
+    assert_eq!(
+        preview.bytes_selected,
+        allocated(&dir.join("d/x")) + allocated(&dir.join("d/y")),
+        "d's own measured size only"
+    );
     remove(&dir);
 }
 
@@ -150,7 +154,8 @@ fn a_rule_inside_a_selected_folder_holds_the_folder_but_not_its_other_selection(
     ));
     assert_eq!(kept_paths(&preview), ["y"], "the safe sibling stays");
     assert_eq!(
-        preview.bytes_selected, 5,
+        preview.bytes_selected,
+        allocated(&dir.join("d/y")),
         "no parent-minus-child arithmetic"
     );
     assert!(preview.items[0].covers.is_empty());

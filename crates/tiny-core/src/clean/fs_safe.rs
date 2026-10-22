@@ -10,6 +10,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use super::freed_size::FreedBytes;
 use super::scan_context::ScanContext;
 
 /// Yields every entry under `root` without descending into symlinks. Symlink
@@ -201,39 +202,59 @@ pub fn is_dir_safe(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Sums the byte length of every file under `root`, never following symlinks.
-/// Returns 0 if `root` does not exist.
+/// Sums the logical length of every file under `root`, never following
+/// symlinks. Returns 0 if `root` does not exist. Uninstall's measure;
+/// cleanup sizes use `dir_size_checked`.
 pub fn dir_size_safe(root: &Path) -> u64 {
-    dir_size_checked(root, &ScanContext::unchecked())
-}
-
-/// Like `dir_size_safe`, but entries that cannot be read are recorded in
-/// `ctx` under `root`, so the size is known to be a lower bound, and the
-/// walk stops early once `ctx` is cancelled.
-pub fn dir_size_checked(root: &Path, ctx: &ScanContext<'_>) -> u64 {
-    let meta = match fs::symlink_metadata(root) {
-        Ok(m) => m,
-        Err(e) => {
-            ctx.note_unreadable(root, &e);
-            return 0;
-        }
-    };
-    let ft = meta.file_type();
-    if ft.is_symlink() {
-        return 0;
-    }
-    if ft.is_file() {
-        return meta.len();
-    }
-    if !ft.is_dir() {
-        return 0;
-    }
     let mut total = 0u64;
-    sum_dir(root, root, ctx, &mut total);
+    walk_files(root, &ScanContext::unchecked(), &mut |_, meta| {
+        total = total.saturating_add(meta.len());
+    });
     total
 }
 
-fn sum_dir(walk_root: &Path, dir: &Path, ctx: &ScanContext<'_>, total: &mut u64) {
+/// The bytes deleting `root` would free, by the [rule](super::freed_size),
+/// never following symlinks. Returns 0 if `root` does not exist. Entries
+/// that cannot be read are recorded in `ctx` under `root`, so the size is
+/// known to be a lower bound. When the volume cannot tell which blocks other
+/// files share, `root` is recorded as an upper bound. The walk stops early
+/// once `ctx` is cancelled.
+pub fn dir_size_checked(root: &Path, ctx: &ScanContext<'_>) -> u64 {
+    freed_size(root, ctx, FreedBytes::default())
+}
+
+fn freed_size(root: &Path, ctx: &ScanContext<'_>, mut freed: FreedBytes) -> u64 {
+    walk_files(root, ctx, &mut |path, meta| freed.add_file(path, meta));
+    let (bytes, upper_bound) = freed.finish();
+    if upper_bound {
+        ctx.note_size_upper_bound(root);
+    }
+    bytes
+}
+
+/// Calls `file` for `root` itself or for every regular file under it.
+fn walk_files(root: &Path, ctx: &ScanContext<'_>, file: &mut dyn FnMut(&Path, &fs::Metadata)) {
+    let meta = match fs::symlink_metadata(root) {
+        Ok(m) => m,
+        Err(e) => return ctx.note_unreadable(root, &e),
+    };
+    let ft = meta.file_type();
+    if ft.is_symlink() {
+        return;
+    }
+    if ft.is_file() {
+        file(root, &meta);
+    } else if ft.is_dir() {
+        visit_files(root, root, ctx, file);
+    }
+}
+
+fn visit_files(
+    walk_root: &Path,
+    dir: &Path,
+    ctx: &ScanContext<'_>,
+    file: &mut dyn FnMut(&Path, &fs::Metadata),
+) {
     for (path, meta) in read_entries(walk_root, dir, ctx) {
         if ctx.is_cancelled() {
             return;
@@ -243,9 +264,9 @@ fn sum_dir(walk_root: &Path, dir: &Path, ctx: &ScanContext<'_>, total: &mut u64)
             continue;
         }
         if ft.is_file() {
-            *total = total.saturating_add(meta.len());
+            file(&path, &meta);
         } else if ft.is_dir() {
-            sum_dir(walk_root, &path, ctx, total);
+            visit_files(walk_root, &path, ctx, file);
         }
     }
 }
@@ -382,7 +403,11 @@ mod tests {
         let size = dir_size_checked(&dir, &ctx);
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
 
-        assert_eq!(size, 5, "unreadable subtree is not counted");
+        assert_eq!(
+            size,
+            allocated(&dir.join("a")),
+            "unreadable subtree is not counted"
+        );
         let findings = ctx.take_findings();
         let note = &findings.unreadable[&dir];
         assert_eq!(note.entries, 1);
@@ -406,6 +431,162 @@ mod tests {
             ctx.take_findings().unreadable.contains_key(&dir),
             "a size of 0 must be flagged as not measured"
         );
+        let _ = remove_recursive_safe(&dir);
+    }
+
+    fn allocated(path: &Path) -> u64 {
+        fs::symlink_metadata(path).unwrap().blocks() * 512
+    }
+
+    #[cfg(target_os = "macos")]
+    fn clone_file(from: &Path, to: &Path) {
+        use std::ffi::CString;
+        use std::os::unix::ffi::OsStrExt;
+        let from = CString::new(from.as_os_str().as_bytes()).unwrap();
+        let to = CString::new(to.as_os_str().as_bytes()).unwrap();
+        // SAFETY: both arguments are valid NUL-terminated paths.
+        let rc = unsafe { libc::clonefile(from.as_ptr(), to.as_ptr(), 0) };
+        assert_eq!(rc, 0, "clonefile: {}", std::io::Error::last_os_error());
+    }
+
+    #[test]
+    fn checked_size_counts_allocated_blocks_not_length() {
+        let dir = tempdir("allocated");
+        write_file(&dir.join("a"), b"hello");
+        fs::create_dir(dir.join("sub")).unwrap();
+        write_file(&dir.join("sub/b"), &[7u8; 10_000]);
+        let expected = allocated(&dir.join("a")) + allocated(&dir.join("sub/b"));
+        assert_eq!(dir_size_checked(&dir, &ScanContext::unchecked()), expected);
+        let _ = remove_recursive_safe(&dir);
+    }
+
+    #[test]
+    fn checked_size_counts_a_hard_link_once_and_only_when_every_link_is_inside() {
+        let dir = tempdir("links");
+        let item = dir.join("item");
+        fs::create_dir(&item).unwrap();
+        write_file(&item.join("a"), &[7u8; 50_000]);
+        fs::hard_link(item.join("a"), item.join("b")).unwrap();
+        let ctx = ScanContext::unchecked();
+        let once = allocated(&item.join("a"));
+        assert_eq!(dir_size_checked(&item, &ctx), once, "both links inside");
+
+        fs::hard_link(item.join("a"), dir.join("outside")).unwrap();
+        assert_eq!(
+            dir_size_checked(&item, &ctx),
+            0,
+            "a link outside keeps the data"
+        );
+        assert_eq!(
+            dir_size_checked(&item.join("a"), &ctx),
+            0,
+            "single-file item"
+        );
+        assert_eq!(
+            dir_size_checked(&dir, &ctx),
+            once,
+            "every link inside the parent"
+        );
+        let _ = remove_recursive_safe(&dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn checked_size_counts_a_clone_family_once_and_only_when_it_is_all_inside() {
+        let dir = tempdir("clones");
+        let item = dir.join("item");
+        fs::create_dir(&item).unwrap();
+        write_file(&item.join("original"), &[7u8; 300_000]);
+        clone_file(&item.join("original"), &item.join("copy"));
+        let ctx = ScanContext::unchecked();
+        let once = allocated(&item.join("original"));
+        assert_eq!(dir_size_checked(&item, &ctx), once, "family inside");
+
+        clone_file(&item.join("original"), &dir.join("outside"));
+        assert_eq!(
+            dir_size_checked(&item, &ctx),
+            0,
+            "a clone outside keeps the blocks"
+        );
+        assert_eq!(
+            dir_size_checked(&item.join("copy"), &ctx),
+            0,
+            "single-file item"
+        );
+        assert_eq!(
+            dir_size_checked(&dir, &ctx),
+            once,
+            "whole family inside the parent"
+        );
+        assert!(
+            ctx.take_findings().size_upper_bound.is_empty(),
+            "APFS answered"
+        );
+        let _ = remove_recursive_safe(&dir);
+    }
+
+    #[test]
+    fn checked_size_the_volume_cannot_explain_is_an_upper_bound() {
+        use super::super::freed_size::Sharing;
+        let dir = tempdir("upper-bound");
+        write_file(&dir.join("a"), &[7u8; 10_000]);
+        let ctx = ScanContext::unchecked();
+        let size = freed_size(&dir, &ctx, FreedBytes::with_query(|_| Sharing::Unknown));
+        assert_eq!(size, allocated(&dir.join("a")));
+        let findings = ctx.take_findings();
+        assert!(findings.size_upper_bound.contains(&dir));
+        assert!(findings.unreadable.is_empty());
+
+        let size = freed_size(&dir, &ctx, FreedBytes::with_query(|_| Sharing::Unshared));
+        assert_eq!(size, allocated(&dir.join("a")));
+        assert!(ctx.take_findings().size_upper_bound.is_empty());
+        let _ = remove_recursive_safe(&dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn checked_size_needs_every_link_of_every_clone_inside() {
+        let dir = tempdir("linked-clone");
+        let item = dir.join("item");
+        fs::create_dir(&item).unwrap();
+        write_file(&item.join("original"), &[7u8; 300_000]);
+        clone_file(&item.join("original"), &item.join("copy"));
+        fs::hard_link(item.join("copy"), dir.join("outside")).unwrap();
+        let ctx = ScanContext::unchecked();
+        assert_eq!(
+            dir_size_checked(&item, &ctx),
+            0,
+            "the outside link keeps a clone"
+        );
+
+        fs::hard_link(item.join("copy"), item.join("inside")).unwrap();
+        fs::remove_file(dir.join("outside")).unwrap();
+        let once = allocated(&item.join("original"));
+        assert_eq!(dir_size_checked(&item, &ctx), once);
+        let _ = remove_recursive_safe(&dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn checked_size_counts_only_the_unshared_blocks_of_an_edited_clone() {
+        use std::io::{Seek, SeekFrom};
+        let dir = tempdir("edited-clone");
+        let item = dir.join("item");
+        fs::create_dir(&item).unwrap();
+        write_file(&dir.join("original"), &[7u8; 1 << 20]);
+        clone_file(&dir.join("original"), &item.join("edited"));
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .open(item.join("edited"))
+            .unwrap();
+        file.seek(SeekFrom::Start(500_000)).unwrap();
+        file.write_all(b"edited").unwrap();
+        file.sync_all().unwrap();
+        drop(file);
+
+        let size = dir_size_checked(&item, &ScanContext::unchecked());
+        assert!(size > 0, "the rewritten block is private");
+        assert!(size < allocated(&item.join("edited")), "{size}");
         let _ = remove_recursive_safe(&dir);
     }
 

@@ -197,6 +197,12 @@ pub(super) fn fixture_dir(label: &str, names: &[&str], len: usize) -> PathBuf {
     std::fs::canonicalize(dir).unwrap()
 }
 
+/// What discovery counts for a test file: its allocated blocks, not its length.
+pub(super) fn allocated(path: &Path) -> u64 {
+    use std::os::unix::fs::MetadataExt;
+    std::fs::symlink_metadata(path).unwrap().blocks() * 512
+}
+
 pub(super) fn remove(dir: &Path) {
     let _ = tiny_core::clean::fs_safe::remove_recursive_safe(dir);
 }

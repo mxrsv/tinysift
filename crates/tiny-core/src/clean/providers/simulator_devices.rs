@@ -245,6 +245,7 @@ mod tests {
 
     #[test]
     fn only_unavailable_devices_with_a_folder_are_offered() {
+        use std::os::unix::fs::MetadataExt;
         let root = devices_root("discover");
         let p = SimulatorDevices::with_runner(Arc::new(listing_runner()));
         let items = p
@@ -252,7 +253,8 @@ mod tests {
             .unwrap();
         assert_eq!(items.len(), 1, "{:?}", items);
         assert_eq!(items[0].path, root.join(GONE));
-        assert_eq!(items[0].size, 5);
+        let file = std::fs::symlink_metadata(root.join(GONE).join("data/file")).unwrap();
+        assert_eq!(items[0].size, file.blocks() * 512);
         assert_eq!(items[0].risk, RiskLevel::Destructive);
         assert_eq!(
             items[0].evidence,

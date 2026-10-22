@@ -42,6 +42,9 @@ pub struct DiscoveryReport {
 pub struct CheckedItem {
     pub item: CleanItem,
     pub unreadable: Option<Unreadable>,
+    /// The volume could not tell which blocks other files share, so
+    /// `item.size` counts them all: deleting frees at most that.
+    pub size_is_upper_bound: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +299,7 @@ fn found(
             Some(reason) => refused.push((item.path, reason)),
             None => kept.push(CheckedItem {
                 unreadable: unreadable.remove(&item.path),
+                size_is_upper_bound: findings.size_upper_bound.contains(&item.path),
                 item,
             }),
         }
@@ -545,6 +549,7 @@ mod tests {
                     evidence: Vec::new(),
                 },
                 unreadable: None,
+                size_is_upper_bound: false,
             };
             let note = Unreadable {
                 entries: 1,
@@ -608,6 +613,7 @@ mod tests {
 
         #[test]
         fn failing_provider_is_isolated_from_healthy_ones() {
+            use std::os::unix::fs::MetadataExt;
             let root = fixture_root("isolate");
             let mut failing = Fixture::new("bad", &root);
             failing.fail = true;
@@ -622,8 +628,9 @@ mod tests {
             );
             match outcome(&report, "good") {
                 CategoryOutcome::Found { items, roots, .. } => {
+                    let file = std::fs::symlink_metadata(root.join("child/file")).unwrap();
                     assert_eq!(items.len(), 1);
-                    assert_eq!(items[0].item.size, 5);
+                    assert_eq!(items[0].item.size, file.blocks() * 512);
                     assert!(items[0].unreadable.is_none());
                     assert_eq!(roots, &vec![root.clone()]);
                 }
@@ -775,6 +782,27 @@ mod tests {
                 matches!(outcome(&report, "gated"), CategoryOutcome::Unavailable { reason } if reason.contains("Xcode"))
             );
             let _ = crate::clean::fs_safe::remove_recursive_safe(&root);
+        }
+
+        #[test]
+        fn an_upper_bound_size_is_attached_to_its_item() {
+            let item = |path: &str| CleanItem {
+                category_id: "a".into(),
+                category_label: "a".into(),
+                path: PathBuf::from(path),
+                size: 1,
+                risk: RiskLevel::Safe,
+                evidence: Vec::new(),
+            };
+            let mut findings = crate::clean::scan_context::ScanFindings::default();
+            findings.size_upper_bound.insert(PathBuf::from("/x/hfs"));
+            match found(vec![item("/x/hfs"), item("/x/apfs")], findings, |_| None) {
+                CategoryOutcome::Found { items, .. } => {
+                    let flags: Vec<bool> = items.iter().map(|i| i.size_is_upper_bound).collect();
+                    assert_eq!(flags, vec![true, false]);
+                }
+                other => panic!("unexpected {other:?}"),
+            }
         }
 
         #[test]

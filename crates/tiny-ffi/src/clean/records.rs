@@ -80,6 +80,10 @@ pub struct FfiCleanCandidate {
     pub risk: FfiRisk,
     /// Why this path was offered; never empty for a discovered candidate.
     pub evidence: Vec<FfiEvidence>,
+    /// The volume could not tell which blocks other files share, so
+    /// `size_bytes` counts them all: deleting frees at most that ("up to").
+    #[uniffi(default = false)]
+    pub size_is_upper_bound: bool,
 }
 
 /// One checkable fact behind a candidate; Swift writes the copy. Times are

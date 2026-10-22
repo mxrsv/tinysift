@@ -496,6 +496,7 @@ fn store_category(
                     unreadable_entries: checked.unreadable.map_or(0, |u| u.entries),
                     risk: item.risk.into(),
                     evidence: candidate_evidence(&item),
+                    size_is_upper_bound: checked.size_is_upper_bound,
                 });
                 let meta = std::fs::symlink_metadata(&item.path).ok();
                 candidates.insert(

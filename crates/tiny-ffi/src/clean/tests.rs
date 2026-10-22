@@ -39,13 +39,19 @@ fn preview_is_built_from_discovered_ids_only() {
     let category = &discovery.categories[0];
     assert_eq!(category.status, FfiCategoryStatus::Found);
     assert_eq!(category.desktop_action, FfiDesktopAction::MoveToTrash);
-    assert_eq!(category.total_bytes, 8);
+    let freed = allocated(&dir.join("a")) + allocated(&dir.join("b"));
+    assert_eq!(category.total_bytes, freed, "freed bytes, not length");
+    // Only macOS can tell which blocks other files share.
+    assert!(category
+        .candidates
+        .iter()
+        .all(|c| c.size_is_upper_bound == cfg!(not(target_os = "macos"))));
     assert_eq!(category.family, None, "fixture IDs are not registered");
     assert_eq!(category.inclusion_reason, "fixture");
 
     let preview = session.clean_preview(ids(&discovery)).unwrap();
     assert_eq!(preview.items.len(), 2);
-    assert_eq!(preview.bytes_selected, 8);
+    assert_eq!(preview.bytes_selected, freed);
     assert!(preview.excluded.is_empty());
     assert_eq!(preview.expires_in_seconds, PREVIEW_TTL.as_secs());
 
@@ -87,7 +93,8 @@ fn overlapping_selections_are_excluded_with_a_reason() {
     let preview = session.clean_preview(ids(&discovery)).unwrap();
     assert_eq!(preview.items.len(), 1);
     assert_eq!(
-        preview.bytes_selected, 2,
+        preview.bytes_selected,
+        allocated(&dir.join("Caches/x")),
         "covered bytes are not double-counted"
     );
     let kept = preview.items[0].candidate_id.clone();
@@ -293,8 +300,9 @@ fn execute_moves_previewed_paths_and_consumes_the_preview() {
     let token = CancellationToken::default();
     let report = execute(&session, &preview.preview_id, &dir, &trash, &token).unwrap();
     assert_eq!(outcomes(&report), vec![FfiItemOutcome::MovedToTrash; 2]);
-    assert_eq!(report.bytes_selected, 8);
-    assert_eq!(report.bytes_moved_to_trash, 8);
+    let freed = allocated(&dir.join("a")) + allocated(&dir.join("b"));
+    assert_eq!(report.bytes_selected, freed);
+    assert_eq!(report.bytes_moved_to_trash, freed);
     assert_eq!(report.moved_count, 2);
     assert_eq!(report.stopped, None);
     assert_eq!(trash.moved.lock().unwrap().len(), 2);
@@ -365,6 +373,8 @@ fn partial_results_report_each_item() {
     let dir = fixture_dir("partial", &["edited", "fails", "ok", "swapped"], 4);
     let session = TestSession::new();
     let preview = preview_all(&session, &dir);
+    // Four equal files, measured at discovery.
+    let one = allocated(&dir.join("ok"));
     std::fs::write(dir.join("edited"), b"changed after preview").unwrap();
     std::fs::rename(dir.join("swapped"), dir.join("real")).unwrap();
     std::os::unix::fs::symlink(dir.join("real"), dir.join("swapped")).unwrap();
@@ -407,8 +417,8 @@ fn partial_results_report_each_item() {
         ),
         (1, 1, 2)
     );
-    assert_eq!(report.bytes_selected, 16);
-    assert_eq!(report.bytes_moved_to_trash, 4);
+    assert_eq!(report.bytes_selected, 4 * one);
+    assert_eq!(report.bytes_moved_to_trash, one);
     assert!(
         dir.join("fails").exists(),
         "a Trash failure keeps the source"
