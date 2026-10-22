@@ -39,3 +39,57 @@ fn idle_days_zero_is_rejected() {
         .failure()
         .stderr(predicate::str::contains("--idle-days"));
 }
+
+/// `<home>/Documents/<name>/<manifest>`, `days` old, with `<output>/file`.
+fn project(home: &std::path::Path, name: &str, manifest: &str, output: &str, days: u64) {
+    let dir = home.join("Documents").join(name);
+    std::fs::create_dir_all(dir.join(output)).unwrap();
+    std::fs::write(dir.join(output).join("file"), b"x").unwrap();
+    let manifest = dir.join(manifest);
+    std::fs::write(&manifest, b"{}").unwrap();
+    let when = std::time::SystemTime::now() - std::time::Duration::from_secs(days * 86_400);
+    std::fs::File::open(&manifest)
+        .unwrap()
+        .set_modified(when)
+        .unwrap();
+}
+
+#[test]
+fn build_output_lists_only_idle_projects_by_default() {
+    // Outside any git work tree, so no git runs; HOME scopes the search roots.
+    let home = tempfile::tempdir().unwrap();
+    project(home.path(), "idle-web", "package.json", "node_modules", 40);
+    project(home.path(), "active-web", "package.json", "node_modules", 2);
+    project(home.path(), "idle-crate", "Cargo.toml", "target", 40);
+    project(home.path(), "active-crate", "Cargo.toml", "target", 2);
+    let output = Command::cargo_bin("tiny")
+        .unwrap()
+        .env("HOME", home.path())
+        .args([
+            "clean",
+            "--dry-run",
+            "--include-review",
+            "--category",
+            "rust-targets",
+            "--category",
+            "node-modules",
+        ])
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let stdout = String::from_utf8(output).unwrap();
+    for expected in [
+        "node_modules (idle)",
+        "Rust target/ (idle)",
+        "idle-web/node_modules",
+        "idle-crate/target",
+    ] {
+        assert!(stdout.contains(expected), "{expected} missing:\n{stdout}");
+    }
+    assert!(
+        !stdout.contains("active-"),
+        "active project listed:\n{stdout}"
+    );
+}

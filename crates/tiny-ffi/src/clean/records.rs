@@ -2,7 +2,7 @@
 
 use tiny_core::clean::checked_execute::{ItemOutcome, SkipReason, StopReason};
 use tiny_core::clean::finder_trash::TrashError;
-use tiny_core::clean::providers::ReportOnly;
+use tiny_core::clean::providers::{ReportOnly, Section};
 use tiny_core::clean::types::{ComesBack, Evidence, RiskLevel};
 use tiny_core::options::CleanOptions;
 
@@ -15,6 +15,12 @@ pub struct FfiCleanOptions {
     pub include_review: bool,
     pub include_destructive: bool,
     pub idle_days: u64,
+    /// List every project's build output (`node-modules`, `rust-targets`),
+    /// not only projects idle for `idle_days`: a candidate is Safe when its
+    /// project has no edits, commits or uncommitted changes for 7 days, every
+    /// fact checked, and Review otherwise. The CLI never sets it.
+    #[uniffi(default = false)]
+    pub all_build_output: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -103,8 +109,7 @@ pub enum FfiEvidence {
     SimulatorUnavailable { name: String, reason: String },
 }
 
-/// How a category's items come back after a move to Trash. The desktop
-/// groups `TrashOnly` categories as the user's own files.
+/// How a category's items come back after a move to Trash.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum FfiComesBack {
     Rebuild { command: String },
@@ -112,6 +117,20 @@ pub enum FfiComesBack {
     AppRecreates,
     TrashOnly,
     NotRecoverable,
+}
+
+/// The desktop section of a category's movable items, by what the user can
+/// expect after cleanup. Report-only categories are grouped by
+/// `desktop_action` instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiCleanSection {
+    /// A tool or app recreates them ("Rebuilt automatically").
+    Rebuilt,
+    /// Build output inside projects: `rust-targets`, `node-modules`
+    /// ("Project build output").
+    BuildOutput,
+    /// Nothing recreates them ("Your files").
+    YourFiles,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -135,6 +154,9 @@ pub struct FfiCleanCategory {
     pub refused: Vec<FfiRefusedPath>,
     /// `None` for an unregistered ID.
     pub comes_back: Option<FfiComesBack>,
+    /// `None` for an unregistered ID.
+    #[uniffi(default = None)]
+    pub section: Option<FfiCleanSection>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -301,6 +323,7 @@ impl From<FfiCleanOptions> for CleanOptions {
             include_review: options.include_review,
             include_destructive: options.include_destructive,
             idle_days: options.idle_days,
+            all_build_output: options.all_build_output,
         }
     }
 }
@@ -335,6 +358,16 @@ impl From<ComesBack> for FfiComesBack {
             ComesBack::AppRecreates => Self::AppRecreates,
             ComesBack::TrashOnly => Self::TrashOnly,
             ComesBack::NotRecoverable => Self::NotRecoverable,
+        }
+    }
+}
+
+impl From<Section> for FfiCleanSection {
+    fn from(section: Section) -> Self {
+        match section {
+            Section::Rebuilt => Self::Rebuilt,
+            Section::BuildOutput => Self::BuildOutput,
+            Section::YourFiles => Self::YourFiles,
         }
     }
 }

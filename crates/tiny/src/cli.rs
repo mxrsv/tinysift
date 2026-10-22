@@ -243,6 +243,8 @@ impl From<&CleanOpts> for tiny_core::options::CleanOptions {
             include_review: value.include_review,
             include_destructive: value.include_destructive,
             idle_days: value.idle_days,
+            // The CLI lists only idle projects' build output.
+            all_build_output: false,
         }
     }
 }

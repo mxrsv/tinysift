@@ -89,8 +89,8 @@ pub fn category_family(category_id: &str) -> Family {
 }
 
 /// How a category's items come back after a move to Trash. `None` for an
-/// id outside `known_category_ids()`. "Your files" on the desktop are the
-/// `TrashOnly` categories.
+/// id outside `known_category_ids()`. It decides the desktop section
+/// (`category_section`).
 pub fn comes_back(category_id: &str) -> Option<ComesBack> {
     let rebuild = |command| Some(ComesBack::Rebuild { command });
     match category_id {
@@ -119,6 +119,33 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
         }
         _ => None,
     }
+}
+
+/// The desktop section a category sits in, by what the user can expect
+/// after cleanup. Report-only categories are grouped by their desktop
+/// decision instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Section {
+    /// A tool or app recreates the items.
+    Rebuilt,
+    /// Build output inside projects; a build or install recreates it.
+    BuildOutput,
+    /// Nothing recreates the items.
+    YourFiles,
+}
+
+/// `None` for an id outside `known_category_ids()`. Project build output
+/// has its own section; otherwise `comes_back` decides.
+pub fn category_section(category_id: &str) -> Option<Section> {
+    if matches!(category_id, "node-modules" | "rust-targets") {
+        return Some(Section::BuildOutput);
+    }
+    comes_back(category_id).map(|back| match back {
+        ComesBack::Rebuild { .. } | ComesBack::Redownload | ComesBack::AppRecreates => {
+            Section::Rebuilt
+        }
+        ComesBack::TrashOnly | ComesBack::NotRecoverable => Section::YourFiles,
+    })
 }
 
 pub trait CleanProvider {
@@ -238,16 +265,16 @@ pub fn all_providers_with(
         Box::new(dev_caches::NpmCache::with_runner(runner.clone())),
         Box::new(dev_caches::PnpmStore::with_runner(runner.clone())),
         Box::new(dev_caches::YarnCache::with_runner(runner.clone())),
-        Box::new(node_modules::NodeModules::with_runner(
-            opts.idle_days,
+        Box::new(node_modules::NodeModules::with_options(
+            opts,
             runner.clone(),
         )),
         Box::new(python_caches::PythonCaches::with_runner(
             opts.idle_days,
             runner.clone(),
         )),
-        Box::new(rust_targets::RustTargets::with_runner(
-            opts.idle_days,
+        Box::new(rust_targets::RustTargets::with_options(
+            opts,
             runner.clone(),
         )),
         Box::new(gradle_maven::GradleMaven),
@@ -620,6 +647,58 @@ mod tests {
             assert!(comes_back(id).is_some(), "{id}");
         }
         assert_eq!(comes_back("not-a-category"), None);
+    }
+
+    #[test]
+    fn every_category_has_a_desktop_section_and_build_output_its_own() {
+        for id in known_category_ids() {
+            assert!(category_section(id).is_some(), "{id}");
+        }
+        for (id, section) in [
+            ("node-modules", Section::BuildOutput),
+            ("rust-targets", Section::BuildOutput),
+            ("python-caches", Section::Rebuilt),
+            ("xcode-derived", Section::Rebuilt),
+            ("cargo", Section::Rebuilt),
+            ("user-caches", Section::Rebuilt),
+            ("downloads-old", Section::YourFiles),
+            ("app-orphans", Section::YourFiles),
+            ("trash", Section::YourFiles),
+        ] {
+            assert_eq!(category_section(id), Some(section), "{id}");
+        }
+        assert_eq!(category_section("not-a-category"), None);
+    }
+
+    #[test]
+    fn only_the_desktop_option_lists_every_projects_build_output() {
+        let runner: Arc<dyn CommandRunner> =
+            Arc::new(crate::runner::test_support::MockRunner::new());
+        let labels = |all_build_output| {
+            let opts = crate::options::CleanOptions {
+                all_build_output,
+                ..Default::default()
+            };
+            all_providers_with(&opts, runner.clone())
+                .into_iter()
+                .filter(|p| matches!(p.id(), "node-modules" | "rust-targets"))
+                .map(|p| (p.label(), p.risk()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            labels(false),
+            [
+                ("node_modules (idle)", RiskLevel::Review),
+                ("Rust target/ (idle)", RiskLevel::Review)
+            ]
+        );
+        assert_eq!(
+            labels(true),
+            [
+                ("node_modules", RiskLevel::Review),
+                ("Rust target/", RiskLevel::Review)
+            ]
+        );
     }
 
     #[test]

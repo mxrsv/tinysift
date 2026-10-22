@@ -23,8 +23,8 @@ use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::{PolicySnapshot, RuleScope};
 use tiny_core::clean::protection_store::ProtectionStore;
 use tiny_core::clean::providers::{
-    all_providers_with, category_family, comes_back, desktop_report_only, known_category_ids,
-    CleanProvider, ReportOnly,
+    all_providers_with, category_family, category_section, comes_back, desktop_report_only,
+    known_category_ids, CleanProvider, ReportOnly,
 };
 use tiny_core::clean::scan_context::{ScanContext, Unreadable};
 use tiny_core::clean::trash_plan::{
@@ -456,6 +456,7 @@ fn store_category(
         .contains(&category.id.as_str())
         .then(|| category_family(&category.id).id().to_string());
     let comes_back = comes_back(&category.id).map(Into::into);
+    let section = category_section(&category.id).map(Into::into);
     let mut ffi = FfiCleanCategory {
         id: category.id,
         label: category.label,
@@ -469,6 +470,7 @@ fn store_category(
         unreadable: Vec::new(),
         refused: Vec::new(),
         comes_back,
+        section,
     };
     match category.outcome {
         CategoryOutcome::Found {

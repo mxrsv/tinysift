@@ -10,6 +10,7 @@ use tiny_core::clean::types::RiskLevel;
 use super::test_support::*;
 use super::*;
 
+mod build_output;
 mod execute_protection;
 mod protection;
 mod protection_writes;

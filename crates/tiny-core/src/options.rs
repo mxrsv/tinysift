@@ -31,6 +31,12 @@ pub struct CleanOptions {
     pub include_destructive: bool,
 
     pub idle_days: u64,
+
+    /// List the build output (`target/`, `node_modules`) of every project,
+    /// not only projects idle for `idle_days`. The desktop sets it; the CLI
+    /// never does.
+    #[serde(default)]
+    pub all_build_output: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -61,6 +67,7 @@ impl Default for CleanOptions {
             include_review: false,
             include_destructive: false,
             idle_days: 30,
+            all_build_output: false,
         }
     }
 }

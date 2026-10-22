@@ -323,6 +323,7 @@ mod tests {
             include_review: false,
             include_destructive: false,
             idle_days: 30,
+            all_build_output: false,
         }
     }
 
