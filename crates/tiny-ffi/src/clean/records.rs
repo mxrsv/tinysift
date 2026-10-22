@@ -51,7 +51,7 @@ pub enum FfiCategoryStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum FfiDesktopAction {
     MoveToTrash,
-    /// Shown for information; cleanup stays in the CLI.
+    /// Shown for information; the app does not act on it (`reason` says why).
     ReportOnly {
         reason: FfiReportOnlyReason,
     },
@@ -66,6 +66,12 @@ pub enum FfiReportOnlyReason {
     NotPerPathTrash,
     /// The selection rule can flag data still in use (app-orphans).
     UnreliableMatch,
+    /// Acting needs administrator rights, which the app does not ask for
+    /// yet (`system-simulator-caches`); `FfiCleanCategory.needs_admin` is set.
+    NeedsAdministrator,
+    /// Xcode is not installed, so only System Settings > General > Storage
+    /// removes these simulator runtimes (`simulator-runtime-images`).
+    XcodeNotInstalled,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -97,17 +103,39 @@ pub struct FfiCleanCandidate {
 /// Unix seconds.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum FfiEvidence {
-    Modified { at: i64 },
-    ManifestModified { file: String, at: i64 },
-    LastCommit { at: i64 },
+    Modified {
+        at: i64,
+    },
+    ManifestModified {
+        file: String,
+        at: i64,
+    },
+    LastCommit {
+        at: i64,
+    },
     WorkTreeClean,
     NotGitRepo,
     VenvMarker,
-    LastOpened { at: i64 },
-    OwningApp { name: String },
+    LastOpened {
+        at: i64,
+    },
+    OwningApp {
+        name: String,
+    },
     OwningAppUnknown,
-    Sensitive { reason: String },
-    SimulatorUnavailable { name: String, reason: String },
+    Sensitive {
+        reason: String,
+    },
+    SimulatorUnavailable {
+        name: String,
+        reason: String,
+    },
+    /// A simulator runtime image: `runtimeIdentifier`, version and build.
+    SimulatorRuntime {
+        identifier: String,
+        version: String,
+        build: String,
+    },
 }
 
 /// How a category's items come back after a move to Trash.
@@ -159,6 +187,9 @@ pub struct FfiCleanCategory {
     /// `None` for an unregistered ID.
     #[uniffi(default = None)]
     pub section: Option<FfiCleanSection>,
+    /// Acting on the candidates needs administrator rights (a lock marker).
+    #[uniffi(default = false)]
+    pub needs_admin: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -242,8 +273,8 @@ pub enum FfiSkipReason {
     /// Replaced or edited since discovery.
     Changed,
     OutsideScanRoots,
-    /// The root, the home folder or an ancestor, or a tool-reported path
-    /// outside the home folder.
+    /// The root, the home folder or an ancestor, a tool-reported path
+    /// outside the home folder, or anything in `/System`.
     ProtectedPath,
     /// On another volume than the home folder, where Finder may delete
     /// permanently instead of moving to Trash.
@@ -346,6 +377,15 @@ impl From<Evidence> for FfiEvidence {
             Evidence::SimulatorUnavailable { name, reason } => {
                 Self::SimulatorUnavailable { name, reason }
             }
+            Evidence::SimulatorRuntime {
+                identifier,
+                version,
+                build,
+            } => Self::SimulatorRuntime {
+                identifier,
+                version,
+                build,
+            },
         }
     }
 }
@@ -390,6 +430,8 @@ impl From<ReportOnly> for FfiReportOnlyReason {
             ReportOnly::Destructive => Self::Destructive,
             ReportOnly::NotPerPathTrash => Self::NotPerPathTrash,
             ReportOnly::UnreliableMatch => Self::UnreliableMatch,
+            ReportOnly::NeedsAdministrator => Self::NeedsAdministrator,
+            ReportOnly::XcodeNotInstalled => Self::XcodeNotInstalled,
         }
     }
 }

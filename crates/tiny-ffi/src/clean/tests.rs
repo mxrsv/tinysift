@@ -15,6 +15,7 @@ mod execute_protection;
 mod protection;
 mod protection_writes;
 mod selection;
+mod simulators;
 
 // ---------- discovery and preview (T4b) ----------
 

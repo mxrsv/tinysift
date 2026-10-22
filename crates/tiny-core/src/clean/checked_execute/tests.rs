@@ -452,6 +452,38 @@ fn home_its_ancestors_and_tool_paths_outside_home_are_refused() {
 }
 
 #[test]
+fn nothing_inside_system_ever_reaches_trash() {
+    // Missing paths: no check reaches the disk, and none could change it.
+    let root = fixture_root("system", &["a"]);
+    let mut planned = plan("logs", &root, "a");
+    planned.roots = vec![PathBuf::from("/")];
+    let trash = FakeTrash::default();
+    for path in [
+        "/System/Library/AssetsV2/tiny-test-missing/x.dmg",
+        "/system/library/assetsv2/tiny-test-missing/x.dmg",
+        "/Library/../System/Library/AssetsV2/tiny-test-missing/x.dmg",
+    ] {
+        planned.item.path = PathBuf::from(path);
+        let report = run(
+            std::slice::from_ref(&planned),
+            vec![Box::new(fixture("logs"))],
+            &MockChecker::none(),
+            &trash,
+            None,
+        );
+        assert_eq!(
+            outcomes(&report),
+            vec![ItemOutcome::Skipped(SkipReason::ProtectedPath(
+                "inside /System".into()
+            ))],
+            "{path}"
+        );
+    }
+    assert!(trash.moved.lock().unwrap().is_empty());
+    let _ = remove_recursive_safe(&root);
+}
+
+#[test]
 fn items_on_another_volume_than_home_are_refused() {
     let root = fixture_root("volume", &["a"]);
     let providers: Vec<Box<dyn CleanProvider>> = vec![Box::new(fixture("logs"))];

@@ -6,6 +6,7 @@ use std::sync::Arc;
 
 use super::fs_safe::{dir_size_checked, list_children, remove_recursive_safe};
 use super::scan_context::ScanContext;
+use super::trash_plan::inside_system;
 use super::types::{CleanItem, ComesBack, ExecAction, ExecReport, RiskLevel};
 
 pub mod android_sdk;
@@ -31,7 +32,10 @@ pub mod quarantine;
 pub mod rust_targets;
 pub mod screenshots_old;
 pub mod simulator_devices;
+pub mod simulator_runtime_images;
+pub mod simulator_runtimes;
 pub mod streaming_caches;
+pub mod system_simulator_caches;
 pub mod time_machine_local;
 pub mod trash;
 pub mod user_caches;
@@ -78,6 +82,9 @@ pub fn category_family(category_id: &str) -> Family {
         "node-modules" | "python-caches" | "rust-targets" => Family::Dev,
         "gradle-maven" | "jetbrains" | "vscode" => Family::Dev,
         "ios-simulators" | "simulator-devices" | "android-sdk" => Family::Dev,
+        "system-simulator-caches" | "simulator-runtimes" | "simulator-runtime-images" => {
+            Family::Dev
+        }
         "go-cache" | "docker" | "docker-volumes" => Family::Dev,
         "xcode-derived" | "xcode-archives" | "xcode-devicesupport" => Family::Dev,
         // UserStorage family
@@ -102,6 +109,7 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
         }
         "streaming-caches" | "chat-caches" => Some(ComesBack::Redownload),
         "uv" | "huggingface" | "codex-runtimes" | "codex-releases" => Some(ComesBack::Redownload),
+        "simulator-runtimes" | "simulator-runtime-images" => Some(ComesBack::Redownload),
         "puppeteer" => rebuild("npx puppeteer browsers install"),
         "node-modules" => rebuild("npm, pnpm or yarn install"),
         "python-caches" => rebuild("python -m venv, then pip install"),
@@ -114,7 +122,7 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
         "xcode-devicesupport" | "browser-caches" | "quarantine" | "crash-reports" => {
             Some(ComesBack::AppRecreates)
         }
-        "font-quicklook-caches" => Some(ComesBack::AppRecreates),
+        "font-quicklook-caches" | "system-simulator-caches" => Some(ComesBack::AppRecreates),
         "xcode-archives" | "downloads-old" | "screenshots-old" | "mail-attachments" => {
             Some(ComesBack::TrashOnly)
         }
@@ -220,7 +228,17 @@ pub trait CleanProvider {
     fn check_item(&self, _path: &Path) -> std::result::Result<(), String> {
         Ok(())
     }
+
+    /// True when acting on the items needs administrator rights. The
+    /// desktop only reports such a category (`desktop_report_only`) and the
+    /// CLI, which never runs `sudo`, refuses its items before `execute`.
+    fn needs_admin(&self) -> bool {
+        false
+    }
 }
+
+/// Why the CLI refuses a category that `needs_admin`.
+pub(crate) const NEEDS_ADMIN: &str = "needs administrator rights; the tiny CLI never runs sudo";
 
 /// Why the desktop only reports a category instead of moving its items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -231,12 +249,19 @@ pub enum ReportOnly {
     NotPerPathTrash,
     /// The rule that selects items can flag data still in use.
     UnreliableMatch,
+    /// Acting needs administrator rights, which the app does not ask for.
+    NeedsAdministrator,
+    /// Xcode is not installed, so only System Settings > General > Storage
+    /// can remove the items.
+    XcodeNotInstalled,
 }
 
 /// `None` when the desktop may move this provider's items to Trash.
 pub fn desktop_report_only(provider: &dyn CleanProvider) -> Option<ReportOnly> {
     if provider.risk() == RiskLevel::Destructive {
         Some(ReportOnly::Destructive)
+    } else if provider.needs_admin() {
+        Some(ReportOnly::NeedsAdministrator)
     } else if provider.desktop_trash_paths() {
         None
     } else {
@@ -294,6 +319,13 @@ pub fn all_providers_with(
         Box::new(simulator_devices::SimulatorDevices::with_runner(
             runner.clone(),
         )),
+        Box::new(system_simulator_caches::SystemSimulatorCaches::with_runner(
+            runner.clone(),
+        )),
+        Box::new(simulator_runtimes::SimulatorRuntimes::with_runner(
+            runner.clone(),
+        )),
+        Box::new(simulator_runtime_images::SimulatorRuntimeImages::with_runner(runner.clone())),
         Box::new(android_sdk::AndroidSdk::new(opts.idle_days)),
         Box::new(go_cache::GoCache::with_runner(runner.clone())),
         Box::new(docker::Docker::with_runner(runner.clone())),
@@ -348,6 +380,9 @@ pub fn known_category_ids() -> &'static [&'static str] {
         "vscode",
         "ios-simulators",
         "simulator-devices",
+        "system-simulator-caches",
+        "simulator-runtimes",
+        "simulator-runtime-images",
         "android-sdk",
         "go-cache",
         "docker",
@@ -464,7 +499,7 @@ pub(crate) fn run_tool(
 }
 
 /// Default per-item executor used by every provider except Trash. Rejects
-/// `ExecAction::EmptyTrash`.
+/// `ExecAction::EmptyTrash`, and refuses any path inside `/System`.
 pub(crate) fn execute_per_item(
     items: &[CleanItem],
     action: ExecAction,
@@ -478,6 +513,12 @@ pub(crate) fn execute_per_item(
     }
     let mut report = ExecReport::default();
     for item in items {
+        if inside_system(&item.path) {
+            report
+                .failed
+                .push((item.path.clone(), "inside /System".to_string()));
+            continue;
+        }
         let result = match action {
             ExecAction::Trash => move_to_trash(&item.path),
             ExecAction::HardDelete => remove_recursive_safe(&item.path)
@@ -588,6 +629,20 @@ mod tests {
         ("ios-simulators", None),
         // Destructive: `xcrun simctl delete` removes the device for good.
         ("simulator-devices", Some(ReportOnly::Destructive)),
+        // Root-owned: report only until the app asks for administrator
+        // rights; the CLI refuses it (no sudo).
+        (
+            "system-simulator-caches",
+            Some(ReportOnly::NeedsAdministrator),
+        ),
+        // Runs `xcrun simctl runtime delete`, not a per-path move.
+        ("simulator-runtimes", Some(ReportOnly::NotPerPathTrash)),
+        // Without Xcode only System Settings > General > Storage removes
+        // them; TinySift never changes /System/Library/AssetsV2.
+        (
+            "simulator-runtime-images",
+            Some(ReportOnly::XcodeNotInstalled),
+        ),
         ("android-sdk", None),
         ("go-cache", None),
         // Runs `docker image prune` / `docker builder prune`, not a per-path move.
@@ -668,6 +723,71 @@ mod tests {
         }
     }
 
+    /// A per-path provider that would let the desktop move its items.
+    struct NeedsAdmin;
+
+    impl CleanProvider for NeedsAdmin {
+        fn id(&self) -> &'static str {
+            "needs-admin"
+        }
+        fn label(&self) -> &'static str {
+            "needs-admin"
+        }
+        fn inclusion_reason(&self) -> String {
+            "fixture".into()
+        }
+        fn risk(&self) -> RiskLevel {
+            RiskLevel::Safe
+        }
+        fn discover(&self, _: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
+            Ok(Vec::new())
+        }
+        fn execute(&self, _: &[CleanItem], _: ExecAction) -> Result<ExecReport> {
+            panic!("never executed")
+        }
+        fn desktop_trash_paths(&self) -> bool {
+            true
+        }
+        fn needs_admin(&self) -> bool {
+            true
+        }
+    }
+
+    #[test]
+    fn a_category_that_needs_admin_is_report_only_on_the_desktop() {
+        assert_eq!(
+            desktop_report_only(&NeedsAdmin),
+            Some(ReportOnly::NeedsAdministrator)
+        );
+    }
+
+    #[test]
+    fn the_per_item_executor_never_acts_inside_system() {
+        // Paths that do not exist: nothing on disk is touched either way.
+        let items: Vec<CleanItem> = [
+            "/System/Library/AssetsV2/tiny-test-missing/x.dmg",
+            "/system/library/assetsv2/tiny-test-missing/x.dmg",
+            "/Library/../System/Library/AssetsV2/tiny-test-missing/x.dmg",
+        ]
+        .into_iter()
+        .map(|path| CleanItem {
+            category_id: "user-logs".into(),
+            category_label: "user-logs".into(),
+            path: path.into(),
+            size: 0,
+            risk: RiskLevel::Safe,
+            evidence: Vec::new(),
+        })
+        .collect();
+        let report = execute_per_item(&items, ExecAction::HardDelete, "user-logs").unwrap();
+        assert!(
+            report.removed_paths.is_empty(),
+            "{:?}",
+            report.removed_paths
+        );
+        assert_eq!(report.failed.len(), items.len());
+    }
+
     #[test]
     fn per_path_app_gates_name_the_owning_app() {
         let h = std::path::PathBuf::from(std::env::var_os("HOME").unwrap());
@@ -737,6 +857,9 @@ mod tests {
         ("vscode", Section::Rebuilt),
         ("ios-simulators", Section::Rebuilt),
         ("simulator-devices", Section::YourFiles),
+        ("system-simulator-caches", Section::Rebuilt),
+        ("simulator-runtimes", Section::Rebuilt),
+        ("simulator-runtime-images", Section::Rebuilt),
         ("android-sdk", Section::Rebuilt),
         ("go-cache", Section::Rebuilt),
         ("docker", Section::Rebuilt),

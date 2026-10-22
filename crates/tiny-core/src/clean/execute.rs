@@ -20,7 +20,8 @@ use super::discover::CategoryGroup;
 use super::process::{AppProbe, RunnerProbe};
 use super::protection::{Matcher, PolicySnapshot};
 use super::protection_store::ProtectionStore;
-use super::providers::{all_providers, CleanProvider};
+use super::providers::{all_providers, CleanProvider, NEEDS_ADMIN};
+use super::trash_plan::inside_system;
 use super::types::{CleanAction, CleanItem, ExecAction, ExecReport};
 use crate::runner::RealRunner;
 
@@ -111,6 +112,17 @@ fn execute_group(
     action: ExecAction,
     probe: &dyn AppProbe,
 ) -> Result<ExecReport> {
+    // The CLI never runs sudo, and Finder would ask for the password itself.
+    if provider.needs_admin() {
+        let reason = format!("kept: {NEEDS_ADMIN}");
+        return Ok(ExecReport {
+            failed: items
+                .iter()
+                .map(|item| (item.path.clone(), reason.clone()))
+                .collect(),
+            ..ExecReport::default()
+        });
+    }
     // Recheck file providers immediately before each path; tool-backed providers
     // retain their batch semantics (for example one Docker prune).
     if !provider.desktop_trash_paths() {
@@ -193,6 +205,9 @@ fn check_item(
     item: &CleanItem,
     probe: &dyn AppProbe,
 ) -> std::result::Result<(), String> {
+    if inside_system(&item.path) {
+        return Err("inside /System".into());
+    }
     for app in provider.item_apps(&item.path) {
         match probe.probe(&app) {
             Ok(false) => {}
@@ -634,6 +649,116 @@ mod tests {
                 (PathBuf::from("/failure"), "fixture mutation failed".into()),
             ]
         );
+    }
+
+    /// A category that needs administrator rights; counts `execute` calls.
+    struct AdminProvider {
+        calls: Arc<AtomicUsize>,
+    }
+    impl CleanProvider for AdminProvider {
+        fn id(&self) -> &'static str {
+            "system-simulator-caches"
+        }
+        fn label(&self) -> &'static str {
+            "test"
+        }
+        fn risk(&self) -> RiskLevel {
+            RiskLevel::Safe
+        }
+        fn inclusion_reason(&self) -> String {
+            "fixture".into()
+        }
+        fn discover(
+            &self,
+            _ctx: &crate::clean::scan_context::ScanContext<'_>,
+        ) -> Result<Vec<CleanItem>> {
+            Ok(Vec::new())
+        }
+        fn needs_admin(&self) -> bool {
+            true
+        }
+        fn desktop_trash_paths(&self) -> bool {
+            true
+        }
+        fn execute(&self, items: &[CleanItem], _action: ExecAction) -> Result<ExecReport> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            Ok(ExecReport {
+                removed_paths: items.iter().map(|i| i.path.clone()).collect(),
+                ..ExecReport::default()
+            })
+        }
+    }
+
+    #[test]
+    fn the_cli_refuses_categories_that_need_admin_before_the_provider_runs() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let providers: Vec<Box<dyn CleanProvider>> = vec![Box::new(AdminProvider {
+            calls: calls.clone(),
+        })];
+        let paths = ["/Library/Developer/CoreSimulator/Caches/tiny-test-missing"];
+        let group = group_with(
+            paths.map(|p| item(p, "system-simulator-caches")).to_vec(),
+            "system-simulator-caches",
+        );
+        for action in [CleanAction::Trash, CleanAction::HardDelete] {
+            let report = execute_with_providers(
+                &[&group],
+                action,
+                &HashSet::new(),
+                &PolicySnapshot::absent(Vec::new()),
+                &providers,
+                &FailingProbe,
+            )
+            .unwrap();
+            assert!(report.removed_paths.is_empty());
+            assert_eq!(
+                report.failed,
+                vec![(
+                    PathBuf::from(paths[0]),
+                    format!("kept: {}", crate::clean::providers::NEEDS_ADMIN)
+                )]
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+    }
+
+    /// Every registered category except `trash`, whose hard delete empties
+    /// the real Trash whatever the paths. The paths do not exist, so nothing
+    /// on disk could change even if a check were missing.
+    #[test]
+    fn no_cli_execute_path_accepts_a_path_inside_system() {
+        use crate::clean::providers::{all_providers_with, known_category_ids};
+        use crate::runner::test_support::MockRunner;
+        let runner: Arc<dyn crate::runner::CommandRunner> = Arc::new(MockRunner::new());
+        let providers = all_providers_with(&CleanOpts::default(), runner);
+        let paths = [
+            "/System/Library/AssetsV2/tiny-test-missing/x.dmg",
+            "/system/library/assetsv2/tiny-test-missing/x.dmg",
+            "/System/Volumes/Data/System/Library/AssetsV2/tiny-test-missing/x.dmg",
+            "/Library/Developer/CoreSimulator/Caches/../../../../System/tiny-test-missing",
+        ];
+        let groups: Vec<CategoryGroup> = known_category_ids()
+            .iter()
+            .filter(|id| **id != TRASH_ID)
+            .map(|id| group_with(paths.map(|p| item(p, id)).to_vec(), id))
+            .collect();
+        let refs: Vec<&CategoryGroup> = groups.iter().collect();
+        let report = execute_with_providers(
+            &refs,
+            CleanAction::HardDelete,
+            &HashSet::new(),
+            &PolicySnapshot::absent(Vec::new()),
+            &providers,
+            &MockChecker::none(),
+        )
+        .unwrap();
+        assert!(
+            report.removed_paths.is_empty(),
+            "{:?}",
+            report.removed_paths
+        );
+        assert!(report.removal_requested.is_empty());
+        assert_eq!(report.failed.len(), groups.len() * paths.len());
     }
 
     #[test]

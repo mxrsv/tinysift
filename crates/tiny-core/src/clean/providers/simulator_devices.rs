@@ -24,9 +24,9 @@ use crate::runner::CommandRunner;
 const ID: &str = "simulator-devices";
 const LABEL: &str = "Unavailable iOS Simulator devices";
 /// Absolute: a Finder-launched app has a minimal `PATH`.
-const XCRUN: &str = "/usr/bin/xcrun";
-const LIST_ARGS: &[&str] = &["simctl", "list", "devices", "-j"];
-const FIND_ARGS: &[&str] = &["--find", "simctl"];
+pub(super) const XCRUN: &str = "/usr/bin/xcrun";
+pub(super) const LIST_ARGS: &[&str] = &["simctl", "list", "devices", "-j"];
+pub(super) const FIND_ARGS: &[&str] = &["--find", "simctl"];
 const DEVICES_DIR: &str = "Library/Developer/CoreSimulator/Devices";
 /// Hex digits per dash-separated group of a UDID.
 const UDID_GROUPS: [usize; 5] = [8, 4, 4, 4, 12];
@@ -61,7 +61,7 @@ impl SimulatorDevices {
     }
 
     fn simctl_found(&self) -> bool {
-        run_tool(self.runner.as_ref(), XCRUN, FIND_ARGS).is_ok_and(|out| out.success())
+        simctl_found(self.runner.as_ref())
     }
 
     /// Unavailable devices whose folder exists under `devices_root`. The
@@ -175,9 +175,16 @@ impl CleanProvider for SimulatorDevices {
     }
 }
 
+/// Whether `xcrun` finds `simctl`: a Mac with only the Command Line Tools
+/// has `xcrun` but not `simctl`. Spawn it only when CoreSimulator data
+/// exists, or the `xcrun` shim may ask to install developer tools.
+pub(super) fn simctl_found(runner: &dyn CommandRunner) -> bool {
+    run_tool(runner, XCRUN, FIND_ARGS).is_ok_and(|out| out.success())
+}
+
 /// `01DADBA3-1A21-4914-A093-29B4D0D7B9C8`: checked before a UDID becomes a
 /// path segment or a `simctl delete` argument.
-fn is_udid(s: &str) -> bool {
+pub(super) fn is_udid(s: &str) -> bool {
     let groups: Vec<&str> = s.split('-').collect();
     groups.len() == UDID_GROUPS.len()
         && groups

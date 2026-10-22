@@ -44,6 +44,21 @@ pub fn protected_reason(path: &Path, home: Option<&Path>, tool_printed: bool) ->
     }
 }
 
+/// True when `path` is inside `/System`, compared without letter case as
+/// APFS usually does, or holds a `..` that could lead there. Cleanup never
+/// deletes or moves anything there, even a path a provider listed.
+pub fn inside_system(path: &Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::Component;
+    if path.components().any(|c| c == Component::ParentDir) {
+        return true;
+    }
+    let mut components = path.components();
+    components.next() == Some(Component::RootDir)
+        && matches!(components.next(), Some(Component::Normal(first))
+            if first.as_bytes().eq_ignore_ascii_case(b"System"))
+}
+
 /// The current account's home folder from the user database
 /// (`getpwuid_r(getuid())`), independent of the `HOME` variable.
 pub fn account_home() -> Option<PathBuf> {
@@ -193,6 +208,31 @@ mod tests {
         assert!(check("/Users/meow/.npm", true).is_some(), "name prefix");
         assert!(protected_reason(Path::new("/x/y"), None, true).is_some());
         assert!(protected_reason(Path::new("/x/y"), None, false).is_none());
+    }
+
+    #[test]
+    fn system_paths_are_recognized_in_any_case_and_through_dot_dot() {
+        for inside in [
+            "/System",
+            "/System/Library/AssetsV2/x.dmg",
+            "/system/library/assetsv2/x.dmg",
+            "/SYSTEM/Library",
+            "//System/Library",
+            "/System/Volumes/Data/System/Library/AssetsV2/x.dmg",
+            "/Library/../System/Library/AssetsV2/x.dmg",
+            "/Library/Developer/CoreSimulator/Caches/..",
+        ] {
+            assert!(inside_system(Path::new(inside)), "{inside}");
+        }
+        for outside in [
+            "/Library/Developer/CoreSimulator/Caches/dyld",
+            "/Users/me/System/x",
+            "/Systems/x",
+            "/Sys",
+            "<simulator-runtime:1732E568-CE24-44BA-B87A-12934CCCC76F>",
+        ] {
+            assert!(!inside_system(Path::new(outside)), "{outside}");
+        }
     }
 
     #[test]

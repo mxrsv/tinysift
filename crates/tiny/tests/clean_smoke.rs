@@ -93,3 +93,25 @@ fn build_output_lists_only_idle_projects_by_default() {
         "active project listed:\n{stdout}"
     );
 }
+
+#[test]
+fn simulator_categories_list_read_only() {
+    Command::cargo_bin("tiny")
+        .unwrap()
+        .args([
+            "clean",
+            "--dry-run",
+            "--category",
+            "system-simulator-caches",
+            "--category",
+            "simulator-runtimes",
+            "--category",
+            "simulator-runtime-images",
+        ])
+        .assert()
+        .success()
+        .stdout(
+            predicate::str::contains("dry-run")
+                .or(predicate::str::contains("no cleanup candidates")),
+        );
+}

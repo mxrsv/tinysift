@@ -301,7 +301,10 @@ impl TinySession {
             .into_iter()
             .map(|category| {
                 let action = desktop_action(providers, &category.id);
-                store_category(id, category, action, &mut candidates)
+                let needs_admin = providers
+                    .iter()
+                    .any(|p| p.id() == category.id && p.needs_admin());
+                store_category(id, category, action, needs_admin, &mut candidates)
             })
             .collect();
         state.discovery = Some(StoredDiscovery {
@@ -450,6 +453,7 @@ fn store_category(
     discovery_id: u64,
     category: CheckedCategory,
     desktop_action: FfiDesktopAction,
+    needs_admin: bool,
     candidates: &mut HashMap<String, StoredCandidate>,
 ) -> FfiCleanCategory {
     let family = known_category_ids()
@@ -471,6 +475,7 @@ fn store_category(
         refused: Vec::new(),
         comes_back,
         section,
+        needs_admin,
     };
     match category.outcome {
         CategoryOutcome::Found {

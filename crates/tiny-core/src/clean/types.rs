@@ -60,6 +60,13 @@ pub enum Evidence {
     /// `xcrun simctl` reports the simulator device unavailable, with its
     /// `availabilityError` (empty when simctl gave none).
     SimulatorUnavailable { name: String, reason: String },
+    /// A simulator runtime image: its `runtimeIdentifier`
+    /// (`com.apple.CoreSimulator.SimRuntime.iOS-26-0`), version and build.
+    SimulatorRuntime {
+        identifier: String,
+        version: String,
+        build: String,
+    },
 }
 
 /// How a category's items come back after they are moved to the Trash.
@@ -103,6 +110,10 @@ pub enum CleanAction {
 #[serde(rename_all = "camelCase")]
 pub struct ExecReport {
     pub removed_paths: Vec<PathBuf>,
+    /// Removal a tool accepted and finishes in the background
+    /// (`xcrun simctl runtime delete`): not removed, and not freed, yet.
+    #[serde(default)]
+    pub removal_requested: Vec<PathBuf>,
     pub failed: Vec<(PathBuf, String)>,
     pub skipped_running_app: Option<String>,
 }
@@ -110,6 +121,7 @@ pub struct ExecReport {
 impl ExecReport {
     pub fn merge(&mut self, other: ExecReport) {
         self.removed_paths.extend(other.removed_paths);
+        self.removal_requested.extend(other.removal_requested);
         self.failed.extend(other.failed);
         if self.skipped_running_app.is_none() {
             self.skipped_running_app = other.skipped_running_app;

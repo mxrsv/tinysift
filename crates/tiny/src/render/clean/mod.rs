@@ -89,10 +89,11 @@ pub fn run(opts: crate::cli::CleanOpts) -> Result<()> {
                             | "uv"
                             | "time-machine-local"
                             | "simulator-devices"
+                            | "simulator-runtimes"
                     )
                 })
             {
-                eprintln!("Warning: Docker, pnpm and uv prunes, Time Machine snapshot removal and simulator device deletion cannot be undone; those tools have no Trash semantics.");
+                eprintln!("Warning: Docker, pnpm and uv prunes, Time Machine snapshot removal and simulator device and runtime deletion cannot be undone; those tools have no Trash semantics.");
             }
             let report = execute::execute(&selected, action, &excluded_paths, &opts)?;
             print_exec_report(&report);
@@ -155,6 +156,14 @@ fn print_exec_report(report: &types::ExecReport) {
         removed,
         if removed == 1 { "" } else { "s" }
     );
+    let requested = report.removal_requested.len();
+    if requested > 0 {
+        println!(
+            "↻ requested removal of {} item{}; the tool finishes it in the background",
+            requested,
+            if requested == 1 { "" } else { "s" }
+        );
+    }
     if !report.failed.is_empty() {
         println!();
         println!("Failures ({}):", report.failed.len());

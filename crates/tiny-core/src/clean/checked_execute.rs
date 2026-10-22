@@ -20,7 +20,7 @@ use super::process::AppProbe;
 use super::protection::{Evaluation, Matcher, Relation, INTERNAL_ID_PREFIX};
 use super::protection_store::{StoreError, StoreLease};
 use super::providers::{desktop_report_only, CleanProvider};
-use super::trash_plan::{protected_reason, PlannedItem};
+use super::trash_plan::{inside_system, protected_reason, PlannedItem};
 use super::types::CleanItem;
 
 /// Why a path was not moved even though it was planned.
@@ -37,8 +37,8 @@ pub enum SkipReason {
     Changed,
     /// Not inside a discovery root, or a symlink appeared on the way to it.
     OutsideRoots,
-    /// The file-system root, the home folder or one of its ancestors, or a
-    /// tool-reported path outside the home folder.
+    /// The file-system root, the home folder or one of its ancestors, a
+    /// tool-reported path outside the home folder, or anything in `/System`.
     ProtectedPath(String),
     /// On another volume than the home folder. Finder may delete such a
     /// path permanently when that volume has no Trash.
@@ -268,14 +268,18 @@ fn skip_for(policy: &StoreLease<'_>, evaluation: &Evaluation) -> SkipReason {
     SkipReason::KeepUncertain(doubt.unwrap_or_else(|| "the rules could not be applied".into()))
 }
 
-/// The per-item validator, run immediately before each move. The saved rules
-/// come first (cheap, and the user's explicit choice); then slow checks come
+/// The per-item validator, run immediately before each move. A path inside
+/// `/System` is refused outright. The saved rules come next (cheap, and the
+/// user's explicit choice); then slow checks come
 /// before the path checks so those sit right before the move: provider
 /// eligibility, the running-app probe, the providers' guards, then
 /// `symlink_metadata`, fingerprint, volume, root containment and protected
 /// paths. Guards and app gates of every item merged into this one apply too.
 pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), SkipReason> {
     let item = &planned.item;
+    if inside_system(&item.path) {
+        return Err(SkipReason::ProtectedPath("inside /System".into()));
+    }
     protection_skip(ctx.policy, &item.path)?;
     let gated = gated_items(planned, ctx)?;
     let apps: BTreeSet<String> = gated
