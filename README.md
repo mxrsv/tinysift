@@ -4,6 +4,17 @@ The Rust engine, `tiny` command-line tool and UniFFI interface used by TinySift.
 The [workspace](Cargo.toml) keeps all three crates together so a change to cleanup consent
 or process identity can be tested across the engine and native interface in one revision.
 
+**TinySift for Mac** is the free app built on this engine: it shows what fills your disk and
+frees what you pick. Get it from [tinysift.app](https://tinysift.app) or with Homebrew:
+
+```bash
+brew install --cask mxrsv/tap/tinysift
+```
+
+It needs Apple silicon and macOS 14 or later. Watch this repository's releases to hear about
+new versions, and ask questions or report a folder it missed in
+[Discussions](https://github.com/mxrsv/tinysift/discussions).
+
 ## Repository names
 
 This Rust workspace is the public GitHub repository `mxrsv/tinysift`, matching the TinySift

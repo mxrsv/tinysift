@@ -46,6 +46,10 @@ gh release create app-v<version> TinySift-<version>.dmg --repo mxrsv/tinysift \
   --notes-file notes.md
 ```
 
+6. Bump the Homebrew cask in [mxrsv/homebrew-tap](https://github.com/mxrsv/homebrew-tap): set
+   `version` and `sha256` in `Casks/tinysift.rb` to the uploaded DMG, then commit and push.
+   `brew livecheck --cask mxrsv/tap/tinysift` reports when the tap is behind the appcast.
+
 ## Release notes
 
 Write in English, in this order:
