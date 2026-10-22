@@ -83,11 +83,16 @@ pub fn run(opts: crate::cli::CleanOpts) -> Result<()> {
                 && selected.iter().any(|group| {
                     matches!(
                         group.id.as_str(),
-                        "docker" | "docker-volumes" | "time-machine-local" | "simulator-devices"
+                        "docker"
+                            | "docker-volumes"
+                            | "pnpm"
+                            | "uv"
+                            | "time-machine-local"
+                            | "simulator-devices"
                     )
                 })
             {
-                eprintln!("Warning: Docker prune, Time Machine snapshot removal and simulator device deletion cannot be undone; those tools have no Trash semantics.");
+                eprintln!("Warning: Docker, pnpm and uv prunes, Time Machine snapshot removal and simulator device deletion cannot be undone; those tools have no Trash semantics.");
             }
             let report = execute::execute(&selected, action, &excluded_paths, &opts)?;
             print_exec_report(&report);

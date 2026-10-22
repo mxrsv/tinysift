@@ -12,9 +12,11 @@ pub mod android_sdk;
 pub mod app_orphans;
 pub mod browser_caches;
 pub mod chat_caches;
+pub mod codex_releases;
 pub mod crash_reports;
 pub mod dev_caches;
 pub mod docker;
+pub mod dot_cache;
 pub mod downloads_old;
 pub mod font_quicklook_caches;
 pub mod go_cache;
@@ -71,7 +73,8 @@ impl Family {
 pub fn category_family(category_id: &str) -> Family {
     match category_id {
         // Dev family
-        "cargo" | "npm" | "pnpm" | "yarn" => Family::Dev,
+        "cargo" | "npm" | "pnpm" | "yarn" | "uv" => Family::Dev,
+        "puppeteer" | "huggingface" | "codex-runtimes" | "codex-releases" => Family::Dev,
         "node-modules" | "python-caches" | "rust-targets" => Family::Dev,
         "gradle-maven" | "jetbrains" | "vscode" => Family::Dev,
         "ios-simulators" | "simulator-devices" | "android-sdk" => Family::Dev,
@@ -98,6 +101,8 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
             Some(ComesBack::Redownload)
         }
         "streaming-caches" | "chat-caches" => Some(ComesBack::Redownload),
+        "uv" | "huggingface" | "codex-runtimes" | "codex-releases" => Some(ComesBack::Redownload),
+        "puppeteer" => rebuild("npx puppeteer browsers install"),
         "node-modules" => rebuild("npm, pnpm or yarn install"),
         "python-caches" => rebuild("python -m venv, then pip install"),
         "rust-targets" => rebuild("cargo build"),
@@ -265,6 +270,11 @@ pub fn all_providers_with(
         Box::new(dev_caches::NpmCache::with_runner(runner.clone())),
         Box::new(dev_caches::PnpmStore::with_runner(runner.clone())),
         Box::new(dev_caches::YarnCache::with_runner(runner.clone())),
+        Box::new(dev_caches::UvCache::with_runner(runner.clone())),
+        Box::new(dot_cache::Puppeteer),
+        Box::new(dot_cache::HuggingFace),
+        Box::new(dot_cache::CodexRuntimes),
+        Box::new(codex_releases::CodexReleases),
         Box::new(node_modules::NodeModules::with_options(
             opts,
             runner.clone(),
@@ -325,6 +335,11 @@ pub fn known_category_ids() -> &'static [&'static str] {
         "npm",
         "pnpm",
         "yarn",
+        "uv",
+        "puppeteer",
+        "huggingface",
+        "codex-runtimes",
+        "codex-releases",
         "node-modules",
         "python-caches",
         "rust-targets",
@@ -477,6 +492,44 @@ pub(crate) fn execute_per_item(
     Ok(report)
 }
 
+/// Runs a tool's own cleanup (`bin args...`) once for all `items`: the tool
+/// decides what it removes, so every item shares the outcome. Unbounded, like
+/// Docker's prune, because pruning a large cache can take minutes. Rejects
+/// `EmptyTrash`; a missing tool removes nothing.
+pub(crate) fn execute_tool_command(
+    runner: &dyn CommandRunner,
+    items: &[CleanItem],
+    action: ExecAction,
+    provider_id: &str,
+    bin: &str,
+    args: &[&str],
+) -> Result<ExecReport> {
+    if matches!(action, ExecAction::EmptyTrash) {
+        return Err(engine_error!(
+            "{} provider does not accept EmptyTrash",
+            provider_id
+        ));
+    }
+    let mut report = ExecReport::default();
+    if items.is_empty() {
+        return Ok(report);
+    }
+    let failure = if !runner.which(bin) {
+        Some(format!("{bin} was not found; nothing was removed"))
+    } else if runner.run(bin, args).success {
+        None
+    } else {
+        Some(format!("{bin} {} failed", args.join(" ")))
+    };
+    for item in items {
+        match &failure {
+            None => report.removed_paths.push(item.path.clone()),
+            Some(reason) => report.failed.push((item.path.clone(), reason.clone())),
+        }
+    }
+    Ok(report)
+}
+
 /// Move a path to the user's Trash via Finder, never through a symlink.
 pub(crate) fn move_to_trash(path: &Path) -> Result<()> {
     use super::finder_trash::{FinderTrash, Trash};
@@ -517,8 +570,15 @@ mod tests {
         ("xcode-devicesupport", None),
         ("cargo", None),
         ("npm", None),
-        ("pnpm", None),
+        // Runs `pnpm store prune`, not a per-path move.
+        ("pnpm", Some(ReportOnly::NotPerPathTrash)),
         ("yarn", None),
+        // Runs `uv cache prune`, not a per-path move.
+        ("uv", Some(ReportOnly::NotPerPathTrash)),
+        ("puppeteer", None),
+        ("huggingface", None),
+        ("codex-runtimes", None),
+        ("codex-releases", None),
         ("node-modules", None),
         ("python-caches", None),
         ("rust-targets", None),
@@ -660,6 +720,10 @@ mod tests {
             ("python-caches", Section::Rebuilt),
             ("xcode-derived", Section::Rebuilt),
             ("cargo", Section::Rebuilt),
+            ("uv", Section::Rebuilt),
+            ("puppeteer", Section::Rebuilt),
+            ("huggingface", Section::Rebuilt),
+            ("codex-releases", Section::Rebuilt),
             ("user-caches", Section::Rebuilt),
             ("downloads-old", Section::YourFiles),
             ("app-orphans", Section::YourFiles),

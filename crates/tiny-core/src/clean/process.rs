@@ -26,19 +26,28 @@ pub struct RunnerProbe<'r>(pub &'r dyn CommandRunner);
 
 impl AppProbe for RunnerProbe<'_> {
     fn probe(&self, name: &str) -> Result<bool, String> {
-        let pattern = escape_regex(name);
-        let outcome = self
-            .0
-            .output(PGREP, &["-x", "--", &pattern], PROBE_TIMEOUT)
-            .map_err(|e| e.to_string())?;
-        match outcome.status {
-            Some(0) => Ok(true),
-            Some(1) => Ok(false),
-            status => Err(format!(
-                "pgrep exited with {status:?}: {}",
-                outcome.stderr.trim()
-            )),
-        }
+        pgrep(self.0, &["-x", "--", &escape_regex(name)])
+    }
+}
+
+/// `pgrep -f`: whether any command line matches the extended regex
+/// `pattern`. For tools that run as a script (`node …/pnpm.cjs`), whose
+/// process name is the interpreter's. Unknown is an error, as in `RunnerProbe`.
+pub fn command_line_running(runner: &dyn CommandRunner, pattern: &str) -> Result<bool, String> {
+    pgrep(runner, &["-f", "--", pattern])
+}
+
+fn pgrep(runner: &dyn CommandRunner, args: &[&str]) -> Result<bool, String> {
+    let outcome = runner
+        .output(PGREP, args, PROBE_TIMEOUT)
+        .map_err(|e| e.to_string())?;
+    match outcome.status {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        status => Err(format!(
+            "pgrep exited with {status:?}: {}",
+            outcome.stderr.trim()
+        )),
     }
 }
 
