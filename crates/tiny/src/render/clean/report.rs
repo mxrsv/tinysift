@@ -1,6 +1,7 @@
 use crate::util::format_bytes;
 
 use super::discover::{CategoryGroup, DiscoveryReport};
+use super::types::{CleanItem, Evidence};
 
 const PATH_PREVIEW_LIMIT: usize = 20;
 
@@ -48,7 +49,14 @@ pub fn print_plan(groups: &[&CategoryGroup]) {
             if group.items.len() == 1 { "" } else { "s" },
         );
         for item in group.items.iter().take(PATH_PREVIEW_LIMIT) {
-            println!("  {:>10}  {}", format_bytes(item.size), item.path.display());
+            let note = item_note(item)
+                .map(|n| format!("  {n}"))
+                .unwrap_or_default();
+            println!(
+                "  {:>10}  {}{note}",
+                format_bytes(item.size),
+                item.path.display()
+            );
         }
         if group.items.len() > PATH_PREVIEW_LIMIT {
             println!("  ... and {} more", group.items.len() - PATH_PREVIEW_LIMIT);
@@ -70,5 +78,55 @@ pub fn truncate(s: &str, max: usize) -> String {
         let mut out: String = s.chars().take(max - 1).collect();
         out.push('…');
         out
+    }
+}
+
+/// What an item whose path names no file is, e.g. `iOS 26.0.1 (23A8464)`
+/// for a simulator runtime image.
+pub(super) fn item_note(item: &CleanItem) -> Option<String> {
+    item.evidence.iter().find_map(|evidence| match evidence {
+        Evidence::SimulatorRuntime {
+            identifier,
+            version,
+            build,
+        } => {
+            // `com.apple.CoreSimulator.SimRuntime.iOS-26-0` -> `iOS`
+            let runtime = identifier.rsplit('.').next().unwrap_or(identifier);
+            let platform = runtime.split('-').next().unwrap_or(runtime);
+            Some(format!("{platform} {version} ({build})"))
+        }
+        _ => None,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tiny_core::clean::types::RiskLevel;
+
+    fn item(evidence: Vec<Evidence>) -> CleanItem {
+        CleanItem {
+            category_id: "simulator-runtimes".into(),
+            category_label: "Unused simulator runtimes".into(),
+            path: "<simulator-runtime:1732E568-CE24-44BA-B87A-12934CCCC76F>".into(),
+            size: 0,
+            risk: RiskLevel::Review,
+            evidence,
+        }
+    }
+
+    #[test]
+    fn simulator_runtimes_are_named_beside_their_placeholder() {
+        let runtime = Evidence::SimulatorRuntime {
+            identifier: "com.apple.CoreSimulator.SimRuntime.iOS-26-0".into(),
+            version: "26.0.1".into(),
+            build: "23A8464".into(),
+        };
+        assert_eq!(
+            item_note(&item(vec![runtime])).as_deref(),
+            Some("iOS 26.0.1 (23A8464)")
+        );
+        assert_eq!(item_note(&item(vec![Evidence::NotGitRepo])), None);
+        assert_eq!(item_note(&item(Vec::new())), None);
     }
 }

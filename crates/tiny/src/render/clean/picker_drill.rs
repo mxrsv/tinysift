@@ -20,6 +20,7 @@ use dialoguer::{theme::ColorfulTheme, MultiSelect};
 use crate::util::format_bytes;
 
 use super::discover::CategoryGroup;
+use super::report::item_note;
 use super::types::CleanItem;
 
 pub const DRILL_DOWN_FLAT_LIMIT: usize = 500;
@@ -43,7 +44,16 @@ fn drill_flat(group: &CategoryGroup, excluded: &mut HashSet<PathBuf>) -> Result<
     let labels: Vec<String> = group
         .items
         .iter()
-        .map(|item| format!("{:>10}  {}", format_bytes(item.size), item.path.display()))
+        .map(|item| {
+            let note = item_note(item)
+                .map(|n| format!("  {n}"))
+                .unwrap_or_default();
+            format!(
+                "{:>10}  {}{note}",
+                format_bytes(item.size),
+                item.path.display()
+            )
+        })
         .collect();
     let defaults: Vec<bool> = vec![true; group.items.len()];
     let prompt = format!(
