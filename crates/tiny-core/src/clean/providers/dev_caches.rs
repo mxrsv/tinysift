@@ -378,8 +378,11 @@ impl CleanProvider for UvCache {
     fn inclusion_reason(&self) -> String {
         "uv cache entries nothing uses any more; uv cache prune removes them".into()
     }
+    /// Review although a prune removes only unreferenced entries: it is
+    /// permanent whichever action is chosen, so `tiny clean` must not tick it
+    /// under "Move to Trash (recoverable)".
     fn risk(&self) -> RiskLevel {
-        RiskLevel::Safe
+        RiskLevel::Review
     }
     fn quit_apps(&self) -> Vec<&'static str> {
         vec!["uv", "uvx"]
@@ -432,7 +435,13 @@ fn uv_cache(
     } else {
         home.join(UV_DEFAULT_DIR)
     };
-    Ok(prunable_cache(ctx, &path, UV_ID, UV_LABEL, RiskLevel::Safe))
+    Ok(prunable_cache(
+        ctx,
+        &path,
+        UV_ID,
+        UV_LABEL,
+        RiskLevel::Review,
+    ))
 }
 
 #[cfg(test)]
@@ -499,7 +508,11 @@ mod tests {
         let ctx = ScanContext::unchecked();
         let items = uv_cache(&ctx, &runner, dir.path()).unwrap();
         assert_eq!(paths(&items), vec![cache.clone()]);
-        assert_eq!(items[0].risk, RiskLevel::Safe);
+        assert_eq!(items[0].risk, RiskLevel::Review);
+        assert_eq!(
+            UvCache::with_runner(Arc::new(runner)).risk(),
+            RiskLevel::Review
+        );
         assert!(items[0].size >= 8192);
         // `uv cache prune` removes only what nothing uses, so at most this.
         assert!(ctx.take_findings().size_upper_bound.contains(&cache));

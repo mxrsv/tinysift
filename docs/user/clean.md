@@ -37,7 +37,7 @@ default.
 
 | Risk        | Shown                        | Categories                                                                                      |
 | ----------- | ---------------------------- | ----------------------------------------------------------------------------------------------- |
-| Safe        | always, already ticked       | `user-logs`, `crash-reports`, `font-quicklook-caches`, `xcode-derived`, `uv`, `puppeteer`       |
+| Safe        | always, already ticked       | `user-logs`, `crash-reports`, `font-quicklook-caches`, `xcode-derived`, `puppeteer`             |
 | Review      | with `--include-review`      | everything else                                                                                 |
 | Destructive | with `--include-destructive` | `trash`, `time-machine-local`, `docker-volumes`, `simulator-devices`                            |
 
@@ -113,8 +113,9 @@ private-looking downloads and never ticks them for you.
   Xcode reports unavailable; `simulator-runtimes` deletes runtimes no simulator uses (`simctl`
   finishes the removal in the background); `uv` runs `uv cache prune` and `pnpm` runs
   `pnpm store prune`, which remove only entries nothing references. These are permanent
-  whichever action you choose, and `tiny` warns you when you pick Move to Trash. `pnpm` used to
-  move its store to the Trash, so a script with `--category pnpm` now prunes instead.
+  whichever action you choose, and `tiny` warns you when you pick Move to Trash. `uv` and `pnpm`
+  are Review for that reason, so plain `tiny clean` leaves them unticked. `pnpm` used to move its
+  store to the Trash, so a script with `--category pnpm` now prunes instead.
 - **`simulator-runtime-images` is report only.** Without Xcode, `tiny` lists the simulator
   runtimes it finds but refuses to remove them; use System Settings → General → Storage.
 - **`app-orphans` is report only.** It lists Application Support folders that match no
