@@ -82,6 +82,7 @@ fn run_remove(
         &NotRunning,
         trash,
         delete,
+        trash,
         &CancellationToken::default(),
         &Progress::default(),
     )
@@ -370,7 +371,7 @@ fn a_failure_is_never_retried_another_way() {
     assert_eq!(
         sinks.steps(),
         ["delete t"],
-        "a failed move is not deleted, a failed deletion is not moved"
+        "a failed move is not deleted, a failed deletion is not moved or escalated"
     );
     assert_eq!((report.failed_count, report.deleted_count), (2, 1));
     assert_eq!(report.stopped, None);

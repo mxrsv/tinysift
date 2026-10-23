@@ -1,5 +1,6 @@
 pub mod checked_execute;
 pub mod discover;
+pub mod elevated_delete;
 pub mod execute;
 pub mod finder_trash;
 pub mod freed_size;

@@ -256,8 +256,10 @@ pub trait CleanProvider {
     }
 
     /// True when acting on the items needs administrator rights. The
-    /// desktop only reports such a category (`desktop_report_only`) and the
-    /// CLI, which never runs `sudo`, refuses its items before `execute`.
+    /// desktop never moves or deletes them unprivileged
+    /// (`desktop_report_only`), only as administrator
+    /// (`Removal::DeleteAsAdministrator`). The CLI, which never runs `sudo`,
+    /// refuses its items before `execute`.
     fn needs_admin(&self) -> bool {
         false
     }
@@ -275,7 +277,8 @@ pub enum ReportOnly {
     NotPerPathTrash,
     /// The rule that selects items can flag data still in use.
     UnreliableMatch,
-    /// Acting needs administrator rights, which the app does not ask for.
+    /// Acting needs administrator rights: no unprivileged route. The app
+    /// deletes such items only as administrator.
     NeedsAdministrator,
     /// Xcode is not installed, so only System Settings > General > Storage
     /// can remove the items.
@@ -655,8 +658,8 @@ mod tests {
         ("ios-simulators", None),
         // Destructive: `xcrun simctl delete` removes the device for good.
         ("simulator-devices", Some(ReportOnly::Destructive)),
-        // Root-owned: report only until the app asks for administrator
-        // rights; the CLI refuses it (no sudo).
+        // Root-owned: no unprivileged route; the app deletes them as
+        // administrator, the CLI refuses them (no sudo).
         (
             "system-simulator-caches",
             Some(ReportOnly::NeedsAdministrator),
@@ -795,7 +798,7 @@ mod tests {
     }
 
     #[test]
-    fn a_category_that_needs_admin_is_report_only_on_the_desktop() {
+    fn a_category_that_needs_admin_has_no_unprivileged_desktop_route() {
         assert_eq!(
             desktop_report_only(&NeedsAdmin),
             Some(ReportOnly::NeedsAdministrator)

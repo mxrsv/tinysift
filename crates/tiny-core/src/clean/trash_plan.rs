@@ -45,6 +45,10 @@ pub enum Removal {
     EmptyTrash,
     /// The category's own tool command (`desktop_tool`).
     RunTool(DesktopTool),
+    /// For good, as root after one authentication dialog per run
+    /// (`elevated_delete`): only categories that `needs_admin`, in either
+    /// delete mode, since root-owned files have no Trash route.
+    DeleteAsAdministrator,
 }
 
 /// The app's setting for what comes back on its own (OC1). `Trash` is how
@@ -63,7 +67,8 @@ pub enum DeleteMode {
 /// a path that only goes to the Trash goes to the Trash with it. A category
 /// with a `tool` runs it instead of deleting: a prune in Permanent mode only,
 /// a requested removal in both, since it has no Trash route. The Trash
-/// row's `EmptyTrash` comes from its provider, not from here.
+/// row's `EmptyTrash` and `DeleteAsAdministrator` come from their providers
+/// (`desktop_empties_trash`, `needs_admin`), not from here.
 pub fn removal_for(
     item: &CleanItem,
     covers: &[CleanItem],

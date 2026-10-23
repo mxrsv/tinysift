@@ -209,7 +209,8 @@ pub enum StopReason {
 impl From<CleanStop> for StopReason {
     fn from(stop: CleanStop) -> Self {
         match stop {
-            CleanStop::Cancelled => Self::Cancelled,
+            // Uninstall never deletes as administrator.
+            CleanStop::Cancelled | CleanStop::AuthenticationCancelled => Self::Cancelled,
             CleanStop::AutomationDenied => Self::AutomationDenied,
             CleanStop::ProtectionChanged => Self::ProtectionChanged,
             CleanStop::ProtectionUnavailable(why) => Self::ProtectionUnavailable(why),

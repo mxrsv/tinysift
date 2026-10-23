@@ -99,6 +99,7 @@ fn run_tools(
         probe,
         trash: sinks,
         delete: sinks,
+        elevated: sinks,
         cancel: None,
         progress: None,
         policy: &lease,
@@ -228,7 +229,7 @@ fn a_failed_tool_is_never_retried_another_way() {
     assert_eq!(
         sinks.log(),
         ["run cache".to_string(), format!("run {RUNTIME}")],
-        "one call each: no deletion, no Trash, no second attempt"
+        "one call each: no deletion, no Trash, no elevation, no second attempt"
     );
     assert_eq!((report.bytes_freed, report.bytes_requested()), (0, 0));
     assert!(root.join("cache/one").exists());

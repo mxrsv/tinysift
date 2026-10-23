@@ -1,18 +1,24 @@
 //! Permanent deletion and the Trash row: each item is removed only the way
 //! its plan says, every guard still applies, and no failure is retried
-//! another way. The sinks record calls and delete nothing.
+//! another way. The sinks record calls; only deletion as administrator
+//! removes files, and only the ones these tests created.
 
 use super::*;
 use crate::clean::fs_safe::dir_size_checked;
 
-/// Records every Trash move, Empty Trash and deletion in one log, so the
-/// order across routes is visible; fails the paths it is told to.
+/// Records every Trash move, Empty Trash, deletion and batch deleted as
+/// administrator in one log, so the order across routes is visible; fails
+/// the paths it is told to.
 #[derive(Default)]
 pub(super) struct Sinks {
     /// Shared, so a fake tool can log into the same sequence.
     pub(super) log: Arc<Mutex<Vec<String>>>,
     pub(super) fail_trash: Option<TrashError>,
+    /// Fails with "permission denied", as a root-owned path would.
     pub(super) fail_delete: Option<&'static str>,
+    pub(super) fail_elevate: Option<ElevatedError>,
+    /// Left in place by an elevated batch that otherwise deletes.
+    pub(super) keep_on_elevate: Option<&'static str>,
 }
 
 impl Sinks {
@@ -50,10 +56,33 @@ impl Trash for Sinks {
 impl Delete for Sinks {
     fn delete(&self, path: &Path) -> io::Result<()> {
         if self.fail_delete.is_some_and(|fail| path.ends_with(fail)) {
-            return Err(io::Error::other("busy"));
+            let denied = io::Error::new(io::ErrorKind::PermissionDenied, "permission denied");
+            return Err(denied);
         }
         self.record(format!("delete {}", name(path)));
         Ok(())
+    }
+}
+
+/// The run trusts only what is left on disk, so unless the dialog was
+/// cancelled or a simulator tool runs, this removes the batch (the tests'
+/// own files) except `keep_on_elevate`, then answers `fail_elevate`.
+impl ElevatedDelete for Sinks {
+    fn delete(&self, paths: &[&Path]) -> std::result::Result<(), ElevatedError> {
+        let names: Vec<String> = paths.iter().map(|path| name(path)).collect();
+        self.record(format!("elevate {}", names.join(" ")));
+        let ran = !matches!(
+            self.fail_elevate,
+            Some(ElevatedError::Cancelled | ElevatedError::Busy(_))
+        );
+        let kept = |path: &&&Path| {
+            self.keep_on_elevate
+                .is_some_and(|keep| path.ends_with(keep))
+        };
+        for path in paths.iter().filter(|path| ran && !kept(path)) {
+            remove_recursive_safe(path).unwrap();
+        }
+        self.fail_elevate.clone().map_or(Ok(()), Err)
     }
 }
 
@@ -72,6 +101,7 @@ fn run_sinks(
         probe,
         trash: sinks,
         delete: sinks,
+        elevated: sinks,
         cancel: None,
         progress: None,
         policy: &lease,
@@ -107,7 +137,7 @@ pub(super) fn planned(category: &str, root: &Path, name: &str, removal: Removal)
 }
 
 /// `root/.Trash` holding one file, planned as the Trash row.
-fn trash_row(root: &Path) -> PlannedItem {
+pub(super) fn trash_row(root: &Path) -> PlannedItem {
     let bin = root.join(".Trash");
     fs::create_dir(&bin).unwrap();
     fs::write(bin.join("old"), b"1234").unwrap();
@@ -216,14 +246,18 @@ fn a_failed_deletion_is_never_moved_to_the_trash_or_retried() {
         outcomes(&report),
         vec![
             ItemOutcome::DeleteFailed {
-                detail: "busy".into(),
+                detail: "permission denied".into(),
                 source_present: true,
             },
             ItemOutcome::Deleted,
         ],
         "each item reports its own outcome and the run goes on"
     );
-    assert_eq!(sinks.log(), ["delete b"], "no Trash, no second attempt");
+    assert_eq!(
+        sinks.log(),
+        ["delete b"],
+        "no Trash, no administrator rights, no second attempt"
+    );
     assert_eq!(report.stopped, None);
     assert_eq!(report.bytes_freed, 4, "only what was deleted");
     let _ = remove_recursive_safe(&root);

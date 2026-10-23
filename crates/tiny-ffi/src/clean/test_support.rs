@@ -1,11 +1,12 @@
 //! Shared fixtures for the cleanup tests: temp dirs, an injected provider and
-//! probe, a fake `Trash` and deletion, and a session whose saved-rules store
-//! is a temp dir. Nothing here touches Finder, `osascript` or the real
-//! Application Support.
+//! probe, a fake `Trash`, deletion and deletion as administrator, and a
+//! session whose saved-rules store is a temp dir. Nothing here touches
+//! Finder, `osascript`, administrator rights or the real Application Support.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use tiny_core::clean::elevated_delete::{ElevatedDelete, ElevatedError};
 use tiny_core::clean::finder_trash::{Trash, TrashError};
 use tiny_core::clean::fs_safe::{dir_size_checked, list_children, Delete};
 use tiny_core::clean::types::{ExecAction, ExecReport, RiskLevel};
@@ -160,10 +161,11 @@ impl ProgressListener for Progress {
     }
 }
 
-/// Records moves, Empty Trash and deletions in memory and changes nothing.
-/// `deny` answers like a Finder Automation denial; `fail_on` fails one move,
-/// `fail_delete_on` one deletion; `panic_on` panics. `steps` keeps every
-/// call in order ("trash a", "empty", "delete b").
+/// Records moves, Empty Trash, deletions and batches deleted as
+/// administrator in memory and changes nothing. `deny` answers like a Finder
+/// Automation denial; `fail_on` fails one move, `fail_delete_on` one
+/// deletion, `elevate_answer` every batch; `panic_on` panics. `steps` keeps
+/// every call in order ("trash a", "empty", "delete b", "elevate c d").
 #[derive(Default)]
 pub(super) struct FakeTrash {
     pub(super) moved: Mutex<Vec<PathBuf>>,
@@ -171,6 +173,7 @@ pub(super) struct FakeTrash {
     pub(super) deny: bool,
     pub(super) fail_on: Option<&'static str>,
     pub(super) fail_delete_on: Option<&'static str>,
+    pub(super) elevate_answer: Option<ElevatedError>,
     pub(super) panic_on: Option<&'static str>,
 }
 
@@ -221,6 +224,21 @@ impl Delete for FakeTrash {
         }
         self.step("delete", Some(path));
         Ok(())
+    }
+}
+
+impl ElevatedDelete for FakeTrash {
+    fn delete(&self, paths: &[&Path]) -> std::result::Result<(), ElevatedError> {
+        let names: Vec<String> = paths
+            .iter()
+            .filter_map(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned())
+            .collect();
+        self.steps
+            .lock()
+            .unwrap()
+            .push(format!("elevate {}", names.join(" ")));
+        self.elevate_answer.clone().map_or(Ok(()), Err)
     }
 }
 

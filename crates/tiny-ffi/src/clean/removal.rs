@@ -3,12 +3,14 @@
 //! apart. `clean_execute` and its report stay as they were for previews
 //! that only move to the Trash.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use tiny_core::clean::checked_execute::{
-    execute_checked, CheckedExecReport, ExecContext, ItemOutcome,
+    execute_checked, CheckedExecReport, ExecContext, ItemOutcome, StopReason,
 };
+use tiny_core::clean::elevated_delete::{ElevatedDelete, ElevatedError, OsascriptDelete};
 use tiny_core::clean::finder_trash::{FinderTrash, Trash, TrashError};
 use tiny_core::clean::fs_safe::{Delete, SafeDelete};
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
@@ -118,6 +120,11 @@ pub struct FfiRemovalReport {
     /// finishes in the background: neither freed nor moved.
     #[uniffi(default = 0)]
     pub bytes_requested: u64,
+    /// The user cancelled the authentication dialog, which comes before any
+    /// change: nothing changed, every item is `NotAttempted` and `stopped`
+    /// is `Cancelled`.
+    #[uniffi(default = false)]
+    pub authentication_cancelled: bool,
 }
 
 impl From<FfiDeleteMode> for DeleteMode {
@@ -135,6 +142,7 @@ pub(super) struct Run<'a> {
     probe: &'a dyn AppProbe,
     trash: &'a dyn Trash,
     delete: &'a dyn Delete,
+    elevated: &'a dyn ElevatedDelete,
     /// `clean_execute`, whose report cannot show a permanent removal.
     trash_only: bool,
 }
@@ -146,7 +154,10 @@ impl TinySession {
     /// a shell or elevated) or, for the Trash row, emptied, as the preview
     /// said (`FfiPreviewItem.permanent`). Consumed before the first change, so
     /// it never runs twice. Every guard of `clean_execute` applies to every
-    /// item. Permanent removals and tools run first, so emptying the Trash
+    /// item. Items deleted as administrator (`FfiPreviewItem.needs_admin`) go
+    /// first, in one batch behind one macOS authentication dialog; cancelling
+    /// it stops the run with nothing changed (`authentication_cancelled`).
+    /// Other permanent removals and tools come next, so emptying the Trash
     /// never takes what this run moves there. A Finder Automation denial or
     /// cancellation stops the run; any other failure stays with its item.
     pub fn clean_remove(
@@ -155,6 +166,10 @@ impl TinySession {
         token: Arc<CancellationToken>,
         progress: Arc<dyn ProgressListener>,
     ) -> Result<FfiRemovalReport, FfiError> {
+        // The only caller of the real dialog route; tests use `remove_clean`.
+        if cfg!(test) {
+            panic!("a test must run `remove_clean` with fake routes");
+        }
         let runner = app_runner();
         let probe = RunnerProbe(runner.as_ref());
         let providers = |options: &CleanOptions| all_providers_with(options, runner.clone());
@@ -164,6 +179,7 @@ impl TinySession {
             &probe,
             &FinderTrash,
             &SafeDelete,
+            &OsascriptDelete,
             &token,
             progress.as_ref(),
         )
@@ -171,8 +187,8 @@ impl TinySession {
 }
 
 impl TinySession {
-    /// `clean_remove` with injected providers, probe, Trash and deletion
-    /// (the test seam).
+    /// `clean_remove` with injected providers, probe, Trash, deletion and
+    /// deletion as administrator (the test seam).
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn remove_clean(
         &self,
@@ -181,6 +197,7 @@ impl TinySession {
         probe: &dyn AppProbe,
         trash: &dyn Trash,
         delete: &dyn Delete,
+        elevated: &dyn ElevatedDelete,
         token: &CancellationToken,
         progress: &dyn ProgressListener,
     ) -> Result<FfiRemovalReport, FfiError> {
@@ -189,6 +206,7 @@ impl TinySession {
             probe,
             trash,
             delete,
+            elevated,
             trash_only: false,
         };
         self.run_preview(preview_id, run, token, progress, removal_report)
@@ -211,6 +229,7 @@ impl TinySession {
             trash,
             // Never reached: the preview is refused before it is spent.
             delete: &SafeDelete,
+            elevated: &NoElevation,
             trash_only: true,
         };
         self.run_preview(preview_id, run, token, progress, exec_report)
@@ -245,6 +264,7 @@ impl TinySession {
             probe: run.probe,
             trash: run.trash,
             delete: run.delete,
+            elevated: run.elevated,
             cancel: Some(token.flag()),
             progress: Some(&on_progress),
             policy: &policy,
@@ -361,6 +381,7 @@ fn removal_report(
         not_attempted_count: count(|o| matches!(o, ItemOutcome::NotAttempted)),
         stopped: executed.stopped.clone().map(Into::into),
         bytes_requested: executed.bytes_requested(),
+        authentication_cancelled: executed.stopped == Some(StopReason::AuthenticationCancelled),
     };
     let results = items
         .iter()
@@ -374,6 +395,18 @@ fn removal_report(
         })
         .collect();
     FfiRemovalReport { results, ..summary }
+}
+
+/// `clean_execute` refuses a preview that deletes anything as administrator
+/// before spending it, so this never runs; it refuses anyway.
+struct NoElevation;
+
+impl ElevatedDelete for NoElevation {
+    fn delete(&self, _: &[&Path]) -> Result<(), ElevatedError> {
+        Err(ElevatedError::Failed(
+            "clean_execute never deletes as administrator".into(),
+        ))
+    }
 }
 
 impl From<ItemOutcome> for FfiRemovalOutcome {

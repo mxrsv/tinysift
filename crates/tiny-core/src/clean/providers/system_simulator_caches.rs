@@ -2,8 +2,8 @@
 //! `/Library/Developer/CoreSimulator/Caches`, mostly `dyld/`: the
 //! runtimes' shared caches, built again when a simulator boots. Root owns
 //! them, so removing them needs administrator rights (`needs_admin`): the
-//! desktop only reports them, and the CLI, which never runs `sudo`, refuses
-//! them.
+//! desktop deletes them only as administrator (`elevated_delete`), and the
+//! CLI, which never runs `sudo`, refuses them.
 //!
 //! Refused while Xcode, Simulator or a build or test tool runs and, when
 //! `simctl` exists, while any simulator is booted. Never gated on
@@ -30,7 +30,8 @@ const ID: &str = "system-simulator-caches";
 const LABEL: &str = "System simulator caches";
 
 /// The only folder whose entries this category offers, and the allowlist
-/// elevated deletion checks against (`check_system_cache_path`).
+/// deletion as administrator checks against (`check_system_cache_path`),
+/// written out again in its root script.
 pub const CACHES_ROOT: &str = "/Library/Developer/CoreSimulator/Caches";
 
 /// Processes that use or rebuild the caches (`pgrep -x` names). `XCTRunner`
@@ -175,8 +176,8 @@ impl CleanProvider for SystemSimulatorCaches {
 }
 
 /// Why `path` must not be removed as a system simulator cache, against the
-/// fixed `CACHES_ROOT`. Elevated deletion runs this for every path right
-/// before it acts.
+/// fixed `CACHES_ROOT`. Deletion as administrator runs this for every path
+/// right before it asks for the dialog.
 pub fn check_system_cache_path(path: &Path) -> std::result::Result<(), String> {
     check_entry(Path::new(CACHES_ROOT), path)
 }
@@ -184,7 +185,7 @@ pub fn check_system_cache_path(path: &Path) -> std::result::Result<(), String> {
 /// `path` must be absolute, outside `/System`, named in UTF-8 without NUL,
 /// directly inside `root`, a real file or folder (never a symlink), with
 /// only real folders above it.
-fn check_entry(root: &Path, path: &Path) -> std::result::Result<(), String> {
+pub(crate) fn check_entry(root: &Path, path: &Path) -> std::result::Result<(), String> {
     if !path.is_absolute() {
         return Err("not an absolute path".into());
     }

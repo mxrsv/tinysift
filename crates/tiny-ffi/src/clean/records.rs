@@ -74,6 +74,10 @@ pub enum FfiDesktopAction {
     /// removes each selected item for good in either delete mode, and
     /// finishes in the background, so the result says it was requested.
     RequestRemoval,
+    /// Root-owned system simulator caches (`needs_admin` is set): selected
+    /// items are deleted for good as administrator, in either delete mode,
+    /// after one macOS authentication dialog per Clean. No Trash route.
+    DeleteAsAdministrator,
     /// Shown for information; the app does not act on it (`reason` says why).
     ReportOnly { reason: FfiReportOnlyReason },
 }
@@ -87,8 +91,8 @@ pub enum FfiReportOnlyReason {
     NotPerPathTrash,
     /// The selection rule can flag data still in use (app-orphans).
     UnreliableMatch,
-    /// Acting needs administrator rights, which the app does not ask for
-    /// yet (`system-simulator-caches`); `FfiCleanCategory.needs_admin` is set.
+    /// Acting needs administrator rights. No longer sent: such categories
+    /// are `FfiDesktopAction::DeleteAsAdministrator`.
     NeedsAdministrator,
     /// Xcode is not installed, so only System Settings > General > Storage
     /// removes these simulator runtimes (`simulator-runtime-images`).
@@ -240,6 +244,10 @@ pub struct FfiPreviewItem {
     /// its tool, or the Trash row emptied. False means moved to the Trash.
     #[uniffi(default = false)]
     pub permanent: bool,
+    /// Deleted as administrator, behind the run's one authentication dialog
+    /// (a lock marker). Always `permanent`.
+    #[uniffi(default = false)]
+    pub needs_admin: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -300,6 +308,11 @@ pub struct FfiPreview {
     /// (simulator runtimes): neither freed nor moved when the run ends.
     #[uniffi(default = 0)]
     pub bytes_requested: u64,
+    /// Sum of the sizes of the items deleted as administrator, part of
+    /// `bytes_to_free`. Non-zero means the run shows the authentication
+    /// dialog once, before anything changes.
+    #[uniffi(default = 0)]
+    pub bytes_needing_admin: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -485,7 +498,8 @@ impl From<ReportOnly> for FfiReportOnlyReason {
 impl From<StopReason> for FfiStopReason {
     fn from(reason: StopReason) -> Self {
         match reason {
-            StopReason::Cancelled => Self::Cancelled,
+            // `FfiRemovalReport.authentication_cancelled` tells them apart.
+            StopReason::Cancelled | StopReason::AuthenticationCancelled => Self::Cancelled,
             StopReason::AutomationDenied => Self::AutomationDenied,
             StopReason::ProtectionChanged => Self::ProtectionChanged,
             StopReason::ProtectionUnavailable(detail) => Self::ProtectionUnavailable { detail },

@@ -1,8 +1,9 @@
 //! The desktop's cleanup: each planned path is revalidated right before it
-//! is moved to the Trash, deleted for good, handed to its category's own
-//! tool (`CleanProvider::run_desktop_tool`) or, for the Trash row, emptied,
-//! as its plan says (`Removal`), and every path gets its own outcome. No
-//! failure is retried another way. It never calls `CleanProvider::execute`.
+//! is moved to the Trash, deleted for good (as administrator for root-owned
+//! caches), handed to its category's own tool
+//! (`CleanProvider::run_desktop_tool`) or, for the Trash row, emptied, as its
+//! plan says (`Removal`), and every path gets its own outcome. No failure is
+//! retried another way. It never calls `CleanProvider::execute`.
 //!
 //! The run holds the [`StoreLease`] of the saved "always keep" rules. Before
 //! each move it re-reads them: a policy that changed or cannot be read stops
@@ -16,6 +17,7 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use super::elevated_delete::{ElevatedDelete, ElevatedError};
 use super::finder_trash::{Trash, TrashError};
 use super::fs_safe::{dir_size_checked, Delete, PathFingerprint};
 use super::process::AppProbe;
@@ -69,7 +71,8 @@ pub enum SkipReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemOutcome {
     MovedToTrash,
-    /// Deleted for good (`Removal::Delete`).
+    /// Deleted for good (`Removal::Delete`), or gone after deletion as
+    /// administrator.
     Deleted,
     /// Finder emptied the Trash (`Removal::EmptyTrash`).
     TrashEmptied,
@@ -79,8 +82,9 @@ pub enum ItemOutcome {
         error: TrashError,
         source_present: bool,
     },
-    /// Permanent deletion failed; part of the path may be gone. Nothing else
-    /// is tried: no Trash, no other route.
+    /// Permanent deletion failed, or the path is still there after deletion
+    /// as administrator; part of it may be gone. Nothing else is tried: no
+    /// Trash, no other route, never administrator rights after a failure.
     DeleteFailed {
         detail: String,
         source_present: bool,
@@ -118,6 +122,9 @@ impl ItemOutcome {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StopReason {
     Cancelled,
+    /// The user cancelled the authentication dialog for deletion as
+    /// administrator, which comes before anything changes.
+    AuthenticationCancelled,
     AutomationDenied,
     /// The saved rules differ from what this run started with.
     ProtectionChanged,
@@ -187,6 +194,9 @@ pub struct ExecContext<'a> {
     pub trash: &'a dyn Trash,
     /// Permanent deletion, for items planned as `Removal::Delete`.
     pub delete: &'a dyn Delete,
+    /// Deletion as administrator, for items planned as
+    /// `Removal::DeleteAsAdministrator`: one call per run, one dialog.
+    pub elevated: &'a dyn ElevatedDelete,
     pub cancel: Option<&'a AtomicBool>,
     pub progress: crate::progress::ProgressCallback<'a>,
     /// The saved rules, locked for the whole run. There is no way to run
@@ -198,29 +208,34 @@ impl ExecContext<'_> {
     fn is_cancelled(&self) -> bool {
         self.cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
     }
+
+    fn report_step(&self, step: usize, total: u64, path: &Path) {
+        let path = path.to_string_lossy();
+        crate::progress::report(self.progress, "trash", step as u64, Some(total), &path);
+    }
 }
 
 /// Removes each planned path as planned after `validate` passes for it.
-/// Permanent removals run first, so emptying the Trash never takes what
-/// this run moves there; results stay in plan order. Stops on cancellation,
-/// an Automation denial or a change in the saved rules; the remaining paths
-/// are reported as not attempted.
+/// Deletions as administrator run first, as one batch behind one
+/// authentication dialog, so cancelling it changes nothing. Other permanent
+/// removals come next, so emptying the Trash never takes what this run
+/// moves there; results stay in plan order. Stops on cancellation (of the
+/// run or the dialog), an Automation denial or a change in the saved rules;
+/// the remaining paths are reported as not attempted.
 pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedExecReport {
     let total = plan.len() as u64;
     let mut stopped = None;
     let mut outcomes = vec![ItemOutcome::NotAttempted; plan.len()];
-    for (step, index) in execution_order(plan).into_iter().enumerate() {
+    let (as_admin, others): (Vec<usize>, Vec<usize>) = execution_order(plan)
+        .into_iter()
+        .partition(|&index| plan[index].removal == Removal::DeleteAsAdministrator);
+    delete_as_administrator(plan, &as_admin, ctx, &mut outcomes, &mut stopped);
+    for (step, index) in others.into_iter().enumerate() {
         if stopped.is_some() {
             break;
         }
         let planned = &plan[index];
-        crate::progress::report(
-            ctx.progress,
-            "trash",
-            step as u64,
-            Some(total),
-            &planned.item.path.to_string_lossy(),
-        );
+        ctx.report_step(as_admin.len() + step, total, &planned.item.path);
         outcomes[index] = act_on(planned, ctx, &mut stopped);
     }
     if stopped.is_none() {
@@ -263,17 +278,114 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
     }
 }
 
-/// Plan indexes in run order: deletions, tool commands, then emptying the
-/// Trash, then moves to the Trash, each in plan order.
+/// Plan indexes in run order: deletions as administrator, other deletions,
+/// tool commands, then emptying the Trash, then moves to the Trash, each in
+/// plan order.
 fn execution_order(plan: &[PlannedItem]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..plan.len()).collect();
     order.sort_by_key(|&index| match plan[index].removal {
-        Removal::Delete => 0,
-        Removal::RunTool(_) => 1,
-        Removal::EmptyTrash => 2,
-        Removal::MoveToTrash => 3,
+        Removal::DeleteAsAdministrator => 0,
+        Removal::Delete => 1,
+        Removal::RunTool(_) => 2,
+        Removal::EmptyTrash => 3,
+        Removal::MoveToTrash => 4,
     });
     order
+}
+
+/// Deletes the items planned as `DeleteAsAdministrator` (`indexes`), before
+/// anything else changes. Each passes every check `act_on` runs; then one
+/// call to `ctx.elevated`, one dialog, takes all that passed, and each
+/// outcome is what `symlink_metadata` finds afterwards. A cancelled dialog
+/// stops the run with every item not attempted. Nothing is retried another
+/// way.
+fn delete_as_administrator(
+    plan: &[PlannedItem],
+    indexes: &[usize],
+    ctx: &ExecContext<'_>,
+    outcomes: &mut [ItemOutcome],
+    stopped: &mut Option<StopReason>,
+) {
+    let mut batch = Vec::new();
+    for (step, &index) in indexes.iter().enumerate() {
+        ctx.report_step(step, plan.len() as u64, &plan[index].item.path);
+        match prepare(&plan[index], ctx) {
+            Ok(_) => batch.push(index),
+            Err(Halt::Skip(reason)) => outcomes[index] = ItemOutcome::Skipped(reason),
+            Err(Halt::Stop(reason)) => {
+                *stopped = Some(reason);
+                return;
+            }
+        }
+    }
+    if batch.is_empty() {
+        return;
+    }
+    // The checks of later items take time; the dialog comes right after.
+    let ready = match ctx.is_cancelled() {
+        true => Err(StopReason::Cancelled),
+        false => policy_unchanged(ctx.policy),
+    };
+    if let Err(reason) = ready {
+        *stopped = Some(reason);
+        return;
+    }
+    let paths: Vec<&Path> = batch.iter().map(|&i| plan[i].item.path.as_path()).collect();
+    let detail = match ctx.elevated.delete(&paths) {
+        Err(ElevatedError::Cancelled) => {
+            *stopped = Some(StopReason::AuthenticationCancelled);
+            outcomes.fill(ItemOutcome::NotAttempted);
+            return;
+        }
+        Err(ElevatedError::Busy(app)) => {
+            for &index in &batch {
+                outcomes[index] = ItemOutcome::Skipped(SkipReason::AppRunning(app.clone()));
+            }
+            return;
+        }
+        Err(ElevatedError::Failed(detail)) => detail,
+        Ok(()) => "still there after deletion as administrator".into(),
+    };
+    for &index in &batch {
+        outcomes[index] = match fs::symlink_metadata(&plan[index].item.path) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => ItemOutcome::Deleted,
+            _ => ItemOutcome::DeleteFailed {
+                detail: detail.clone(),
+                source_present: true,
+            },
+        };
+    }
+}
+
+/// Why an item is left as it is: skip it and go on, or end the run.
+enum Halt {
+    Skip(SkipReason),
+    Stop(StopReason),
+}
+
+/// Every check right before `planned` changes. Returns a pruned cache's
+/// freed-bytes size before its tool runs.
+fn prepare(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<Option<(u64, bool)>, Halt> {
+    if ctx.is_cancelled() {
+        return Err(Halt::Stop(StopReason::Cancelled));
+    }
+    // Before the slow checks, so a changed policy never spends a probe.
+    policy_unchanged(ctx.policy).map_err(Halt::Stop)?;
+    validate(planned, ctx).map_err(Halt::Skip)?;
+    // A pruned cache is measured among the slow checks, so the checks below
+    // also cover the time its walk takes.
+    let before_prune =
+        (planned.removal == Removal::RunTool(DesktopTool::Prune)).then(|| measure(planned));
+    // After them, which can take long enough for the rules to change.
+    policy_unchanged(ctx.policy).map_err(Halt::Stop)?;
+    if names_a_file(planned) {
+        protection_skip(ctx.policy, &planned.item.path).map_err(Halt::Skip)?;
+    }
+    // Last check before the mutation.
+    if ctx.is_cancelled() {
+        return Err(Halt::Stop(StopReason::Cancelled));
+    }
+    Ok(before_prune)
 }
 
 fn act_on(
@@ -281,37 +393,14 @@ fn act_on(
     ctx: &ExecContext<'_>,
     stopped: &mut Option<StopReason>,
 ) -> ItemOutcome {
-    let mut stop = |reason: StopReason| {
-        *stopped = Some(reason);
-        ItemOutcome::NotAttempted
-    };
-    if ctx.is_cancelled() {
-        return stop(StopReason::Cancelled);
-    }
-    // Before the slow checks, so a changed policy never spends a probe.
-    if let Err(reason) = policy_unchanged(ctx.policy) {
-        return stop(reason);
-    }
-    if let Err(reason) = validate(planned, ctx) {
-        return ItemOutcome::Skipped(reason);
-    }
-    // A pruned cache is measured among the slow checks, so the checks below
-    // also cover the time its walk takes.
-    let before_prune =
-        (planned.removal == Removal::RunTool(DesktopTool::Prune)).then(|| measure(planned));
-    // After them, which can take long enough for the rules to change.
-    if let Err(reason) = policy_unchanged(ctx.policy) {
-        return stop(reason);
-    }
-    if names_a_file(planned) {
-        if let Err(reason) = protection_skip(ctx.policy, &planned.item.path) {
-            return ItemOutcome::Skipped(reason);
+    let before_prune = match prepare(planned, ctx) {
+        Ok(before) => before,
+        Err(Halt::Skip(reason)) => return ItemOutcome::Skipped(reason),
+        Err(Halt::Stop(reason)) => {
+            *stopped = Some(reason);
+            return ItemOutcome::NotAttempted;
         }
-    }
-    // Last check before the mutation.
-    if ctx.is_cancelled() {
-        return stop(StopReason::Cancelled);
-    }
+    };
     let path = &planned.item.path;
     // One route per item: a failure is reported, never retried another way.
     let finder = match planned.removal {
@@ -330,6 +419,8 @@ fn act_on(
             )
         }
         Removal::RunTool(_) => return run_tool(planned, before_prune, ctx),
+        // Only `delete_as_administrator` acts on these, as one batch.
+        Removal::DeleteAsAdministrator => return ItemOutcome::NotAttempted,
     };
     finder.unwrap_or_else(|error| {
         if matches!(error, TrashError::AutomationDenied(_)) {
@@ -522,7 +613,8 @@ pub(crate) fn home_device(home: Option<&Path>) -> Result<u64, SkipReason> {
 /// run, and a pruned cache may also go to the Trash. A deletion needs every
 /// one of them in Rebuilt automatically or Project build output
 /// (`removal_for`), so a plan never deletes what only goes to the Trash, and
-/// never a tool's store.
+/// never a tool's store. Deletion as administrator needs every one of them
+/// to `needs_admin`, and such a category gets no other removal.
 fn gated_items<'a>(
     planned: &'a PlannedItem,
     ctx: &'a ExecContext<'_>,
@@ -538,6 +630,9 @@ fn gated_items<'a>(
                 .ok_or(SkipReason::UnknownCategory)?;
             let tool = provider.desktop_tool();
             let allowed = match planned.removal {
+                // Root-owned items, and all they carry, go only this way.
+                Removal::DeleteAsAdministrator => provider.needs_admin(),
+                _ if provider.needs_admin() => false,
                 Removal::EmptyTrash if index == 0 => provider.desktop_empties_trash(),
                 Removal::RunTool(planned_tool) if index == 0 => tool == Some(planned_tool),
                 Removal::MoveToTrash if index == 0 && tool == Some(DesktopTool::Prune) => true,

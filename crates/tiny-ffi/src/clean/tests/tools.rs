@@ -143,6 +143,7 @@ impl Layout {
             &NotRunning,
             sinks,
             sinks,
+            sinks,
             &CancellationToken::default(),
             &Progress::default(),
         )
@@ -365,7 +366,10 @@ fn a_failed_tool_is_never_retried_another_way() {
     }
     assert_eq!(report.failed_count, 2);
     assert_eq!(layout.log().len(), 2, "one call each");
-    assert!(sinks.steps().is_empty(), "no deletion, no Trash");
+    assert!(
+        sinks.steps().is_empty(),
+        "no deletion, no Trash, no administrator rights"
+    );
     assert_eq!((report.bytes_freed, report.bytes_requested), (0, 0));
     assert!(layout.dir.join("cache/one").exists());
     remove(&layout.dir);

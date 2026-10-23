@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 /// parallel tests that read the same clock tick.
 static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
+mod elevated;
 mod protection;
 mod races;
 mod removal;
@@ -29,6 +30,7 @@ struct Fixture {
     guard: Option<&'static str>,
     tool: bool,
     empties_trash: bool,
+    admin: bool,
 }
 
 fn fixture(id: &'static str) -> Fixture {
@@ -40,6 +42,7 @@ fn fixture(id: &'static str) -> Fixture {
         guard: None,
         tool: false,
         empties_trash: false,
+        admin: false,
     }
 }
 
@@ -73,6 +76,9 @@ impl CleanProvider for Fixture {
     }
     fn desktop_empties_trash(&self) -> bool {
         self.empties_trash
+    }
+    fn needs_admin(&self) -> bool {
+        self.admin
     }
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         match self.guard {
@@ -148,6 +154,12 @@ impl Delete for NeverDelete {
     }
 }
 
+impl ElevatedDelete for NeverDelete {
+    fn delete(&self, paths: &[&Path]) -> std::result::Result<(), ElevatedError> {
+        panic!("{paths:?} were deleted as administrator by a plan that only moves");
+    }
+}
+
 /// A protection store in its own temp directory, never inside or above a
 /// fixture root (its internal rules would keep those from moving).
 struct TempStore {
@@ -208,6 +220,7 @@ fn run_with(
         probe,
         trash,
         delete: &NeverDelete,
+        elevated: &NeverDelete,
         cancel,
         progress: None,
         policy: &lease,
@@ -455,6 +468,7 @@ fn home_its_ancestors_and_tool_paths_outside_home_are_refused() {
         probe: &MockChecker::none(),
         trash: &trash,
         delete: &NeverDelete,
+        elevated: &NeverDelete,
         cancel: None,
         progress: None,
         policy: &lease,
@@ -520,6 +534,7 @@ fn items_on_another_volume_than_home_are_refused() {
         probe: &MockChecker::none(),
         trash: &trash,
         delete: &NeverDelete,
+        elevated: &NeverDelete,
         cancel: None,
         progress: None,
         policy: &lease,

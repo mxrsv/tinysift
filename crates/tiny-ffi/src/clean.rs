@@ -5,9 +5,9 @@
 //! the options used). A preview is built only from those candidate IDs, and
 //! execution only from a preview ID, so Swift never hands Rust a path to act
 //! on. Execution moves each path through the core `Trash` route, deletes it
-//! through `fs_safe`, runs the category's own tool command, or empties the
-//! Trash through Finder, as the preview decided; it never calls a
-//! provider's `execute`.
+//! through `fs_safe` or, for root-owned caches, as administrator, runs the
+//! category's own tool command, or empties the Trash through Finder, as the
+//! preview decided; it never calls a provider's `execute`.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -147,7 +147,8 @@ impl TinySession {
     /// and overlapping paths, are listed as excluded. Unreadable saved rules
     /// fail it (`ProtectionUnavailable`) rather than authorize against
     /// unknown rules. Replaces any earlier preview. Every item moves to the
-    /// Trash, except a selected Trash row, which is emptied.
+    /// Trash, except a selected Trash row, which is emptied, and root-owned
+    /// caches, deleted as administrator (run those with `clean_remove`).
     pub fn clean_preview(&self, candidate_ids: Vec<String>) -> Result<FfiPreview, FfiError> {
         self.preview_clean(candidate_ids, DeleteMode::Trash)
     }
@@ -156,8 +157,9 @@ impl TinySession {
     /// Rebuilt automatically and Project build output are deleted for good,
     /// unless they would carry along a path that only goes to the Trash, and
     /// a uv or pnpm cache is pruned by its tool. Your files always go to the
-    /// Trash; a simulator runtime's removal is requested in either mode. Run
-    /// it with `clean_remove`.
+    /// Trash; a simulator runtime's removal is requested and root-owned caches
+    /// are deleted as administrator in either mode. Run it with
+    /// `clean_remove`.
     pub fn clean_preview_with_mode(
         &self,
         candidate_ids: Vec<String>,
@@ -233,17 +235,15 @@ impl TinySession {
         for (id, plan) in &mut kept {
             plan.covers = covered_candidates(discovery, id, &plan.item.path);
             let candidate = discovery.candidates.get(id.as_str());
-            let empties_trash =
-                candidate.is_some_and(|c| c.desktop_action == FfiDesktopAction::EmptyTrash);
-            plan.removal = if empties_trash {
-                Removal::EmptyTrash
-            } else {
-                removal_for(
+            plan.removal = match candidate.map(|c| c.desktop_action) {
+                Some(FfiDesktopAction::EmptyTrash) => Removal::EmptyTrash,
+                Some(FfiDesktopAction::DeleteAsAdministrator) => Removal::DeleteAsAdministrator,
+                _ => removal_for(
                     &plan.item,
                     &plan.covers,
                     mode,
                     candidate.and_then(|c| c.tool),
-                )
+                ),
             };
         }
         excluded.extend(
@@ -261,11 +261,15 @@ impl TinySession {
         let frees = |plan: &&PlannedItem| {
             matches!(
                 plan.removal,
-                Removal::Delete | Removal::EmptyTrash | Removal::RunTool(DesktopTool::Prune)
+                Removal::Delete
+                    | Removal::DeleteAsAdministrator
+                    | Removal::EmptyTrash
+                    | Removal::RunTool(DesktopTool::Prune)
             )
         };
         let (bytes_to_free, bytes_to_free_is_upper_bound) = freed_together(plans().filter(frees));
         let request = Removal::RunTool(DesktopTool::Request);
+        let as_admin = Removal::DeleteAsAdministrator;
         let preview_id = format!("p{}", state.next_id());
         let preview = FfiPreview {
             preview_id: preview_id.clone(),
@@ -277,6 +281,7 @@ impl TinySession {
             bytes_to_free_is_upper_bound,
             bytes_to_trash: total_size(plans().filter(with(Removal::MoveToTrash)).map(|p| &p.item)),
             bytes_requested: total_size(plans().filter(with(request)).map(|p| &p.item)),
+            bytes_needing_admin: total_size(plans().filter(with(as_admin)).map(|p| &p.item)),
         };
         state.preview = Some(StoredPreview {
             id: preview_id,
@@ -407,13 +412,17 @@ impl TinySession {
 }
 
 /// What the app may do with a category, and the tool it runs for it. The
-/// Trash row and tool commands are offered only when the app asks for them.
+/// Trash row and tool commands are offered only when the app asks for them;
+/// a root-owned category is deleted only as administrator.
 fn desktop_action(
     providers: &[Box<dyn CleanProvider>],
     id: &str,
     options: &CleanOptions,
 ) -> (FfiDesktopAction, Option<DesktopTool>) {
     let provider = providers.iter().find(|p| p.id() == id);
+    if provider.is_some_and(|p| p.needs_admin()) {
+        return (FfiDesktopAction::DeleteAsAdministrator, None);
+    }
     if options.include_trash && provider.is_some_and(|p| p.desktop_empties_trash()) {
         return (FfiDesktopAction::EmptyTrash, None);
     }
@@ -705,6 +714,7 @@ fn preview_item(
         risk: plan.item.risk.into(),
         covers,
         permanent: plan.removal != Removal::MoveToTrash,
+        needs_admin: plan.removal == Removal::DeleteAsAdministrator,
     }
 }
 
