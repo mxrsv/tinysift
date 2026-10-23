@@ -3,6 +3,8 @@
 //! cancelled dialog that changes nothing, and no other route into or out of
 //! it. The fake route removes only files these tests created.
 
+use std::sync::atomic::AtomicUsize;
+
 use super::removal::{planned, trash_row, Sinks};
 use super::*;
 
@@ -37,6 +39,16 @@ fn run_admin(
     probe: &dyn AppProbe,
     sinks: &Sinks,
 ) -> CheckedExecReport {
+    run_admin_cancellable(store, plan, probe, sinks, None)
+}
+
+fn run_admin_cancellable(
+    store: &TempStore,
+    plan: &[PlannedItem],
+    probe: &dyn AppProbe,
+    sinks: &Sinks,
+    cancel: Option<&AtomicBool>,
+) -> CheckedExecReport {
     let providers = providers();
     let home = std::env::temp_dir();
     let lease = store.store.lease().unwrap();
@@ -47,7 +59,7 @@ fn run_admin(
         trash: sinks,
         delete: sinks,
         elevated: sinks,
-        cancel: None,
+        cancel,
         progress: None,
         policy: &lease,
     };
@@ -281,5 +293,106 @@ fn only_categories_that_need_administrator_rights_go_this_way_and_no_other() {
     );
     assert!(sinks.log().is_empty(), "{:?}", sinks.log());
     assert!(root.join("x").exists() && root.join("a").exists());
+    let _ = remove_recursive_safe(&root);
+}
+
+/// Answers "not running" to its first question. From the second on it runs
+/// `hook`, then answers "running": the batch's last item is skipped by its
+/// checks, which return before the ones that look at the cancel flag and
+/// the saved rules again. Only the check right before the dialog is left to
+/// notice what `hook` changed.
+struct SkipsTheLastItem<'a> {
+    asked: AtomicUsize,
+    hook: Box<dyn Fn() + Send + Sync + 'a>,
+}
+
+impl<'a> SkipsTheLastItem<'a> {
+    fn new(hook: impl Fn() + Send + Sync + 'a) -> Self {
+        Self {
+            asked: AtomicUsize::new(0),
+            hook: Box::new(hook),
+        }
+    }
+}
+
+impl AppProbe for SkipsTheLastItem<'_> {
+    fn probe(&self, _: &str) -> std::result::Result<bool, String> {
+        if self.asked.fetch_add(1, Ordering::SeqCst) == 0 {
+            return Ok(false);
+        }
+        (self.hook)();
+        Ok(true)
+    }
+}
+
+#[test]
+fn a_run_cancelled_while_the_batch_is_checked_never_reaches_the_dialog() {
+    let root = fixture_root("elevated-cancel-late", &["x", "y"]);
+    let cancel = AtomicBool::new(false);
+    let probe = SkipsTheLastItem::new(|| cancel.store(true, Ordering::Release));
+    let plan = [as_admin(&root, "x"), as_admin(&root, "y")];
+    let sinks = Sinks::default();
+    let report = run_admin_cancellable(&TempStore::new(), &plan, &probe, &sinks, Some(&cancel));
+    assert_eq!(report.stopped, Some(StopReason::Cancelled));
+    assert_eq!(
+        outcomes(&report),
+        [
+            ItemOutcome::NotAttempted,
+            ItemOutcome::Skipped(SkipReason::AppRunning("Simulator".into()))
+        ]
+    );
+    assert!(sinks.log().is_empty(), "no dialog: {:?}", sinks.log());
+    assert!(root.join("x").exists() && root.join("y").exists());
+    let _ = remove_recursive_safe(&root);
+}
+
+#[test]
+fn rules_changed_while_the_batch_is_checked_never_reach_the_dialog() {
+    let root = fixture_root("elevated-rules-late", &["x", "y"]);
+    let store = TempStore::new();
+    store.keep(&root.join("elsewhere"), RuleScope::File);
+    let x = root.join("x");
+    let probe = SkipsTheLastItem::new(|| {
+        store.rewrite(|doc| {
+            doc.revision += 1;
+            doc.next_id += 1;
+            doc.rules.push(ProtectionRule {
+                id: "r2".into(),
+                path: x.clone(),
+                scope: RuleScope::File,
+            });
+        })
+    });
+    let plan = [as_admin(&root, "x"), as_admin(&root, "y")];
+    let sinks = Sinks::default();
+    let report = run_admin(&store, &plan, &probe, &sinks);
+    assert_eq!(report.stopped, Some(StopReason::ProtectionChanged));
+    assert_eq!(
+        outcomes(&report),
+        [
+            ItemOutcome::NotAttempted,
+            ItemOutcome::Skipped(SkipReason::AppRunning("Simulator".into()))
+        ]
+    );
+    assert!(sinks.log().is_empty(), "no dialog: {:?}", sinks.log());
+    assert!(root.join("x").exists() && root.join("y").exists());
+    let _ = remove_recursive_safe(&root);
+}
+
+#[test]
+fn a_run_cancelled_before_the_batch_starts_never_reaches_the_dialog() {
+    let root = fixture_root("elevated-cancel-early", &["x"]);
+    let cancel = AtomicBool::new(true);
+    let sinks = Sinks::default();
+    let report = run_admin_cancellable(
+        &TempStore::new(),
+        &[as_admin(&root, "x")],
+        &MockChecker::none(),
+        &sinks,
+        Some(&cancel),
+    );
+    assert_eq!(report.stopped, Some(StopReason::Cancelled));
+    assert_eq!(outcomes(&report), [ItemOutcome::NotAttempted]);
+    assert!(sinks.log().is_empty(), "no dialog: {:?}", sinks.log());
     let _ = remove_recursive_safe(&root);
 }
