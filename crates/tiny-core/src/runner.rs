@@ -16,6 +16,7 @@
 use std::ffi::OsString;
 use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::{self, JoinHandle};
@@ -279,11 +280,21 @@ impl CommandRunner for RealRunner {
 #[derive(Debug, Clone, Default)]
 pub struct ToolRunner {
     lookup: ToolLookup,
+    /// Each `output` child gets its own process group, and a timeout kills
+    /// the whole group: Corepack's pnpm, for one, runs the real work in a
+    /// child of the process that was spawned. Off by default: with a
+    /// terminal, Ctrl-C has to reach the child, which only its group shares.
+    own_process_group: bool,
 }
 
 impl ToolRunner {
+    /// For the app, which has no terminal: a timed-out tool leaves nothing
+    /// running behind it.
     pub fn new(lookup: ToolLookup) -> Self {
-        Self { lookup }
+        Self {
+            lookup,
+            own_process_group: true,
+        }
     }
 }
 
@@ -328,6 +339,9 @@ impl CommandRunner for ToolRunner {
             .lookup
             .command(bin)
             .ok_or_else(|| CommandError::NotFound(bin.to_string()))?;
+        if self.own_process_group {
+            command.process_group(0);
+        }
         let mut child = command
             .args(args)
             .stdin(Stdio::null())
@@ -344,6 +358,12 @@ impl CommandRunner for ToolRunner {
             match child.try_wait() {
                 Ok(Some(status)) => break status,
                 Ok(None) if Instant::now() >= deadline => {
+                    if self.own_process_group {
+                        // The group id is the child's pid, and the child has
+                        // not been reaped, so it cannot belong to anyone else.
+                        // SAFETY: kill(2) with a negated pid, no memory involved.
+                        unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
+                    }
                     let _ = child.kill();
                     let _ = child.wait();
                     // ponytail: drain threads are detached here; a grandchild
@@ -531,6 +551,57 @@ mod tests {
             })
         ));
         assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    /// Whether `pid` is gone, giving the kernel a moment to reap it.
+    fn gone(pid: libc::pid_t) -> bool {
+        (0..40).any(|_| {
+            // SAFETY: signal 0 only asks whether the process exists.
+            let alive = unsafe { libc::kill(pid, 0) } == 0;
+            if alive {
+                thread::sleep(Duration::from_millis(50));
+            }
+            !alive
+        })
+    }
+
+    #[test]
+    fn a_timeout_in_the_app_kills_what_the_tool_started_and_in_a_terminal_only_the_tool() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = |pidfile: &Path| format!("sleep 20 & echo $! > '{}'; wait", pidfile.display());
+        let started = |pidfile: &Path| -> libc::pid_t {
+            std::fs::read_to_string(pidfile)
+                .unwrap()
+                .trim()
+                .parse()
+                .unwrap()
+        };
+
+        // The app's runner: its own process group, killed whole.
+        let app_pid = dir.path().join("app.pid");
+        let result = ToolRunner::new(ToolLookup::default()).output(
+            SH,
+            &["-c", &script(&app_pid)],
+            Duration::from_secs(1),
+        );
+        assert!(matches!(result, Err(CommandError::Timeout { .. })));
+        let grandchild = started(&app_pid);
+        let killed = gone(grandchild);
+        if !killed {
+            unsafe { libc::kill(grandchild, libc::SIGKILL) };
+        }
+        assert!(killed, "the tool's child outlived the timeout");
+
+        // The CLI's runner shares the terminal's group so Ctrl-C reaches the
+        // tool; a timeout kills the tool only.
+        let cli_pid = dir.path().join("cli.pid");
+        let result = RealRunner.output(SH, &["-c", &script(&cli_pid)], Duration::from_secs(1));
+        assert!(matches!(result, Err(CommandError::Timeout { .. })));
+        let grandchild = started(&cli_pid);
+        // SAFETY: signal 0 only asks whether the process exists.
+        let survives = unsafe { libc::kill(grandchild, 0) } == 0;
+        unsafe { libc::kill(grandchild, libc::SIGKILL) };
+        assert!(survives, "the CLI runner must not change process groups");
     }
 
     #[test]

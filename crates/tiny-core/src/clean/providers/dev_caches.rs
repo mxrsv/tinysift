@@ -208,11 +208,12 @@ const PNPM_ID: &str = "pnpm";
 const PNPM_LABEL: &str = "pnpm store";
 const PNPM_PRUNE: &[&str] = &["store", "prune"];
 
-/// `pgrep -f` pattern for a running pnpm: the native binary, or the
-/// `pnpm.cjs`/`pnpm.js` script Node runs for npm and Corepack installs, whose
-/// process name is `node`. Anchored on a path component, so `pnpm-lock.yaml`
-/// or the store path `…/pnpm/store` does not match.
-const PNPM_COMMAND_LINE: &str = "(^|/)pnpm(\\.c?js)?( |$)";
+/// `pgrep -f` pattern for a running pnpm: the native binary, `pnpm-native`
+/// (what Corepack's `pnpm.mjs` starts for pnpm 11 and later), or the
+/// `pnpm.cjs`/`pnpm.js` script Node runs for npm installs, whose process name
+/// is `node`. Anchored on a path component, so `pnpm-lock.yaml` or the store
+/// path `…/pnpm/store` does not match.
+const PNPM_COMMAND_LINE: &str = "(^|/)pnpm(-native|\\.c?js)?( |$)";
 
 pub struct PnpmStore {
     runner: Arc<dyn CommandRunner>,
@@ -642,6 +643,34 @@ mod tests {
             .with_which("pnpm")
             .with_exit("pnpm", &["store", "path"], 0, &printed(store))
             .with_exit(PGREP, &["-f", "--", PNPM_COMMAND_LINE], pgrep_status, "")
+    }
+
+    #[test]
+    fn the_running_pnpm_pattern_matches_what_pnpm_runs_as_and_nothing_else() {
+        // `pgrep -f` and `grep -E` take the same extended regular expressions.
+        let matches = |line: &str| {
+            let mut grep = std::process::Command::new("/usr/bin/grep")
+                .args(["-E", "-q", "--", PNPM_COMMAND_LINE])
+                .stdin(std::process::Stdio::piped())
+                .spawn()
+                .unwrap();
+            std::io::Write::write_all(&mut grep.stdin.take().unwrap(), line.as_bytes()).unwrap();
+            grep.wait().unwrap().success()
+        };
+        for running in [
+            "/opt/homebrew/bin/pnpm store prune",
+            "node /Users/me/.nvm/versions/node/v24/lib/node_modules/pnpm/bin/pnpm.cjs install",
+            "/Users/me/.cache/node/corepack/v1/pnpm/12.3.4/bin/pnpm-native store prune",
+        ] {
+            assert!(matches(running), "{running}");
+        }
+        for other in [
+            "/usr/bin/vim pnpm-lock.yaml",
+            "/Users/me/Library/pnpm/store/v11",
+            "/usr/bin/pnpm-native-helper run",
+        ] {
+            assert!(!matches(other), "{other}");
+        }
     }
 
     #[test]

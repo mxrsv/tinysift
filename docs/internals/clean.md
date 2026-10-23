@@ -170,7 +170,10 @@ each other. A prune frees at most its cache, so it makes the total an upper boun
 `ReportOnly{NotPerPathTrash}`, so an app that does not know the option cannot preselect uv into a
 whole-cache Trash move. The command runs through the bounded `CommandRunner::output`
 ([`tool_command.rs`](../../crates/tiny-core/src/clean/providers/tool_command.rs)): absolute path,
-stdin closed, no shell, never elevated, killed after ten minutes. A prune is measured among the
+stdin closed, no shell, never elevated, killed after ten minutes. The app's runner (`ToolRunner::new`)
+starts each tool in its own process group and kills the whole group, because Corepack's pnpm runs the
+real `pnpm-native` as a child that a plain kill would leave pruning; the CLI's runner keeps the
+terminal's group so Ctrl-C reaches the tool. A prune is measured among the
 slow checks, before the rules are read again, so those checks also cover the time the walk takes,
 and once more afterwards. Freed bytes are `before - after` (saturating), outside the union. A
 prune walks the cache twice. A tool that cannot be found keeps the row report only; the app never deletes a tool's store
