@@ -1,9 +1,11 @@
 use super::*;
+use crate::clean::freed_size::SharedBlocks;
 use crate::clean::fs_safe::{fingerprint, remove_recursive_safe};
 use crate::clean::process::test_support::{FailingProbe, MockChecker};
 use crate::clean::protection::{ProtectionRule, RuleScope, RulesDocument};
 use crate::clean::protection_store::ProtectionStore;
 use crate::clean::scan_context::ScanContext;
+use crate::clean::trash_plan::Removal;
 use crate::clean::types::{ExecAction, ExecReport, RiskLevel};
 use crate::error::Result;
 use std::path::PathBuf;
@@ -16,6 +18,7 @@ static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 mod protection;
 mod races;
+mod removal;
 
 struct Fixture {
     id: &'static str,
@@ -24,6 +27,7 @@ struct Fixture {
     app: Option<&'static str>,
     guard: Option<&'static str>,
     tool: bool,
+    empties_trash: bool,
 }
 
 fn fixture(id: &'static str) -> Fixture {
@@ -34,6 +38,7 @@ fn fixture(id: &'static str) -> Fixture {
         app: None,
         guard: None,
         tool: false,
+        empties_trash: false,
     }
 }
 
@@ -64,6 +69,9 @@ impl CleanProvider for Fixture {
     }
     fn roots_from_tool_output(&self) -> bool {
         self.tool
+    }
+    fn desktop_empties_trash(&self) -> bool {
+        self.empties_trash
     }
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         match self.guard {
@@ -124,6 +132,18 @@ fn plan(category: &str, root: &Path, name: &str) -> PlannedItem {
         },
         roots: vec![root.to_path_buf()],
         covers: Vec::new(),
+        removal: Removal::MoveToTrash,
+        size_is_upper_bound: false,
+        shared: SharedBlocks::default(),
+    }
+}
+
+/// Plans that only move to the Trash never reach it: a call fails the test.
+struct NeverDelete;
+
+impl Delete for NeverDelete {
+    fn delete(&self, path: &Path) -> io::Result<()> {
+        panic!("{} was deleted by a plan that only moves", path.display());
     }
 }
 
@@ -186,6 +206,7 @@ fn run_with(
         home: Some(&home),
         probe,
         trash,
+        delete: &NeverDelete,
         cancel,
         progress: None,
         policy: &lease,
@@ -432,6 +453,7 @@ fn home_its_ancestors_and_tool_paths_outside_home_are_refused() {
         home: Some(&home),
         probe: &MockChecker::none(),
         trash: &trash,
+        delete: &NeverDelete,
         cancel: None,
         progress: None,
         policy: &lease,
@@ -496,6 +518,7 @@ fn items_on_another_volume_than_home_are_refused() {
         home: Some(Path::new("/dev")),
         probe: &MockChecker::none(),
         trash: &trash,
+        delete: &NeverDelete,
         cancel: None,
         progress: None,
         policy: &lease,

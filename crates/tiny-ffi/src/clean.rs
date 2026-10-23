@@ -1,23 +1,23 @@
-//! Cleanup discovery, trusted preview and Trash execution for the native app.
+//! Cleanup discovery, trusted preview and checked execution for the native
+//! app.
 //!
 //! The session keeps what discovery found (paths, fingerprints, roots and
 //! the options used). A preview is built only from those candidate IDs, and
 //! execution only from a preview ID, so Swift never hands Rust a path to act
-//! on. Execution moves each path through the core `Trash` route and never
-//! calls a provider's own cleanup.
+//! on. Execution moves each path through the core `Trash` route, deletes it
+//! through `fs_safe`, or empties the Trash through Finder, as the preview
+//! decided; it never calls a provider's own cleanup.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
-use tiny_core::clean::checked_execute::{
-    execute_checked, CheckedExecReport, ExecContext, ItemOutcome,
-};
 use tiny_core::clean::discover::{
     discover_checked, select_providers_with, validate_options, CategoryOutcome, CheckedCategory,
 };
-use tiny_core::clean::finder_trash::{FinderTrash, Trash};
+use tiny_core::clean::finder_trash::FinderTrash;
+use tiny_core::clean::freed_size::SharedBlocks;
 use tiny_core::clean::fs_safe::PathFingerprint;
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::{PolicySnapshot, RuleScope};
@@ -28,7 +28,8 @@ use tiny_core::clean::providers::{
 };
 use tiny_core::clean::scan_context::{ScanContext, Unreadable};
 use tiny_core::clean::trash_plan::{
-    account_home, partition_overlaps, trusted_home, Overlap, PlannedItem,
+    account_home, freed_together, partition_overlaps, removal_for, trusted_home, DeleteMode,
+    Overlap, PlannedItem, Removal,
 };
 use tiny_core::clean::types::{CleanItem, RiskLevel};
 use tiny_core::options::CleanOptions;
@@ -39,6 +40,7 @@ use crate::{FfiError, ProgressListener, TinySession};
 
 mod protection;
 mod records;
+mod removal;
 #[cfg(test)]
 mod test_support;
 #[cfg(test)]
@@ -46,6 +48,7 @@ mod tests;
 
 pub use protection::*;
 pub use records::*;
+pub use removal::*;
 
 use protection::{candidate_scope, split_protected};
 
@@ -87,6 +90,10 @@ struct StoredCandidate {
     desktop_action: FfiDesktopAction,
     /// What "Always keep" would cover, judged once from the path's own metadata.
     keep_scope: Option<RuleScope>,
+    size_is_upper_bound: bool,
+    /// Only what other movable candidates could complete
+    /// (`SharedBlocks::retain_completable`).
+    shared: SharedBlocks,
 }
 
 struct StoredPreview {
@@ -136,8 +143,57 @@ impl TinySession {
     /// or stale IDs are rejected; paths the saved "always keep" rules hold,
     /// and overlapping paths, are listed as excluded. Unreadable saved rules
     /// fail it (`ProtectionUnavailable`) rather than authorize against
-    /// unknown rules. Replaces any earlier preview.
+    /// unknown rules. Replaces any earlier preview. Every item moves to the
+    /// Trash, except a selected Trash row, which is emptied.
     pub fn clean_preview(&self, candidate_ids: Vec<String>) -> Result<FfiPreview, FfiError> {
+        self.preview_clean(candidate_ids, DeleteMode::Trash)
+    }
+
+    /// `clean_preview` for the app's delete mode: with `Permanent`, items in
+    /// Rebuilt automatically and Project build output are deleted for good,
+    /// unless they would carry along a path that only goes to the Trash. Your
+    /// files always go to the Trash. Run it with `clean_remove`.
+    pub fn clean_preview_with_mode(
+        &self,
+        candidate_ids: Vec<String>,
+        mode: FfiDeleteMode,
+    ) -> Result<FfiPreview, FfiError> {
+        self.preview_clean(candidate_ids, mode.into())
+    }
+
+    /// Moves the preview's paths to Trash through Finder. The preview is
+    /// consumed before the first move, so it can never run twice, even
+    /// after a panic. Always returns the per-item report once execution
+    /// starts; a Finder Automation denial stops it with
+    /// `stopped = AutomationDenied`. A preview that removes anything for good
+    /// is refused unspent (`InvalidInput`): run it with `clean_remove`.
+    pub fn clean_execute(
+        &self,
+        preview_id: String,
+        token: Arc<CancellationToken>,
+        progress: Arc<dyn ProgressListener>,
+    ) -> Result<FfiExecReport, FfiError> {
+        let runner = app_runner();
+        let probe = RunnerProbe(runner.as_ref());
+        let providers = |options: &CleanOptions| all_providers_with(options, runner.clone());
+        // The real saved rules: execution never runs without them.
+        self.execute_clean(
+            &preview_id,
+            &providers,
+            &probe,
+            &FinderTrash,
+            &token,
+            progress.as_ref(),
+        )
+    }
+}
+
+impl TinySession {
+    fn preview_clean(
+        &self,
+        candidate_ids: Vec<String>,
+        mode: DeleteMode,
+    ) -> Result<FfiPreview, FfiError> {
         let selected: BTreeSet<String> = candidate_ids.iter().cloned().collect();
         let (discovery_id, resolved) = self.resolve_selection(candidate_ids)?;
         // Rules and path comparison run without the state lock (lock order).
@@ -171,6 +227,15 @@ impl TinySession {
         let (mut kept, covered) = partition_overlaps(planned, |(_, plan)| plan.item.path.as_path());
         for (id, plan) in &mut kept {
             plan.covers = covered_candidates(discovery, id, &plan.item.path);
+            let empties_trash = discovery
+                .candidates
+                .get(id.as_str())
+                .is_some_and(|c| c.desktop_action == FfiDesktopAction::EmptyTrash);
+            plan.removal = if empties_trash {
+                Removal::EmptyTrash
+            } else {
+                removal_for(&plan.item, &plan.covers, mode)
+            };
         }
         excluded.extend(
             covered
@@ -181,13 +246,20 @@ impl TinySession {
             .iter()
             .map(|(id, plan)| preview_item(discovery, &selected, id, plan))
             .collect();
+        let permanent = |plan: &&PlannedItem| plan.removal != Removal::MoveToTrash;
+        let plans = || kept.iter().map(|(_, plan)| plan);
+        let (bytes_to_free, bytes_to_free_is_upper_bound) =
+            freed_together(plans().filter(permanent));
         let preview_id = format!("p{}", state.next_id());
         let preview = FfiPreview {
             preview_id: preview_id.clone(),
             items,
             excluded,
-            bytes_selected: total_size(kept.iter().map(|(_, plan)| &plan.item)),
+            bytes_selected: total_size(plans().map(|plan| &plan.item)),
             expires_in_seconds: ttl.as_secs(),
+            bytes_to_free,
+            bytes_to_free_is_upper_bound,
+            bytes_to_trash: total_size(plans().filter(|p| !permanent(p)).map(|p| &p.item)),
         };
         state.preview = Some(StoredPreview {
             id: preview_id,
@@ -200,31 +272,6 @@ impl TinySession {
             policy,
         });
         Ok(preview)
-    }
-
-    /// Moves the preview's paths to Trash through Finder. The preview is
-    /// consumed before the first move, so it can never run twice, even
-    /// after a panic. Always returns the per-item report once execution
-    /// starts; a Finder Automation denial stops it with
-    /// `stopped = AutomationDenied`.
-    pub fn clean_execute(
-        &self,
-        preview_id: String,
-        token: Arc<CancellationToken>,
-        progress: Arc<dyn ProgressListener>,
-    ) -> Result<FfiExecReport, FfiError> {
-        let runner = app_runner();
-        let probe = RunnerProbe(runner.as_ref());
-        let providers = |options: &CleanOptions| all_providers_with(options, runner.clone());
-        // The real saved rules: execution never runs without them.
-        self.execute_clean(
-            &preview_id,
-            &providers,
-            &probe,
-            &FinderTrash,
-            &token,
-            progress.as_ref(),
-        )
     }
 }
 
@@ -300,13 +347,14 @@ impl TinySession {
             .categories
             .into_iter()
             .map(|category| {
-                let action = desktop_action(providers, &category.id);
+                let action = desktop_action(providers, &category.id, &options);
                 let needs_admin = providers
                     .iter()
                     .any(|p| p.id() == category.id && p.needs_admin());
                 store_category(id, category, action, needs_admin, &mut candidates)
             })
             .collect();
+        keep_completable_shared_blocks(&mut candidates);
         state.discovery = Some(StoredDiscovery {
             id,
             options,
@@ -316,42 +364,6 @@ impl TinySession {
             discovery_id: format!("d{id}"),
             categories,
         })
-    }
-
-    /// `clean_execute` with injected providers, probe and Trash (the test
-    /// seam). The saved rules stay locked until the report is built. The lock
-    /// is taken before the preview is consumed, so a busy or unreadable store
-    /// fails without spending the preview.
-    pub(crate) fn execute_clean(
-        &self,
-        preview_id: &str,
-        providers: ProviderFactory<'_>,
-        probe: &dyn AppProbe,
-        trash: &dyn Trash,
-        token: &CancellationToken,
-        progress: &dyn ProgressListener,
-    ) -> Result<FfiExecReport, FfiError> {
-        let home = self.clean_home()?;
-        let _gate = self.begin()?;
-        let store = self.protection_store(&home);
-        let policy = store.lease().map_err(protection_error)?;
-        self.remember_policy(policy.snapshot())
-            .map_err(protection_error)?;
-        let (items, options) = self.consume_preview(preview_id, policy.snapshot())?;
-        let providers = providers(&options);
-        let plan: Vec<PlannedItem> = items.iter().map(|(_, plan)| plan.clone()).collect();
-        let report = |p: tiny_core::progress::Progress| progress.on_progress(p.into());
-        let ctx = ExecContext {
-            providers: &providers,
-            home: Some(&home),
-            probe,
-            trash,
-            cancel: Some(token.flag()),
-            progress: Some(&report),
-            policy: &policy,
-        };
-        let executed = execute_checked(&plan, &ctx);
-        Ok(exec_report(&items, executed))
     }
 
     /// `HOME` checked against the account home before any scan or move.
@@ -375,52 +387,18 @@ impl TinySession {
             None => ProtectionStore::for_home(home),
         }
     }
-
-    /// Marks the preview consumed, under the lock, before any mutation, once
-    /// the saved rules are exactly the ones it was authorized against. A
-    /// changed policy drops the preview unspent.
-    fn consume_preview(
-        &self,
-        preview_id: &str,
-        policy: &PolicySnapshot,
-    ) -> Result<(Vec<(String, PlannedItem)>, CleanOptions), FfiError> {
-        let invalid = |detail: &str| FfiError::PreviewInvalid {
-            detail: detail.into(),
-        };
-        let mut state = self.clean_state();
-        let state = &mut *state;
-        let discovery = state.discovery.as_ref();
-        let preview = state
-            .preview
-            .as_mut()
-            .filter(|p| p.id == preview_id)
-            .ok_or_else(|| invalid("unknown or replaced preview"))?;
-        if preview.consumed {
-            return Err(invalid("preview already used"));
-        }
-        if Instant::now() >= preview.expires_at || SystemTime::now() >= preview.expires_at_wall {
-            return Err(invalid("preview expired"));
-        }
-        let discovery = discovery
-            .filter(|d| d.id == preview.discovery_id)
-            .ok_or_else(|| invalid("discovery was replaced"))?;
-        // Defense in depth for PC-C3: preview already excluded these.
-        if preview.items.iter().any(|(id, plan)| {
-            !unselected_review(discovery, id, &plan.item.path, &preview.selected).is_empty()
-        }) {
-            return Err(invalid("an item would move an unselected review item"));
-        }
-        if preview.policy != *policy {
-            state.preview = None;
-            return Err(FfiError::ProtectionChanged);
-        }
-        preview.consumed = true;
-        Ok((preview.items.clone(), discovery.options.clone()))
-    }
 }
 
-fn desktop_action(providers: &[Box<dyn CleanProvider>], id: &str) -> FfiDesktopAction {
-    let reason = match providers.iter().find(|p| p.id() == id) {
+fn desktop_action(
+    providers: &[Box<dyn CleanProvider>],
+    id: &str,
+    options: &CleanOptions,
+) -> FfiDesktopAction {
+    let provider = providers.iter().find(|p| p.id() == id);
+    if options.include_trash && provider.is_some_and(|p| p.desktop_empties_trash()) {
+        return FfiDesktopAction::EmptyTrash;
+    }
+    let reason = match provider {
         Some(provider) => desktop_report_only(provider.as_ref()),
         None => Some(ReportOnly::NotPerPathTrash),
     };
@@ -506,14 +484,20 @@ fn store_category(
                     size_is_upper_bound: checked.size_is_upper_bound,
                 });
                 let meta = std::fs::symlink_metadata(&item.path).ok();
+                let fingerprint = match desktop_action {
+                    FfiDesktopAction::EmptyTrash => PathFingerprint::of_listing,
+                    _ => PathFingerprint::of,
+                };
                 candidates.insert(
                     id,
                     StoredCandidate {
-                        fingerprint: meta.as_ref().map(PathFingerprint::of),
+                        fingerprint: meta.as_ref().map(fingerprint),
                         keep_scope: candidate_scope(desktop_action, &item.path, meta.as_ref()),
                         item,
                         roots: roots.clone(),
                         desktop_action,
+                        size_is_upper_bound: checked.size_is_upper_bound,
+                        shared: checked.shared,
                     },
                 );
             }
@@ -528,6 +512,24 @@ fn store_category(
         }
     }
     ffi
+}
+
+/// Drops shared blocks no selection could complete, so the session keeps
+/// only what can change a selection's total. Report-only candidates are
+/// never selected, so theirs go entirely.
+fn keep_completable_shared_blocks(candidates: &mut HashMap<String, StoredCandidate>) {
+    let mut movable = Vec::new();
+    for candidate in candidates.values_mut() {
+        if matches!(
+            candidate.desktop_action,
+            FfiDesktopAction::ReportOnly { .. }
+        ) {
+            candidate.shared = SharedBlocks::default();
+        } else {
+            movable.push(&mut candidate.shared);
+        }
+    }
+    SharedBlocks::retain_completable(&mut movable);
 }
 
 /// Every other candidate of the discovery at `path` or inside it, selected
@@ -590,7 +592,10 @@ fn plan_selection(
                         detail: format!("unknown candidate {id}; scan again"),
                     })?;
             let path = candidate.item.path.display();
-            if candidate.desktop_action != FfiDesktopAction::MoveToTrash {
+            if matches!(
+                candidate.desktop_action,
+                FfiDesktopAction::ReportOnly { .. }
+            ) {
                 return Err(FfiError::InvalidInput {
                     detail: format!("{path} is report-only on the desktop"),
                 });
@@ -607,6 +612,10 @@ fn plan_selection(
                 fingerprint,
                 roots: candidate.roots.as_ref().clone(),
                 covers: Vec::new(),
+                // Decided once overlaps are merged.
+                removal: Removal::MoveToTrash,
+                size_is_upper_bound: candidate.size_is_upper_bound,
+                shared: candidate.shared.clone(),
             };
             Ok((id, plan))
         })
@@ -661,33 +670,8 @@ fn preview_item(
         size_bytes: plan.item.size,
         risk: plan.item.risk.into(),
         covers,
+        permanent: plan.removal != Removal::MoveToTrash,
     }
-}
-
-fn exec_report(items: &[(String, PlannedItem)], executed: CheckedExecReport) -> FfiExecReport {
-    let count = |keep: fn(&ItemOutcome) -> bool| executed.count(keep) as u64;
-    let summary = FfiExecReport {
-        results: Vec::new(),
-        bytes_selected: executed.bytes_selected(),
-        bytes_moved_to_trash: executed.bytes_moved_to_trash(),
-        moved_count: executed.moved_count() as u64,
-        failed_count: count(|o| matches!(o, ItemOutcome::Failed { .. })),
-        skipped_count: count(|o| matches!(o, ItemOutcome::Skipped(_))),
-        not_attempted_count: count(|o| matches!(o, ItemOutcome::NotAttempted)),
-        stopped: executed.stopped.clone().map(Into::into),
-    };
-    let results = items
-        .iter()
-        .zip(executed.results)
-        .map(|((id, _), result)| FfiItemResult {
-            candidate_id: id.clone(),
-            category_id: result.item.category_id,
-            path: result.item.path.to_string_lossy().into_owned(),
-            size_bytes: result.item.size,
-            outcome: result.outcome.into(),
-        })
-        .collect();
-    FfiExecReport { results, ..summary }
 }
 
 fn total_size<'a>(items: impl Iterator<Item = &'a CleanItem>) -> u64 {

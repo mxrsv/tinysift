@@ -5,6 +5,8 @@
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 
+use tiny_core::clean::finder_trash::Trash;
+use tiny_core::clean::fs_safe::Delete;
 use tiny_core::clean::types::RiskLevel;
 
 use super::test_support::*;
@@ -14,6 +16,7 @@ mod build_output;
 mod execute_protection;
 mod protection;
 mod protection_writes;
+mod removal;
 mod selection;
 mod simulators;
 

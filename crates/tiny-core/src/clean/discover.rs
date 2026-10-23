@@ -11,6 +11,7 @@ use crate::error::Result;
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use super::freed_size::SharedBlocks;
 use super::process::{AppProbe, PgrepChecker, ProcessChecker};
 use super::providers::{all_providers, all_providers_with, CleanProvider};
 use super::scan_context::{ScanContext, Unreadable};
@@ -45,6 +46,9 @@ pub struct CheckedItem {
     /// The volume could not tell which blocks other files share, so
     /// `item.size` counts them all: deleting frees at most that.
     pub size_is_upper_bound: bool,
+    /// Blocks the item shares with files outside it, which `item.size`
+    /// leaves out; several items removed together may free them.
+    pub shared: SharedBlocks,
 }
 
 #[derive(Debug, Clone)]
@@ -113,7 +117,9 @@ fn filter_providers(
         .filter(|p| match p.risk() {
             RiskLevel::Safe => true,
             RiskLevel::Review => opts.include_review,
-            RiskLevel::Destructive => opts.include_destructive,
+            RiskLevel::Destructive => {
+                opts.include_destructive || (opts.include_trash && p.desktop_empties_trash())
+            }
         })
         .collect()
 }
@@ -293,6 +299,7 @@ fn found(
     protected: impl Fn(&std::path::Path) -> Option<String>,
 ) -> CategoryOutcome {
     let mut unreadable = findings.unreadable;
+    let mut shared = findings.shared;
     let mut refused: Vec<(PathBuf, String)> = findings.refused.into_iter().collect();
     let mut kept = Vec::new();
     for item in items {
@@ -301,6 +308,7 @@ fn found(
             None => kept.push(CheckedItem {
                 unreadable: unreadable.remove(&item.path),
                 size_is_upper_bound: findings.size_upper_bound.contains(&item.path),
+                shared: shared.remove(&item.path).unwrap_or_default(),
                 item,
             }),
         }
@@ -325,6 +333,7 @@ mod tests {
             include_destructive: false,
             idle_days: 30,
             all_build_output: false,
+            include_trash: false,
         }
     }
 
@@ -356,6 +365,20 @@ mod tests {
         let providers = select_providers(&o);
         let ids: Vec<&str> = providers.iter().map(|p| p.id()).collect();
         assert!(ids.contains(&"trash"));
+    }
+
+    #[test]
+    fn the_trash_option_adds_only_the_trash() {
+        let mut o = opts();
+        o.include_review = true;
+        o.include_trash = true;
+        let providers = select_providers(&o);
+        let destructive: Vec<&str> = providers
+            .iter()
+            .filter(|p| p.risk() == RiskLevel::Destructive)
+            .map(|p| p.id())
+            .collect();
+        assert_eq!(destructive, ["trash"]);
     }
 
     #[test]
@@ -552,6 +575,7 @@ mod tests {
                 },
                 unreadable: None,
                 size_is_upper_bound: false,
+                shared: SharedBlocks::default(),
             };
             let note = Unreadable {
                 entries: 1,

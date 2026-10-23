@@ -245,6 +245,7 @@ impl From<&CleanOpts> for tiny_core::options::CleanOptions {
             idle_days: value.idle_days,
             // The CLI lists only idle projects' build output.
             all_build_output: false,
+            include_trash: false,
         }
     }
 }

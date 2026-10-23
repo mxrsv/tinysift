@@ -188,6 +188,19 @@ impl PathFingerprint {
     }
 }
 
+impl PathFingerprint {
+    /// `of`, plus a directory's mtime, which changes when an entry is added
+    /// or removed. Emptying the Trash removes whatever it holds then, so it
+    /// must still hold what discovery measured.
+    pub fn of_listing(meta: &fs::Metadata) -> Self {
+        let mut fingerprint = Self::of(meta);
+        if fingerprint.kind == FileKind::Dir {
+            fingerprint.contents = Some((0, meta.modified().ok()));
+        }
+        fingerprint
+    }
+}
+
 /// Fingerprint of `path` itself, never of a symlink's target.
 pub fn fingerprint(path: &Path) -> std::io::Result<PathFingerprint> {
     fs::symlink_metadata(path).map(|meta| PathFingerprint::of(&meta))
@@ -225,9 +238,12 @@ pub fn dir_size_checked(root: &Path, ctx: &ScanContext<'_>) -> u64 {
 
 fn freed_size(root: &Path, ctx: &ScanContext<'_>, mut freed: FreedBytes) -> u64 {
     walk_files(root, ctx, &mut |path, meta| freed.add_file(path, meta));
-    let (bytes, upper_bound) = freed.finish();
+    let (bytes, upper_bound, shared) = freed.finish_shared();
     if upper_bound {
         ctx.note_size_upper_bound(root);
+    }
+    if !shared.is_empty() {
+        ctx.note_shared_blocks(root, shared);
     }
     bytes
 }
@@ -275,6 +291,17 @@ fn visit_files(
 /// entries go through `fs::remove_file`; directories are removed bottom-up
 /// via `fs::remove_dir`. Never calls `fs::remove_dir_all`.
 pub fn remove_recursive_safe(root: &Path) -> std::io::Result<()> {
+    remove_tree(root, false)
+}
+
+/// `remove_recursive_safe` that also never enters a directory on another
+/// device than `root` (a volume mounted inside it). Such a directory stays,
+/// so removing `root` fails instead of reaching into another volume.
+pub fn remove_recursive_one_device(root: &Path) -> std::io::Result<()> {
+    remove_tree(root, true)
+}
+
+fn remove_tree(root: &Path, one_device: bool) -> std::io::Result<()> {
     let meta = match fs::symlink_metadata(root) {
         Ok(m) => m,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
@@ -287,11 +314,11 @@ pub fn remove_recursive_safe(root: &Path) -> std::io::Result<()> {
     if !ft.is_dir() {
         return Ok(());
     }
-    remove_dir_contents(root)?;
+    remove_dir_contents(root, one_device.then_some(meta.dev()))?;
     fs::remove_dir(root)
 }
 
-fn remove_dir_contents(dir: &Path) -> std::io::Result<()> {
+fn remove_dir_contents(dir: &Path, device: Option<u64>) -> std::io::Result<()> {
     let entries = fs::read_dir(dir)?;
     for entry in entries.flatten() {
         let path = entry.path();
@@ -302,12 +329,28 @@ fn remove_dir_contents(dir: &Path) -> std::io::Result<()> {
         let ft = meta.file_type();
         if ft.is_symlink() || ft.is_file() {
             let _ = fs::remove_file(&path);
-        } else if ft.is_dir() {
-            remove_dir_contents(&path)?;
+        } else if ft.is_dir() && device.is_none_or(|dev| dev == meta.dev()) {
+            remove_dir_contents(&path, device)?;
             let _ = fs::remove_dir(&path);
         }
     }
     Ok(())
+}
+
+/// The desktop's permanent deletion, a seam so tests can make it fail.
+pub trait Delete: Send + Sync {
+    /// Deletes `path` and everything in it for good. On `Err`, part of it
+    /// may already be gone.
+    fn delete(&self, path: &Path) -> std::io::Result<()>;
+}
+
+/// The real route: `remove_recursive_one_device`.
+pub struct SafeDelete;
+
+impl Delete for SafeDelete {
+    fn delete(&self, path: &Path) -> std::io::Result<()> {
+        remove_recursive_one_device(path)
+    }
 }
 
 #[cfg(test)]
@@ -370,6 +413,22 @@ mod tests {
         assert!(outside.exists(), "symlink target must NOT be deleted");
         assert!(outside.join("keep").exists());
 
+        let _ = remove_recursive_safe(&outside);
+    }
+
+    #[test]
+    fn permanent_deletion_removes_the_tree_and_never_follows_symlinks() {
+        let outside = tempdir("delete-outside");
+        write_file(&outside.join("keep"), b"keep me");
+        let item = tempdir("delete-item");
+        fs::create_dir(item.join("sub")).unwrap();
+        write_file(&item.join("sub/file"), b"x");
+        std::os::unix::fs::symlink(&outside, item.join("sub/link")).unwrap();
+
+        SafeDelete.delete(&item).unwrap();
+
+        assert!(fs::symlink_metadata(&item).is_err(), "the item is gone");
+        assert!(outside.join("keep").exists(), "the link target stays");
         let _ = remove_recursive_safe(&outside);
     }
 
@@ -522,6 +581,26 @@ mod tests {
             ctx.take_findings().size_upper_bound.is_empty(),
             "APFS answered"
         );
+        let _ = remove_recursive_safe(&dir);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn a_clone_family_split_between_two_items_counts_once_in_their_union() {
+        use super::super::freed_size::union_bytes;
+        let dir = tempdir("split-clones");
+        for item in ["a", "b"] {
+            fs::create_dir(dir.join(item)).unwrap();
+        }
+        write_file(&dir.join("a/original"), &[7u8; 300_000]);
+        clone_file(&dir.join("a/original"), &dir.join("b/copy"));
+        let ctx = ScanContext::unchecked();
+        assert_eq!(dir_size_checked(&dir.join("a"), &ctx), 0);
+        assert_eq!(dir_size_checked(&dir.join("b"), &ctx), 0);
+        let shared = ctx.take_findings().shared;
+        let once = allocated(&dir.join("a/original"));
+        assert_eq!(union_bytes([&shared[&dir.join("a")]]), (0, false));
+        assert_eq!(union_bytes(shared.values()), (once, false));
         let _ = remove_recursive_safe(&dir);
     }
 

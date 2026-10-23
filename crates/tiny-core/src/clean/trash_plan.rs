@@ -1,9 +1,12 @@
-//! A reviewed selection of discovered paths for the desktop's Move to Trash:
-//! what each path looked like at discovery, and which selected paths overlap.
+//! A reviewed selection of discovered paths for the desktop's checked
+//! cleanup: what each path looked like at discovery, how it will be removed,
+//! and which selected paths overlap.
 
 use std::path::{Path, PathBuf};
 
+use super::freed_size::{union_bytes, SharedBlocks};
 use super::fs_safe::PathFingerprint;
+use super::providers::{category_section, Section};
 use super::types::CleanItem;
 
 /// One selected path with the trusted discovery-time data execution checks
@@ -19,6 +22,67 @@ pub struct PlannedItem {
     /// it). Moving this item moves them too, so their providers' guards and
     /// app gates apply as well.
     pub covers: Vec<CleanItem>,
+    /// How execution removes the path, fixed when the selection is reviewed.
+    pub removal: Removal,
+    /// `item.size` counts blocks the volume could not show as unshared.
+    pub size_is_upper_bound: bool,
+    /// Blocks the item shares with files outside it, for totals over
+    /// several items ([`freed_together`]).
+    pub shared: SharedBlocks,
+}
+
+/// How the desktop removes one planned path.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Removal {
+    /// Through Finder, so Put Back works.
+    #[default]
+    MoveToTrash,
+    /// For good, through `fs_safe`'s guarded removal.
+    Delete,
+    /// Finder's Empty Trash: only the `trash` row (`desktop_empties_trash`).
+    EmptyTrash,
+}
+
+/// The app's setting for what comes back on its own (OC1). `Trash` is how
+/// the app always cleaned before the setting existed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum DeleteMode {
+    #[default]
+    Trash,
+    Permanent,
+}
+
+/// `Delete` when `mode` is permanent and the item, and everything it would
+/// carry along, sits in Rebuilt automatically or Project build output;
+/// otherwise `MoveToTrash`, so Your files and unregistered categories always
+/// go to the Trash (OC1, OC2). Merging never widens: a cache folder holding
+/// a path that only goes to the Trash goes to the Trash with it. The Trash
+/// row's `EmptyTrash` comes from its provider, not from here.
+pub fn removal_for(item: &CleanItem, covers: &[CleanItem], mode: DeleteMode) -> Removal {
+    let rebuilt = |item: &CleanItem| {
+        matches!(
+            category_section(&item.category_id),
+            Some(Section::Rebuilt | Section::BuildOutput)
+        )
+    };
+    if mode == DeleteMode::Permanent && std::iter::once(item).chain(covers).all(rebuilt) {
+        Removal::Delete
+    } else {
+        Removal::MoveToTrash
+    }
+}
+
+/// The bytes removing `items` together frees: their sizes, plus the blocks
+/// they share only with each other, counted once. True when that is only an
+/// upper bound. The items must not overlap (`partition_overlaps`).
+pub fn freed_together<'a>(items: impl IntoIterator<Item = &'a PlannedItem>) -> (u64, bool) {
+    let items: Vec<&PlannedItem> = items.into_iter().collect();
+    let sizes = items
+        .iter()
+        .fold(0u64, |sum, planned| sum.saturating_add(planned.item.size));
+    let (shared, upper_bound) = union_bytes(items.iter().map(|planned| &planned.shared));
+    let upper_bound = upper_bound || items.iter().any(|planned| planned.size_is_upper_bound);
+    (sizes.saturating_add(shared), upper_bound)
 }
 
 /// Why `path` must never be cleaned, or `None`. The file-system root, the

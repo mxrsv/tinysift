@@ -22,6 +22,11 @@ pub struct FfiCleanOptions {
     /// git too). The CLI never sets it.
     #[uniffi(default = false)]
     pub all_build_output: bool,
+    /// Also scan the user's Trash (`trash`) and offer it as a row that an
+    /// explicit selection empties for good (`FfiDesktopAction::EmptyTrash`).
+    /// Other Destructive categories stay report only.
+    #[uniffi(default = false)]
+    pub include_trash: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -50,11 +55,16 @@ pub enum FfiCategoryStatus {
 /// What the desktop may do with a category's candidates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum FfiDesktopAction {
+    /// The app may act on the candidates: a preview moves them to the Trash
+    /// or, with `FfiDeleteMode::Permanent`, deletes Rebuilt automatically
+    /// and Project build output for good.
     MoveToTrash,
+    /// The Trash row (`include_trash` only): a selected row is emptied for
+    /// good through Finder, in either delete mode. Never preselected
+    /// (Destructive).
+    EmptyTrash,
     /// Shown for information; the app does not act on it (`reason` says why).
-    ReportOnly {
-        reason: FfiReportOnlyReason,
-    },
+    ReportOnly { reason: FfiReportOnlyReason },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -215,6 +225,10 @@ pub struct FfiPreviewItem {
     /// Other discovered candidates at this path or inside it, selected or
     /// not, sorted by path. Moving this item moves them too.
     pub covers: Vec<FfiCoveredCandidate>,
+    /// Removed for good: deleted, or the Trash row emptied. False means
+    /// moved to the Trash.
+    #[uniffi(default = false)]
+    pub permanent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -256,6 +270,19 @@ pub struct FfiPreview {
     /// Sum of `items` sizes as measured at discovery. Not freed space.
     pub bytes_selected: u64,
     pub expires_in_seconds: u64,
+    /// What the `permanent` items free together: their sizes, plus blocks
+    /// they share only with each other (hard links, APFS clones) counted
+    /// once. Report-only candidates are never in a preview.
+    #[uniffi(default = 0)]
+    pub bytes_to_free: u64,
+    /// `bytes_to_free` counts blocks the volume could not show as unshared
+    /// ("up to").
+    #[uniffi(default = false)]
+    pub bytes_to_free_is_upper_bound: bool,
+    /// Sum of the sizes of the items moved to the Trash, which frees nothing
+    /// until the Trash is emptied.
+    #[uniffi(default = 0)]
+    pub bytes_to_trash: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -357,6 +384,7 @@ impl From<FfiCleanOptions> for CleanOptions {
             include_destructive: options.include_destructive,
             idle_days: options.idle_days,
             all_build_output: options.all_build_output,
+            include_trash: options.include_trash,
         }
     }
 }
@@ -470,11 +498,16 @@ impl From<ItemOutcome> for FfiItemOutcome {
                 Self::Skipped { reason, detail }
             }
             ItemOutcome::NotAttempted => Self::NotAttempted,
+            // `clean_execute` refuses a preview that removes anything for
+            // good, and uninstall only moves to the Trash.
+            ItemOutcome::Deleted | ItemOutcome::TrashEmptied | ItemOutcome::DeleteFailed { .. } => {
+                unreachable!("a Trash-only run reported a permanent removal")
+            }
         }
     }
 }
 
-fn skip_reason(reason: SkipReason) -> (FfiSkipReason, Option<String>) {
+pub(super) fn skip_reason(reason: SkipReason) -> (FfiSkipReason, Option<String>) {
     match reason {
         SkipReason::ReportOnly => (FfiSkipReason::ReportOnly, None),
         SkipReason::UnknownCategory => (FfiSkipReason::UnknownCategory, None),

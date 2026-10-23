@@ -37,6 +37,11 @@ pub struct CleanOptions {
     /// never does.
     #[serde(default)]
     pub all_build_output: bool,
+
+    /// Scan the user's Trash (`trash`) even without `include_destructive`,
+    /// so the desktop can offer emptying it. The CLI never sets it.
+    #[serde(default)]
+    pub include_trash: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -68,6 +73,7 @@ impl Default for CleanOptions {
             include_destructive: false,
             idle_days: 30,
             all_build_output: false,
+            include_trash: false,
         }
     }
 }

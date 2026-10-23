@@ -1,6 +1,8 @@
-//! The desktop's Move to Trash: each planned path is revalidated right
-//! before it is moved, and every path gets its own outcome. It never calls
-//! `CleanProvider::execute`, so no provider command runs from here.
+//! The desktop's cleanup: each planned path is revalidated right before it
+//! is moved to the Trash, deleted for good or, for the Trash row, emptied,
+//! as its plan says (`Removal`), and every path gets its own outcome. No
+//! failure is retried another way. It never calls `CleanProvider::execute`,
+//! so no provider command runs from here.
 //!
 //! The run holds the [`StoreLease`] of the saved "always keep" rules. Before
 //! each move it re-reads them: a policy that changed or cannot be read stops
@@ -15,12 +17,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::finder_trash::{Trash, TrashError};
-use super::fs_safe::PathFingerprint;
+use super::fs_safe::{Delete, PathFingerprint};
 use super::process::AppProbe;
 use super::protection::{Evaluation, Matcher, Relation, INTERNAL_ID_PREFIX};
 use super::protection_store::{StoreError, StoreLease};
 use super::providers::{desktop_report_only, CleanProvider};
-use super::trash_plan::{inside_system, protected_reason, PlannedItem};
+use super::trash_plan::{
+    freed_together, inside_system, protected_reason, removal_for, DeleteMode, PlannedItem, Removal,
+};
 use super::types::CleanItem;
 
 /// Why a path was not moved even though it was planned.
@@ -64,14 +68,32 @@ pub enum SkipReason {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ItemOutcome {
     MovedToTrash,
-    /// Trash refused the path. `source_present` is re-checked afterwards.
+    /// Deleted for good (`Removal::Delete`).
+    Deleted,
+    /// Finder emptied the Trash (`Removal::EmptyTrash`).
+    TrashEmptied,
+    /// Finder refused to move the path or to empty the Trash.
+    /// `source_present` is re-checked afterwards.
     Failed {
         error: TrashError,
+        source_present: bool,
+    },
+    /// Permanent deletion failed; part of the path may be gone. Nothing else
+    /// is tried: no Trash, no other route.
+    DeleteFailed {
+        detail: String,
         source_present: bool,
     },
     Skipped(SkipReason),
     /// Execution stopped before this path.
     NotAttempted,
+}
+
+impl ItemOutcome {
+    /// Deleted, or the Trash emptied: the item's bytes are free now.
+    pub fn frees_space(&self) -> bool {
+        matches!(self, Self::Deleted | Self::TrashEmptied)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -95,6 +117,11 @@ pub struct CheckedExecReport {
     /// One entry per planned item, in plan order.
     pub results: Vec<ItemResult>,
     pub stopped: Option<StopReason>,
+    /// What the deleted items and the emptied Trash freed, blocks shared
+    /// between them counted once (`freed_together`).
+    pub bytes_freed: u64,
+    /// `bytes_freed` counts blocks the volume could not show as unshared.
+    pub freed_is_upper_bound: bool,
 }
 
 impl CheckedExecReport {
@@ -132,6 +159,8 @@ pub struct ExecContext<'a> {
     pub home: Option<&'a Path>,
     pub probe: &'a dyn AppProbe,
     pub trash: &'a dyn Trash,
+    /// Permanent deletion, for items planned as `Removal::Delete`.
+    pub delete: &'a dyn Delete,
     pub cancel: Option<&'a AtomicBool>,
     pub progress: crate::progress::ProgressCallback<'a>,
     /// The saved rules, locked for the whole run. There is no way to run
@@ -145,35 +174,64 @@ impl ExecContext<'_> {
     }
 }
 
-/// Moves each planned path to Trash after `validate` passes for it. Stops
-/// on cancellation, an Automation denial or a change in the saved rules; the
-/// remaining paths are reported as not attempted.
+/// Removes each planned path as planned after `validate` passes for it.
+/// Permanent removals run first, so emptying the Trash never takes what
+/// this run moves there; results stay in plan order. Stops on cancellation,
+/// an Automation denial or a change in the saved rules; the remaining paths
+/// are reported as not attempted.
 pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedExecReport {
     let total = plan.len() as u64;
-    let mut report = CheckedExecReport::default();
-    for (index, planned) in plan.iter().enumerate() {
-        let outcome = match report.stopped {
-            Some(_) => ItemOutcome::NotAttempted,
-            None => {
-                crate::progress::report(
-                    ctx.progress,
-                    "trash",
-                    index as u64,
-                    Some(total),
-                    &planned.item.path.to_string_lossy(),
-                );
-                act_on(planned, ctx, &mut report.stopped)
-            }
-        };
-        report.results.push(ItemResult {
-            item: planned.item.clone(),
-            outcome,
-        });
+    let mut stopped = None;
+    let mut outcomes = vec![ItemOutcome::NotAttempted; plan.len()];
+    for (step, index) in execution_order(plan).into_iter().enumerate() {
+        if stopped.is_some() {
+            break;
+        }
+        let planned = &plan[index];
+        crate::progress::report(
+            ctx.progress,
+            "trash",
+            step as u64,
+            Some(total),
+            &planned.item.path.to_string_lossy(),
+        );
+        outcomes[index] = act_on(planned, ctx, &mut stopped);
     }
-    if report.stopped.is_none() {
+    if stopped.is_none() {
         crate::progress::report(ctx.progress, "trash", total, Some(total), "Done");
     }
-    report
+    let (bytes_freed, freed_is_upper_bound) = freed_together(
+        plan.iter()
+            .zip(&outcomes)
+            .filter(|(_, outcome)| outcome.frees_space())
+            .map(|(planned, _)| planned),
+    );
+    let results = plan
+        .iter()
+        .zip(outcomes)
+        .map(|(planned, outcome)| ItemResult {
+            item: planned.item.clone(),
+            outcome,
+        })
+        .collect();
+    CheckedExecReport {
+        results,
+        stopped,
+        bytes_freed,
+        freed_is_upper_bound,
+    }
+}
+
+/// Plan indexes in run order: deletions, then emptying the Trash, then
+/// moves to the Trash, each in plan order.
+fn execution_order(plan: &[PlannedItem]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..plan.len()).collect();
+    order.sort_by_key(|&index| match plan[index].removal {
+        Removal::Delete => 0,
+        Removal::EmptyTrash => 1,
+        Removal::MoveToTrash => 2,
+    });
+    order
 }
 
 fn act_on(
@@ -207,18 +265,32 @@ fn act_on(
         return stop(StopReason::Cancelled);
     }
     let path = &planned.item.path;
-    match ctx.trash.move_to_trash(path) {
-        Ok(()) => ItemOutcome::MovedToTrash,
-        Err(error) => {
-            if matches!(error, TrashError::AutomationDenied(_)) {
-                *stopped = Some(StopReason::AutomationDenied);
-            }
-            ItemOutcome::Failed {
-                error,
-                source_present: fs::symlink_metadata(path).is_ok(),
-            }
+    // One route per item: a failure is reported, never retried another way.
+    let finder = match planned.removal {
+        Removal::MoveToTrash => ctx
+            .trash
+            .move_to_trash(path)
+            .map(|()| ItemOutcome::MovedToTrash),
+        Removal::EmptyTrash => ctx.trash.empty_trash().map(|()| ItemOutcome::TrashEmptied),
+        Removal::Delete => {
+            return ctx.delete.delete(path).map_or_else(
+                |error| ItemOutcome::DeleteFailed {
+                    detail: error.to_string(),
+                    source_present: fs::symlink_metadata(path).is_ok(),
+                },
+                |()| ItemOutcome::Deleted,
+            )
         }
-    }
+    };
+    finder.unwrap_or_else(|error| {
+        if matches!(error, TrashError::AutomationDenied(_)) {
+            *stopped = Some(StopReason::AutomationDenied);
+        }
+        ItemOutcome::Failed {
+            error,
+            source_present: fs::symlink_metadata(path).is_ok(),
+        }
+    })
 }
 
 /// The stored rules are still exactly the ones this run holds.
@@ -268,13 +340,15 @@ fn skip_for(policy: &StoreLease<'_>, evaluation: &Evaluation) -> SkipReason {
     SkipReason::KeepUncertain(doubt.unwrap_or_else(|| "the rules could not be applied".into()))
 }
 
-/// The per-item validator, run immediately before each move. A path inside
-/// `/System` is refused outright. The saved rules come next (cheap, and the
-/// user's explicit choice); then slow checks come
-/// before the path checks so those sit right before the move: provider
-/// eligibility, the running-app probe, the providers' guards, then
-/// `symlink_metadata`, fingerprint, volume, root containment and protected
-/// paths. Guards and app gates of every item merged into this one apply too.
+/// The per-item validator, run immediately before each removal. A path
+/// inside `/System` is refused outright. The saved rules come next (cheap,
+/// and the user's explicit choice); then slow checks come
+/// before the path checks so those sit right before the removal: provider
+/// eligibility for the planned removal, the running-app probe, the
+/// providers' guards, then `symlink_metadata`, fingerprint (with the listing
+/// for the Trash row), volume, root containment and protected paths. Guards
+/// and app gates of every item merged into this one apply too, in every
+/// removal mode.
 pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), SkipReason> {
     let item = &planned.item;
     if inside_system(&item.path) {
@@ -309,7 +383,11 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
     if meta.file_type().is_symlink() {
         return Err(SkipReason::Symlink);
     }
-    if PathFingerprint::of(&meta) != planned.fingerprint {
+    let fingerprint = match planned.removal {
+        Removal::EmptyTrash => PathFingerprint::of_listing(&meta),
+        Removal::MoveToTrash | Removal::Delete => PathFingerprint::of(&meta),
+    };
+    if fingerprint != planned.fingerprint {
         return Err(SkipReason::Changed);
     }
     if meta.dev() != home_device(ctx.home)? {
@@ -338,25 +416,41 @@ pub(crate) fn home_device(home: Option<&Path>) -> Result<u64, SkipReason> {
 }
 
 /// The item and every item merged into it, each with its provider. Any
-/// unknown or report-only provider refuses the whole move.
+/// unknown or report-only provider refuses the whole removal; only the Trash
+/// row's own provider may empty the Trash, and nothing else. A deletion
+/// needs every one of them in Rebuilt automatically or Project build output
+/// (`removal_for`), so a plan never deletes what only goes to the Trash.
 fn gated_items<'a>(
     planned: &'a PlannedItem,
     ctx: &'a ExecContext<'_>,
 ) -> Result<Vec<(&'a dyn CleanProvider, &'a Path)>, SkipReason> {
-    std::iter::once(&planned.item)
+    let gated = std::iter::once(&planned.item)
         .chain(&planned.covers)
-        .map(|item| {
+        .enumerate()
+        .map(|(index, item)| {
             let provider = ctx
                 .providers
                 .iter()
                 .find(|p| p.id() == item.category_id)
                 .ok_or(SkipReason::UnknownCategory)?;
-            if desktop_report_only(provider.as_ref()).is_some() {
+            let allowed = match planned.removal {
+                Removal::EmptyTrash if index == 0 => provider.desktop_empties_trash(),
+                _ => desktop_report_only(provider.as_ref()).is_none(),
+            };
+            if !allowed {
                 return Err(SkipReason::ReportOnly);
             }
             Ok((provider.as_ref(), item.path.as_path()))
         })
-        .collect()
+        .collect::<Result<Vec<_>, _>>()?;
+    if planned.removal == Removal::Delete
+        && removal_for(&planned.item, &planned.covers, DeleteMode::Permanent) != Removal::Delete
+    {
+        return Err(SkipReason::ProviderGuard(
+            "only the Trash may take it".into(),
+        ));
+    }
+    Ok(gated)
 }
 
 /// `path` is `root` or below it, and every parent up to the filesystem root

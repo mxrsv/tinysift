@@ -1,12 +1,13 @@
 //! Shared fixtures for the cleanup tests: temp dirs, an injected provider and
-//! probe, a fake `Trash` and a session whose saved-rules store is a temp dir.
-//! Nothing here touches Finder, `osascript` or the real Application Support.
+//! probe, a fake `Trash` and deletion, and a session whose saved-rules store
+//! is a temp dir. Nothing here touches Finder, `osascript` or the real
+//! Application Support.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
-use tiny_core::clean::finder_trash::TrashError;
-use tiny_core::clean::fs_safe::{dir_size_checked, list_children};
+use tiny_core::clean::finder_trash::{Trash, TrashError};
+use tiny_core::clean::fs_safe::{dir_size_checked, list_children, Delete};
 use tiny_core::clean::types::{ExecAction, ExecReport, RiskLevel};
 use tiny_core::error::Result as CoreResult;
 
@@ -77,6 +78,8 @@ pub(super) struct Fixture {
     pub(super) desktop: bool,
     pub(super) app: Option<&'static str>,
     pub(super) extra: Vec<PathBuf>,
+    /// Like `trash`: the app may empty it when it asks for the row.
+    pub(super) empties_trash: bool,
 }
 
 impl Fixture {
@@ -88,6 +91,7 @@ impl Fixture {
             desktop: true,
             app: None,
             extra: Vec::new(),
+            empties_trash: false,
         }
     }
 }
@@ -133,6 +137,9 @@ impl CleanProvider for Fixture {
     fn desktop_trash_paths(&self) -> bool {
         self.desktop
     }
+    fn desktop_empties_trash(&self) -> bool {
+        self.empties_trash
+    }
 }
 
 /// No app is running.
@@ -153,14 +160,33 @@ impl ProgressListener for Progress {
     }
 }
 
-/// Records moves in memory and deletes nothing. `deny` answers like a
-/// Finder Automation denial; `fail_on` fails one path; `panic_on` panics.
+/// Records moves, Empty Trash and deletions in memory and changes nothing.
+/// `deny` answers like a Finder Automation denial; `fail_on` fails one move,
+/// `fail_delete_on` one deletion; `panic_on` panics. `steps` keeps every
+/// call in order ("trash a", "empty", "delete b").
 #[derive(Default)]
 pub(super) struct FakeTrash {
     pub(super) moved: Mutex<Vec<PathBuf>>,
+    pub(super) steps: Mutex<Vec<String>>,
     pub(super) deny: bool,
     pub(super) fail_on: Option<&'static str>,
+    pub(super) fail_delete_on: Option<&'static str>,
     pub(super) panic_on: Option<&'static str>,
+}
+
+impl FakeTrash {
+    pub(super) fn steps(&self) -> Vec<String> {
+        self.steps.lock().unwrap().clone()
+    }
+
+    fn step(&self, action: &str, path: Option<&Path>) {
+        let name = path.and_then(Path::file_name).map(|n| n.to_string_lossy());
+        let step = match name {
+            Some(name) => format!("{action} {name}"),
+            None => action.to_string(),
+        };
+        self.steps.lock().unwrap().push(step);
+    }
 }
 
 impl Trash for FakeTrash {
@@ -175,6 +201,25 @@ impl Trash for FakeTrash {
             return Err(TrashError::Failed("Finder error".into()));
         }
         self.moved.lock().unwrap().push(path.to_path_buf());
+        self.step("trash", Some(path));
+        Ok(())
+    }
+
+    fn empty_trash(&self) -> std::result::Result<(), TrashError> {
+        if self.deny {
+            return Err(TrashError::AutomationDenied("(-1743)".into()));
+        }
+        self.step("empty", None);
+        Ok(())
+    }
+}
+
+impl Delete for FakeTrash {
+    fn delete(&self, path: &Path) -> std::io::Result<()> {
+        if self.fail_delete_on.is_some_and(|name| path.ends_with(name)) {
+            return Err(std::io::Error::other("busy"));
+        }
+        self.step("delete", Some(path));
         Ok(())
     }
 }
@@ -211,8 +256,16 @@ pub(super) fn discover(
     session: &TinySession,
     providers: &[Box<dyn CleanProvider>],
 ) -> Result<FfiDiscovery, FfiError> {
+    discover_with(session, providers, CleanOptions::default())
+}
+
+pub(super) fn discover_with(
+    session: &TinySession,
+    providers: &[Box<dyn CleanProvider>],
+    options: CleanOptions,
+) -> Result<FfiDiscovery, FfiError> {
     session.discover_clean(
-        CleanOptions::default(),
+        options,
         providers,
         &NotRunning,
         &CancellationToken::default(),

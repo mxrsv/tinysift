@@ -12,6 +12,8 @@ const FINDER_DELETE_SCRIPT: &str = "on run argv\n\
      tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)\n\
      end run";
 
+const FINDER_EMPTY_SCRIPT: &str = "tell application \"Finder\" to empty trash";
+
 /// Absolute so a Finder-launched app does not depend on its minimal `PATH`.
 const OSASCRIPT: &str = "/usr/bin/osascript";
 
@@ -33,6 +35,13 @@ pub enum TrashError {
 pub trait Trash: Send + Sync {
     /// Moves `path` to the user's Trash. On `Err` the source is left as is.
     fn move_to_trash(&self, path: &Path) -> Result<(), TrashError>;
+
+    /// Empties the user's Trash for good. A route that cannot refuses.
+    fn empty_trash(&self) -> Result<(), TrashError> {
+        Err(TrashError::Failed(
+            "this Trash route cannot empty the Trash".into(),
+        ))
+    }
 }
 
 /// The default route: Finder via `osascript`.
@@ -50,6 +59,18 @@ impl Trash for FinderTrash {
                 &["-e", FINDER_DELETE_SCRIPT, posix],
                 TRASH_TIMEOUT,
             )
+            .map_err(|e| TrashError::Failed(e.to_string()))?;
+        if outcome.success() {
+            return Ok(());
+        }
+        Err(classify_failure(outcome.stderr.trim()))
+    }
+
+    /// Finder's Empty Trash, which also empties the Trash folders of other
+    /// volumes; it needs the same Automation permission as a move.
+    fn empty_trash(&self) -> Result<(), TrashError> {
+        let outcome = RealRunner
+            .output(OSASCRIPT, &["-e", FINDER_EMPTY_SCRIPT], TRASH_TIMEOUT)
             .map_err(|e| TrashError::Failed(e.to_string()))?;
         if outcome.success() {
             return Ok(());

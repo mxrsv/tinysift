@@ -18,6 +18,10 @@
 //!
 //! No attribute shows whether a clone family wholly inside the item still
 //! shares blocks with an edited clone elsewhere; such a size is too high.
+//!
+//! A link or clone family split between two items counts in neither. Each
+//! item keeps it as [`SharedBlocks`], so items removed together count it
+//! once when they hold every link or member between them ([`union_bytes`]).
 
 use std::collections::HashMap;
 use std::fs;
@@ -41,7 +45,7 @@ pub(crate) enum Sharing {
 }
 
 /// What the size rule needs to know about one regular file.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct FileFacts {
     pub dev: u64,
     pub ino: u64,
@@ -50,11 +54,88 @@ pub(crate) struct FileFacts {
     pub sharing: Sharing,
 }
 
-#[derive(Default)]
+/// What a walk saw of one clone family.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 struct Family {
     allocated: u64,
     members: u64,
     seen: u64,
+}
+
+impl Family {
+    fn merge(&mut self, other: &Family) {
+        self.allocated = self.allocated.max(other.allocated);
+        self.members = self.members.max(other.members);
+        self.seen += other.seen;
+    }
+}
+
+/// An inode as `(device, inode)` or a clone family as `(device, clone ID)`.
+type Key = (u64, u64);
+
+/// Blocks an item shares with files outside it, which its own size leaves
+/// out: hard-linked inodes with a link elsewhere and clone families with a
+/// member elsewhere. Items removed together free them once they hold every
+/// link and member between them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SharedBlocks {
+    /// Per inode: the links inside the item and the inode's facts.
+    links: Vec<(Key, (u64, FileFacts))>,
+    /// Per clone family: what the item holds of it.
+    families: Vec<(Key, Family)>,
+}
+
+impl SharedBlocks {
+    pub fn is_empty(&self) -> bool {
+        self.links.is_empty() && self.families.is_empty()
+    }
+
+    /// Keeps only what some of `items` together could free: an inode or a
+    /// family whose every link or member lies in them. The rest can never be
+    /// completed by a selection of these items, so it need not be kept.
+    pub fn retain_completable(items: &mut [&mut SharedBlocks]) {
+        let mut links: HashMap<Key, (u64, FileFacts)> = HashMap::new();
+        let mut families: HashMap<Key, Family> = HashMap::new();
+        for item in items.iter() {
+            for (key, (seen, file)) in &item.links {
+                links.entry(*key).or_insert((0, *file)).0 += seen;
+            }
+            for (key, family) in &item.families {
+                families.entry(*key).or_default().merge(family);
+            }
+        }
+        links.retain(|_, (seen, file)| *seen >= file.nlink);
+        // A hard-linked clone joins its family once every link is in.
+        for (_, file) in links.values() {
+            if let Sharing::Clone { id, members } = file.sharing {
+                let member = Family {
+                    allocated: file.allocated,
+                    members,
+                    seen: 1,
+                };
+                families.entry((file.dev, id)).or_default().merge(&member);
+            }
+        }
+        families.retain(|_, family| family.seen >= family.members);
+        for item in items.iter_mut() {
+            item.links.retain(|(key, _)| links.contains_key(key));
+            item.families.retain(|(key, _)| families.contains_key(key));
+        }
+    }
+}
+
+/// What the shared blocks of several items free beyond the items' own sizes
+/// when the items are removed together, and whether that is only an upper
+/// bound. The items must not overlap: a file walked twice would count as two
+/// of its links.
+pub fn union_bytes<'a>(shared: impl IntoIterator<Item = &'a SharedBlocks>) -> (u64, bool) {
+    // Only the facts already gathered are counted; nothing is queried.
+    let mut freed = FreedBytes::with_query(|_| Sharing::Unknown);
+    for blocks in shared {
+        freed.absorb(blocks);
+    }
+    let (bytes, upper_bound, _) = freed.finish_shared();
+    (bytes, upper_bound)
 }
 
 /// Accumulates the freed bytes of one item.
@@ -120,29 +201,60 @@ impl FreedBytes {
             Sharing::Unshared => file.allocated,
             Sharing::Partial { private } => private.min(file.allocated),
             Sharing::Clone { id, members } => {
-                let family = self.families.entry((file.dev, id)).or_default();
-                family.allocated = family.allocated.max(file.allocated);
-                family.members = family.members.max(members);
-                family.seen += 1;
+                let member = Family {
+                    allocated: file.allocated,
+                    members,
+                    seen: 1,
+                };
+                self.families
+                    .entry((file.dev, id))
+                    .or_default()
+                    .merge(&member);
                 0
             }
         };
         self.total = self.total.saturating_add(freed);
     }
 
+    /// Adds another item's shared blocks, as if its files were walked here.
+    fn absorb(&mut self, shared: &SharedBlocks) {
+        for (key, (seen, file)) in &shared.links {
+            self.linked.entry(*key).or_insert((0, *file)).0 += seen;
+        }
+        for (key, family) in &shared.families {
+            self.families.entry(*key).or_default().merge(family);
+        }
+    }
+
     /// The item's freed bytes, and whether that is only an upper bound.
-    pub(crate) fn finish(mut self) -> (u64, bool) {
-        for (seen, file) in std::mem::take(&mut self.linked).into_values() {
+    #[cfg(test)]
+    pub(crate) fn finish(self) -> (u64, bool) {
+        let (bytes, upper_bound, _) = self.finish_shared();
+        (bytes, upper_bound)
+    }
+
+    /// `finish`, plus the blocks the item shares with files outside it.
+    pub(crate) fn finish_shared(mut self) -> (u64, bool, SharedBlocks) {
+        let mut shared = SharedBlocks::default();
+        for (key, (seen, file)) in std::mem::take(&mut self.linked) {
             if seen >= file.nlink {
                 self.count(file);
+            } else {
+                shared.links.push((key, (seen, file)));
             }
         }
-        let families = self
-            .families
-            .values()
-            .filter(|family| family.seen >= family.members)
-            .fold(0u64, |sum, family| sum.saturating_add(family.allocated));
-        (self.total.saturating_add(families), self.upper_bound)
+        let mut total = self.total;
+        for (key, family) in self.families {
+            if family.seen >= family.members {
+                total = total.saturating_add(family.allocated);
+            } else {
+                shared.families.push((key, family));
+            }
+        }
+        // Stable order, so equal walks give equal values.
+        shared.links.sort_unstable_by_key(|(key, _)| *key);
+        shared.families.sort_unstable_by_key(|(key, _)| *key);
+        (total, self.upper_bound, shared)
     }
 }
 
@@ -408,6 +520,51 @@ mod tests {
             },
         );
         assert_eq!(measure(&[odd]), (3 * BLOCK, false), "never above allocated");
+    }
+
+    /// What an item made of `files` shares with files outside it.
+    fn shared(files: &[FileFacts]) -> SharedBlocks {
+        let mut freed = FreedBytes::default();
+        for file in files {
+            freed.add(*file);
+        }
+        freed.finish_shared().2
+    }
+
+    #[test]
+    fn a_link_or_family_split_between_items_counts_once_in_their_union() {
+        let linked = file(1, 2, Sharing::Unshared);
+        let (a, b) = (shared(&[linked]), shared(&[linked]));
+        assert_eq!(union_bytes([&a]), (0, false), "one item alone");
+        assert_eq!(union_bytes([&a, &b]), (3 * BLOCK, false), "once");
+
+        let member = |ino| file(ino, 1, Sharing::Clone { id: 7, members: 3 });
+        let (a, b) = (shared(&[member(1), member(2)]), shared(&[member(3)]));
+        assert_eq!(union_bytes([&a]), (0, false));
+        assert_eq!(union_bytes([&a, &b]), (3 * BLOCK, false));
+
+        // A clone with one link in each item joins its family only in the union.
+        let linked_clone = file(4, 2, Sharing::Clone { id: 8, members: 2 });
+        let other = file(5, 1, Sharing::Clone { id: 8, members: 2 });
+        let (a, b) = (shared(&[linked_clone, other]), shared(&[linked_clone]));
+        assert_eq!(union_bytes([&a, &b]), (3 * BLOCK, false));
+
+        let unknown = file(6, 2, Sharing::Unknown);
+        let (a, b) = (shared(&[unknown]), shared(&[unknown]));
+        assert_eq!(union_bytes([&a, &b]), (3 * BLOCK, true), "upper bound");
+    }
+
+    #[test]
+    fn only_what_the_items_could_complete_together_is_kept() {
+        let linked = file(1, 2, Sharing::Unshared);
+        let with_outside = file(2, 3, Sharing::Unshared);
+        let member = |ino| file(ino, 1, Sharing::Clone { id: 7, members: 3 });
+        let mut a = shared(&[linked, with_outside, member(3)]);
+        let mut b = shared(&[linked, with_outside, member(4)]);
+        SharedBlocks::retain_completable(&mut [&mut a, &mut b]);
+        assert_eq!(a, shared(&[linked]), "a third link or member is elsewhere");
+        assert_eq!(b, shared(&[linked]));
+        assert_eq!(union_bytes([&a, &b]), (3 * BLOCK, false));
     }
 
     #[test]

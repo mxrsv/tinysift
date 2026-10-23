@@ -13,6 +13,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use crate::engine_error;
 use crate::error::Result;
 
+use super::freed_size::SharedBlocks;
 use super::process::{AppProbe, PgrepChecker};
 
 /// Entries under one walked path that could not be read.
@@ -33,6 +34,9 @@ pub struct ScanFindings {
     /// Items whose size counts blocks the volume could not show as unshared,
     /// so deleting one may free less.
     pub size_upper_bound: BTreeSet<PathBuf>,
+    /// Blocks each item shares with files outside it, keyed like
+    /// `size_upper_bound`.
+    pub shared: BTreeMap<PathBuf, SharedBlocks>,
     /// Paths found but never offered because a safety check could not
     /// answer, with why.
     pub refused: BTreeMap<PathBuf, String>,
@@ -132,6 +136,13 @@ impl<'a> ScanContext<'a> {
             .borrow_mut()
             .size_upper_bound
             .insert(item.to_path_buf());
+    }
+
+    pub fn note_shared_blocks(&self, item: &Path, shared: SharedBlocks) {
+        self.findings
+            .borrow_mut()
+            .shared
+            .insert(item.to_path_buf(), shared);
     }
 
     pub fn add_root(&self, root: &Path) {

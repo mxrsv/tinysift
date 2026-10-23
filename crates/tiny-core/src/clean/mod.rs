@@ -2,7 +2,7 @@ pub mod checked_execute;
 pub mod discover;
 pub mod execute;
 pub mod finder_trash;
-mod freed_size;
+pub mod freed_size;
 pub mod fs_safe;
 pub mod process;
 pub mod protection;

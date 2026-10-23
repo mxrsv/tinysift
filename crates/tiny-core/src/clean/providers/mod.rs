@@ -229,6 +229,14 @@ pub trait CleanProvider {
         Ok(())
     }
 
+    /// True only for `trash`: when the app asks for its row
+    /// (`include_trash`), an explicitly selected row is emptied through
+    /// Finder (`Removal::EmptyTrash`). `desktop_report_only` still says
+    /// Destructive, so it is never moved or deleted path by path.
+    fn desktop_empties_trash(&self) -> bool {
+        false
+    }
+
     /// True when acting on the items needs administrator rights. The
     /// desktop only reports such a category (`desktop_report_only`) and the
     /// CLI, which never runs `sudo`, refuses its items before `execute`.
@@ -663,6 +671,8 @@ mod tests {
         // Destructive: `tmutil deletelocalsnapshots` and Empty Trash.
         ("time-machine-local", Some(ReportOnly::Destructive)),
         ("font-quicklook-caches", None),
+        // Never moved or deleted path by path; the app may empty it as a
+        // whole when it asks for the row (`desktop_empties_trash`).
         ("trash", Some(ReportOnly::Destructive)),
     ];
 
@@ -686,6 +696,19 @@ mod tests {
                 provider.id()
             );
         }
+    }
+
+    #[test]
+    fn only_the_trash_can_be_emptied_from_the_desktop() {
+        let runner: Arc<dyn CommandRunner> =
+            Arc::new(crate::runner::test_support::MockRunner::new());
+        let providers = all_providers_with(&crate::options::CleanOptions::default(), runner);
+        let emptied: Vec<&str> = providers
+            .iter()
+            .filter(|p| p.desktop_empties_trash())
+            .map(|p| p.id())
+            .collect();
+        assert_eq!(emptied, ["trash"]);
     }
 
     #[test]

@@ -26,6 +26,9 @@ impl CleanProvider for TrashProvider {
     fn risk(&self) -> RiskLevel {
         RiskLevel::Destructive
     }
+    fn desktop_empties_trash(&self) -> bool {
+        true
+    }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
         let h = match std::env::var_os("HOME").map(PathBuf::from) {
             Some(h) => h,
@@ -35,6 +38,8 @@ impl CleanProvider for TrashProvider {
         if !root.exists() {
             return Ok(Vec::new());
         }
+        // The desktop empties only a Trash discovery listed.
+        ctx.add_root(&root);
         let size = dir_size_checked(&root, ctx);
         Ok(vec![CleanItem {
             category_id: ID.to_string(),
