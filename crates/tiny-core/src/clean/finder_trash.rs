@@ -12,7 +12,20 @@ const FINDER_DELETE_SCRIPT: &str = "on run argv\n\
      tell application \"Finder\" to delete (POSIX file (item 1 of argv) as alias)\n\
      end run";
 
-const FINDER_EMPTY_SCRIPT: &str = "tell application \"Finder\" to empty trash";
+/// Without `with timeout`, AppleScript gives up on Finder after about two
+/// minutes (error -1712) while Finder keeps emptying, which would read as a
+/// failure with the space freed. Shorter than `TRASH_TIMEOUT`, so osascript
+/// answers before the runner kills it.
+const EMPTY_EVENT_TIMEOUT_SECS: u64 = 9 * 60;
+const _: () = assert!(EMPTY_EVENT_TIMEOUT_SECS < TRASH_TIMEOUT.as_secs());
+
+fn empty_script() -> String {
+    format!(
+        "with timeout of {EMPTY_EVENT_TIMEOUT_SECS} seconds\n\
+         \ttell application \"Finder\" to empty trash\n\
+         end timeout"
+    )
+}
 
 /// Absolute so a Finder-launched app does not depend on its minimal `PATH`.
 const OSASCRIPT: &str = "/usr/bin/osascript";
@@ -67,10 +80,11 @@ impl Trash for FinderTrash {
     }
 
     /// Finder's Empty Trash, which also empties the Trash folders of other
-    /// volumes; it needs the same Automation permission as a move.
+    /// volumes and anything put there while it waits for the Automation
+    /// prompt; it needs the same Automation permission as a move.
     fn empty_trash(&self) -> Result<(), TrashError> {
         let outcome = RealRunner
-            .output(OSASCRIPT, &["-e", FINDER_EMPTY_SCRIPT], TRASH_TIMEOUT)
+            .output(OSASCRIPT, &["-e", &empty_script()], TRASH_TIMEOUT)
             .map_err(|e| TrashError::Failed(e.to_string()))?;
         if outcome.success() {
             return Ok(());
@@ -124,6 +138,14 @@ mod tests {
             "execution error: Can’t get alias \"/Users/me/build-1743 (-1743) copy\". (-1728)";
         assert!(matches!(classify_failure(in_path), TrashError::Failed(_)));
         assert!(matches!(classify_failure("no code"), TrashError::Failed(_)));
+    }
+
+    #[test]
+    fn emptying_waits_for_finder_longer_than_applescripts_default_and_not_past_the_runner() {
+        let script = empty_script();
+        assert!(script.contains("with timeout of 540 seconds"), "{script}");
+        assert!(script.contains("empty trash") && script.ends_with("end timeout"));
+        assert!(Duration::from_secs(EMPTY_EVENT_TIMEOUT_SECS) > Duration::from_secs(120));
     }
 
     #[test]

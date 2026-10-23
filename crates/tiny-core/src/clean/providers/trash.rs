@@ -38,7 +38,8 @@ impl CleanProvider for TrashProvider {
         if !root.exists() {
             return Ok(Vec::new());
         }
-        // The desktop empties only a Trash discovery listed.
+        // The desktop empties only when discovery listed this Trash, but Finder
+        // empties every volume's Trash and whatever arrived since the listing.
         ctx.add_root(&root);
         let size = dir_size_checked(&root, ctx);
         Ok(vec![CleanItem {

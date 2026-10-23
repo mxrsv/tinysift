@@ -23,8 +23,10 @@ Things that are not obvious from reading one file.
 - **`category_family` panics** on an unknown id. Register a new category in every registry
   function and the `SECTIONS` test ([clean.md](clean.md#the-provider-registry)).
 - **Finder's Empty Trash empties every volume's Trash**, but the Trash row counts and fingerprints
-  only `~/.Trash`, so the bytes it reports can be lower than what disappears
-  ([clean.md](clean.md#the-desktops-checked-removal)).
+  only `~/.Trash`, so the bytes it reports can be lower than what disappears, and it also takes
+  anything put there while Finder waits for the Automation prompt
+  ([clean.md](clean.md#the-desktops-checked-removal)). After a success, nothing re-measures the
+  Trash: a locked item Finder skips still counts as freed.
 - **A partial deletion is `Failed` and counts nothing.** `remove_tree` ignores child errors, so the
   reason often says only "Directory not empty"; re-check the path rather than trusting the count.
 - **A prune walks the cache twice** (measured before and after), and a failed prune may have

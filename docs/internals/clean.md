@@ -143,7 +143,11 @@ only goes to the Trash, never delete a tool's store, and never give a `needs_adm
 other removal. `execution_order` runs the administrator batch first, then `Delete`, tool commands,
 `EmptyTrash` and last `MoveToTrash`, so emptying the Trash never takes what the same run moved
 there. Results stay in plan order. Nothing is retried another way: a failed move is not deleted, a
-failed deletion is not moved or escalated.
+failed deletion is not moved or escalated. A failed `EmptyTrash` (a timeout included) skips every
+`MoveToTrash` after it with `SafetyCheckFailed`, because Finder may still be emptying and would take
+what the run moves in; an Automation denial stops the run as before. The empty script runs under
+`with timeout of 540 seconds`, below the runner's 600, since AppleScript's default two minutes would
+report a large Trash as failed while Finder keeps going.
 
 `clean_execute` keeps its old report and refuses a preview that removes anything for good
 (`InvalidInput`, unspent). `clean_remove` runs any preview and reports `FfiRemovalOutcome` per

@@ -219,9 +219,10 @@ impl ExecContext<'_> {
 /// Deletions as administrator run first, as one batch behind one
 /// authentication dialog, so cancelling it changes nothing. Other permanent
 /// removals come next, so emptying the Trash never takes what this run
-/// moves there; results stay in plan order. Stops on cancellation (of the
-/// run or the dialog), an Automation denial or a change in the saved rules;
-/// the remaining paths are reported as not attempted.
+/// moves there; if that emptying fails, Finder may still be at it, so the
+/// moves are skipped. Results stay in plan order. Stops on cancellation (of
+/// the run or the dialog), an Automation denial or a change in the saved
+/// rules; the remaining paths are reported as not attempted.
 pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedExecReport {
     let total = plan.len() as u64;
     let mut stopped = None;
@@ -230,13 +231,23 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
         .into_iter()
         .partition(|&index| plan[index].removal == Removal::DeleteAsAdministrator);
     delete_as_administrator(plan, &as_admin, ctx, &mut outcomes, &mut stopped);
+    // Finder may still be emptying after a failed or timed-out Empty Trash.
+    let mut emptying_failed = false;
     for (step, index) in others.into_iter().enumerate() {
         if stopped.is_some() {
             break;
         }
         let planned = &plan[index];
         ctx.report_step(as_admin.len() + step, total, &planned.item.path);
+        if emptying_failed && planned.removal == Removal::MoveToTrash {
+            outcomes[index] = ItemOutcome::Skipped(SkipReason::SafetyCheckFailed(
+                "the Trash was not emptied cleanly, so nothing is moved into it".into(),
+            ));
+            continue;
+        }
         outcomes[index] = act_on(planned, ctx, &mut stopped);
+        emptying_failed |= planned.removal == Removal::EmptyTrash
+            && matches!(outcomes[index], ItemOutcome::Failed { .. });
     }
     if stopped.is_none() {
         crate::progress::report(ctx.progress, "trash", total, Some(total), "Done");

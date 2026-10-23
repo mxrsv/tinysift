@@ -14,6 +14,8 @@ pub(super) struct Sinks {
     /// Shared, so a fake tool can log into the same sequence.
     pub(super) log: Arc<Mutex<Vec<String>>>,
     pub(super) fail_trash: Option<TrashError>,
+    /// Fails only Empty Trash; moves still work.
+    pub(super) fail_empty: Option<TrashError>,
     /// Fails with "permission denied", as a root-owned path would.
     pub(super) fail_delete: Option<&'static str>,
     pub(super) fail_elevate: Option<ElevatedError>,
@@ -45,7 +47,7 @@ impl Trash for Sinks {
     }
 
     fn empty_trash(&self) -> std::result::Result<(), TrashError> {
-        if let Some(error) = &self.fail_trash {
+        if let Some(error) = self.fail_empty.as_ref().or(self.fail_trash.as_ref()) {
             return Err(error.clone());
         }
         self.record("empty".into());
@@ -204,6 +206,70 @@ fn permanent_removals_run_before_any_move_to_the_trash() {
         "emptying the Trash never takes what this run moved there"
     );
     assert_eq!(report.bytes_freed, 8, "the deleted item and the Trash row");
+    let _ = remove_recursive_safe(&root);
+}
+
+#[test]
+fn a_failed_emptying_moves_nothing_into_the_trash_while_other_removals_go_on() {
+    let root = fixture_root("empty-fails", &["a", "c"]);
+    let plan = [
+        planned("downloads-old", &root, "c", Removal::MoveToTrash),
+        trash_row(&root),
+        planned("user-logs", &root, "a", Removal::Delete),
+    ];
+    let sinks = Sinks {
+        fail_empty: Some(TrashError::Failed("-1712 timed out".into())),
+        ..Default::default()
+    };
+    let report = run_sinks(&TempStore::new(), &plan, &MockChecker::none(), &sinks);
+    assert_eq!(
+        outcomes(&report),
+        vec![
+            ItemOutcome::Skipped(SkipReason::SafetyCheckFailed(
+                "the Trash was not emptied cleanly, so nothing is moved into it".into()
+            )),
+            ItemOutcome::Failed {
+                error: TrashError::Failed("-1712 timed out".into()),
+                source_present: true,
+            },
+            ItemOutcome::Deleted,
+        ]
+    );
+    assert_eq!(
+        sinks.log(),
+        ["delete a"],
+        "Finder may still be emptying: nothing goes into the Trash after it"
+    );
+    assert_eq!(report.bytes_freed, 4, "only the deleted item");
+    assert_eq!(
+        report.stopped, None,
+        "a failure other than a denial goes on"
+    );
+    assert!(root.join("c").exists());
+    let _ = remove_recursive_safe(&root);
+}
+
+#[test]
+fn an_emptying_that_never_ran_leaves_the_moves_alone() {
+    let root = fixture_root("empty-skipped", &["c"]);
+    let mut row = trash_row(&root);
+    // Changed since the listing: skipped before Finder is asked.
+    fs::write(root.join(".Trash/new"), b"added").unwrap();
+    row.fingerprint = None;
+    let plan = [
+        planned("downloads-old", &root, "c", Removal::MoveToTrash),
+        row,
+    ];
+    let sinks = Sinks::default();
+    let report = run_sinks(&TempStore::new(), &plan, &MockChecker::none(), &sinks);
+    assert_eq!(
+        outcomes(&report),
+        vec![
+            ItemOutcome::MovedToTrash,
+            ItemOutcome::Skipped(SkipReason::Changed)
+        ]
+    );
+    assert_eq!(sinks.log(), ["trash c"]);
     let _ = remove_recursive_safe(&root);
 }
 
