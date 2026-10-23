@@ -25,12 +25,18 @@ directory. See the [repository names](README.md#repository-names) before changin
   stay with their modules; CLI smoke tests live in [`crates/tiny/tests/`](crates/tiny/tests/).
 - All operations have one implementation in core. CLI parses/presents; FFI owns records,
   consent, preview lifetime and the session gate. See [overview](docs/internals/overview.md).
-- Register cleanup categories in `all_providers_with`, `known_category_ids`, `category_family`
-  and `comes_back` in [`providers/mod.rs`](crates/tiny-core/src/clean/providers/mod.rs); the
-  desktop may move paths only when `desktop_trash_paths()` is true.
+- Register cleanup categories in `all_providers_with`, `known_category_ids`, `category_family`,
+  `comes_back` and the `SECTIONS` table test of `category_section` in
+  [`providers/mod.rs`](crates/tiny-core/src/clean/providers/mod.rs). Eligibility is deny by
+  default: the desktop moves paths only when `desktop_trash_paths()` is true, and acts
+  otherwise only through `desktop_empties_trash()` (the Trash row), `desktop_tool()` (a tool
+  command) or `needs_admin()` (deletion as administrator).
 - In cleanup, discovered paths use `symlink_metadata`; deletion goes through
-  [`fs_safe.rs`](crates/tiny-core/src/clean/fs_safe.rs) or
-  [`FinderTrash`](crates/tiny-core/src/clean/finder_trash.rs). Never call `fs::remove_*` or `is_dir()` on discovered paths. Honor `quit_apps()` and
+  [`fs_safe.rs`](crates/tiny-core/src/clean/fs_safe.rs), [`FinderTrash`](crates/tiny-core/src/clean/finder_trash.rs),
+  a category's tool command ([`tool_command.rs`](crates/tiny-core/src/clean/providers/tool_command.rs))
+  or [`elevated_delete.rs`](crates/tiny-core/src/clean/elevated_delete.rs). Never call
+  `fs::remove_*` or `is_dir()` on discovered paths, and never run a bundled binary or a shell
+  built from a path as root. Honor `quit_apps()` and
   `item_apps()` both during discovery and before execution; never bypass app guards to find more data.
 - Preserve menu-level `CleanAction` versus executor-level `ExecAction`, including the
   Trash provider's `EmptyTrash` mapping ([actions](crates/tiny-core/src/clean/execute.rs)).

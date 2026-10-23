@@ -18,6 +18,14 @@ do not establish that Finder, `lsof`, `tmutil` or other macOS tools work on anot
 The [CLI smoke tests](../../crates/tiny/tests/) use dry runs and owned disposable processes;
 tests must never delete real user data. A real home-directory discovery can take several minutes.
 
+Deletion as administrator is tested without ever asking for it. The path checks run alone, and
+the constant script runs through the real `/usr/bin/osascript` only with its administrator clause
+removed, on temporary folders the tests create
+([tests](../../crates/tiny-core/src/clean/elevated_delete/tests.rs)). `OsascriptDelete` is never
+built in a test, and `clean_remove`, the only place that builds it, panics under `cfg!(test)`: run
+the FFI path through `remove_clean` with fake sinks. The real dialog is checked by hand
+before a release.
+
 ## Native clients
 
 Run [build-ffi.sh](../../scripts/build-ffi.sh) with an absolute output directory:

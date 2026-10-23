@@ -26,8 +26,14 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 - **Risk level** — `Safe`, `Review` or `Destructive`. Decides which categories run without
   `--include-*`; only `Safe` is preselected, in the CLI picker and in the app. Not: severity.
 - **Item** (`CleanItem`) — One path a provider proposes to remove, with size, risk and evidence.
-  Crosses to Swift as a candidate (`FfiCleanCandidate`) with an opaque ID. Not: entry, file (an
-  item is often a directory).
+  Crosses to Swift as a candidate (`FfiCleanCandidate`) with an opaque ID. Its size is the bytes
+  cleanup would free (see **Freed size**), not `du`. Not: entry, file (an item is often a
+  directory).
+- **Freed size** — What deleting an item returns to the volume: allocated blocks, a hard link or
+  APFS clone family counted once and only when wholly inside the item, with `size_is_upper_bound`
+  set when the volume cannot say
+  ([`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs)). Not: `du`, Storage's
+  Space Lens total, or the logical file length.
 - **Evidence** (`Evidence`) — A checkable fact shown beside an item: modified or last-opened
   time, manifest and last commit, owning app, `Sensitive`. Empty means the category rule alone
   selected it. Not: reason (the category's `inclusion_reason`).
@@ -46,7 +52,14 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   touching the project, with no uncommitted changes
   ([`project_activity.rs`](../../crates/tiny-core/src/clean/providers/project_activity.rs)).
   Elsewhere: the item's own modification time (Downloads also checks last opened). An
-  unreadable time, or git that cannot answer, counts as not idle.
+  unreadable time, or git that cannot answer, counts as not idle. The app lists build output for
+  every project and uses a fixed 7 days (`BUILD_OUTPUT_SAFE_DAYS`): Safe only inside git with every
+  fact checked, Review otherwise, including outside git (`NotGitRepo`).
+- **Section** (`Section`, `FfiCleanSection`) — Where the app groups a category's movable items by
+  what to expect afterwards: **Rebuilt automatically**, **Project build output** (`node-modules`,
+  `rust-targets`, which a build or install recreates but which hold a project's work) or **Your
+  files**. Derived by `category_section` from `comes_back`; report-only categories are grouped by
+  their desktop action instead. Not: family, risk.
 - **Dev search roots** — `~/Documents`, `~/Projects`, `~/Code`, `~/Developer`, `~/Workspace`:
   the folders the project-cache providers walk.
 - **App gating** — Not acting while the owning app runs: per category (`quit_apps()`), per path
@@ -71,15 +84,41 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 - **Protection store** — The folder `~/Library/Application Support/Tiny/clean-protection/` with
   `rules.json`, plus the lock beside it. Unreadable or incomplete means cleanup is blocked, not
   that no rules exist ([contract](clean.md#the-store)).
-- **Comes back** (`ComesBack`) — How a category's items return after Trash: `Rebuild` (with the
+- **Comes back** (`ComesBack`) — How a category's items return after cleanup: `Rebuild` (with the
   command), `Redownload`, `AppRecreates`, `TrashOnly` or `NotRecoverable`, per id in
-  `comes_back()`.
-- **Report only** (`ReportOnly`) — A category the app shows but never moves: `Destructive`,
-  `NotPerPathTrash` (cleanup is a tool command) or `UnreliableMatch`. Not: skipped, disabled.
+  `comes_back()`. It also decides the **Section**.
+- **Report only** (`ReportOnly`) — A category the app shows but does not act on per path, with one
+  of five reasons: `Destructive` (permanent or Empty Trash), `NotPerPathTrash` (cleanup is a tool
+  command), `UnreliableMatch`, `NeedsAdministrator` (no unprivileged route) or
+  `XcodeNotInstalled` (only System Settings removes the simulator runtimes). It names why a
+  path-by-path move is not offered; the **Trash row**, tool commands and **deletion as
+  administrator** are separate routes that a provider flag opens. `NeedsAdministrator` is no longer
+  sent over FFI, where such categories are `DeleteAsAdministrator`. Not: skipped, disabled.
+- **`needs_admin`** — The provider flag for a category whose items root owns (the system simulator
+  caches). The desktop deletes them only as administrator; the CLI leaves them out of its default
+  selection and refuses them.
 - **Preview** — The app's reviewed selection, built in Rust from candidate IDs; single-use,
   expires after 15 minutes (`PREVIEW_TTL` in [`clean.rs`](../../crates/tiny-ffi/src/clean.rs)).
-  Not: plan. The uninstall flow has its own, built from an app ID (see **Uninstall preview**).
-- **Checked execute** — The app's Move to Trash, revalidating each path right before it moves
+  It freezes each item's **Removal** and the **Delete mode**. Not: plan. The uninstall flow has
+  its own, built from an app ID (see **Uninstall preview**).
+- **Delete mode** (`DeleteMode`, `FfiDeleteMode`) — The client's choice for Rebuilt automatically
+  and Project build output: `Trash` (move them) or `Permanent` (delete them, or prune a tool's
+  cache). Your files always go to the Trash. Fixed when the preview is built.
+- **Removal** (`Removal`) — How the app removes one planned path: `MoveToTrash`, `Delete`,
+  `EmptyTrash`, `RunTool` (a prune or a request) or `DeleteAsAdministrator`, chosen by
+  `removal_for` ([routing](clean.md#the-desktops-checked-removal)). Not: clean action, exec action.
+- **Trash row** — The `trash` category as the app offers it (`include_trash`): one `Destructive`
+  item for `~/.Trash`, never preselected, emptied through Finder when explicitly selected.
+- **Freed, moved, requested** — The three results the app reports apart: freed (`bytes_freed`:
+  deleted, emptied or pruned), moved to the Trash (`bytes_moved_to_trash`: still on disk) and
+  requested (`bytes_requested`: a tool finishes it in the background). Not: one total.
+- **Deletion as administrator** — Root deleting `needs_admin` items through one `osascript`
+  authentication dialog per Clean, with nothing installed
+  ([contract](clean.md#deletion-as-administrator)). `FfiPreview.bytes_needing_admin` is the part of
+  `bytes_to_free` that needs it, so a client knows the dialog will appear.
+- **Authentication cancelled** (`FfiRemovalReport.authentication_cancelled`) — The user dismissed
+  the administrator dialog: nothing changed and every item is `NotAttempted`.
+- **Checked execute** — The app's removal, revalidating each path right before it changes
   ([`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)). Not: execute
   (the CLI's provider path).
 

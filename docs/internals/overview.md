@@ -29,9 +29,14 @@ what it will do, asks, then acts.
   interpolated, so Put Back works and quoting cannot break. The app, CLI clean and
   `uninstall` all go through [`FinderTrash`](../../crates/tiny-core/src/clean/finder_trash.rs),
   which refuses a symlink because Finder would trash its target.
-- **Hard delete** exists only in the CLI. `clean` and `uninstall` remove through
-  [`remove_recursive_safe`](../../crates/tiny-core/src/clean/fs_safe.rs), bottom-up and never
-  following a symlink; tool-backed categories run their tool instead.
+- **Permanent deletion** has two front ends. The CLI's Hard delete and `uninstall --hard` remove
+  through [`remove_recursive_safe`](../../crates/tiny-core/src/clean/fs_safe.rs), bottom-up and never
+  following a symlink; tool-backed categories run their tool instead. In the app, the client's
+  delete mode decides: Permanent deletes Rebuilt automatically and Project build output through
+  `SafeDelete` (never entering another volume) and prunes uv and pnpm caches with their tool. Some
+  removals are permanent in either mode: Finder's Empty Trash for the Trash row, a simulator
+  runtime's `simctl` removal, and root-owned simulator caches behind one administrator dialog
+  ([routing](clean.md#the-desktops-checked-removal)).
 - **Confirmation** is a separate prompt for a permanent action chosen interactively. With `-y`
   there is none: `clean --hard -y` demands `TINY_CONFIRM_HARD=1`, `processes quit --force -y`
   demands `TINY_CONFIRM_FORCE=1` ([`processes.rs`](../../crates/tiny/src/render/processes.rs)),
@@ -40,7 +45,7 @@ what it will do, asks, then acts.
 - **Signals** go only to a process whose identity still matches a fresh lookup, with no
   escalation or tree kill ([`terminate.rs`](../../crates/tiny-core/src/processes/terminate.rs)).
 
-The clean pipeline, its registry and the desktop's checked Trash are in [clean.md](clean.md).
+The clean pipeline, its registry and the desktop's checked removal are in [clean.md](clean.md).
 
 ## Platform
 

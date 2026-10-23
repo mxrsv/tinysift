@@ -2,7 +2,8 @@
 
 `tiny clean` finds caches and leftovers you can remove, shows how much space each category
 takes, lets you pick, and asks what to do before touching anything. It needs macOS. The
-[desktop app](../../../tiny-cli/docs/user/desktop.md) offers the Move to Trash part of it.
+[desktop app](../../../tiny-cli/docs/user/desktop.md) lists the same categories with its own review
+and consent steps.
 
 ```bash
 tiny clean                              # picker → plan → action menu
@@ -18,12 +19,14 @@ Run `--dry-run` first on a new machine.
 
 ## Categories
 
-33 categories in three families. Each has a risk level that decides whether you see it by
+41 categories in three families. Each has a risk level that decides whether you see it by
 default.
 
-**Dev caches** — `cargo`, `npm`, `pnpm`, `yarn`, `node-modules`, `python-caches`,
-`rust-targets`, `gradle-maven`, `jetbrains`, `vscode`, `ios-simulators`, `simulator-devices`,
-`android-sdk`, `go-cache`, `docker`, `docker-volumes`, `xcode-derived`, `xcode-archives`,
+**Dev caches** — `cargo`, `npm`, `pnpm`, `yarn`, `uv`, `puppeteer`, `huggingface`,
+`codex-runtimes`, `codex-releases`, `node-modules`, `python-caches`, `rust-targets`,
+`gradle-maven`, `jetbrains`, `vscode`, `ios-simulators`, `simulator-devices`,
+`system-simulator-caches`, `simulator-runtimes`, `simulator-runtime-images`, `android-sdk`,
+`go-cache`, `docker`, `docker-volumes`, `xcode-derived`, `xcode-archives`,
 `xcode-devicesupport`.
 
 **User storage** — `downloads-old`, `screenshots-old`, `mail-attachments`,
@@ -32,14 +35,17 @@ default.
 **System leftovers** — `user-logs`, `user-caches`, `trash`, `quarantine`, `crash-reports`,
 `app-orphans`, `time-machine-local`, `font-quicklook-caches`.
 
-| Risk        | Shown                        | Categories                                                             |
-| ----------- | ---------------------------- | ---------------------------------------------------------------------- |
-| Safe        | always, already ticked       | `user-logs`, `crash-reports`, `font-quicklook-caches`, `xcode-derived` |
-| Review      | with `--include-review`      | everything else                                                        |
-| Destructive | with `--include-destructive` | `trash`, `time-machine-local`, `docker-volumes`, `simulator-devices`   |
+| Risk        | Shown                        | Categories                                                                                      |
+| ----------- | ---------------------------- | ----------------------------------------------------------------------------------------------- |
+| Safe        | always, already ticked       | `user-logs`, `crash-reports`, `font-quicklook-caches`, `xcode-derived`, `uv`, `puppeteer`       |
+| Review      | with `--include-review`      | everything else                                                                                 |
+| Destructive | with `--include-destructive` | `trash`, `time-machine-local`, `docker-volumes`, `simulator-devices`                            |
 
 Naming a category with `--category` shows it whatever its risk; the `--include-*` flags are
-then ignored.
+then ignored. `system-simulator-caches` is Safe but needs administrator rights, which `tiny`
+never asks for: plain `tiny clean` leaves it out, and naming it lists it and then refuses it.
+The [desktop app](../../../tiny-cli/docs/user/desktop.md) can delete it after one macOS
+authentication.
 
 ## Choosing what to clean
 
@@ -68,10 +74,18 @@ along. Those overlapping selections are retained and explained in the final repo
   for `N` days, and `android-sdk` uses it for emulator system images.
 - Project caches are searched under `~/Documents`, `~/Projects`, `~/Code`, `~/Developer` and
   `~/Workspace`.
+- A `node_modules` or `target/` folder that holds a file git tracks is never listed or removed,
+  and neither is one whose tracked files git cannot list (for example without the Command Line
+  Tools).
 - Some categories are skipped while their app is open, and `tiny` tells you which app to quit:
-  the Xcode categories (Xcode), `ios-simulators` and `simulator-devices` (Xcode or
-  Simulator), `mail-attachments` (Mail), `vscode` (VS Code), `android-sdk` (Android Studio),
-  `docker` and `docker-volumes` (Docker Desktop).
+  the Xcode categories (Xcode), `ios-simulators`, `simulator-devices` and `simulator-runtimes`
+  (Xcode or Simulator), `mail-attachments` (Mail), `vscode` (VS Code), `android-sdk` (Android Studio),
+  `docker` and `docker-volumes` (Docker Desktop), `uv` (uv or uvx), `pnpm` (pnpm, including
+  when Node runs it), `codex-runtimes` (ChatGPT), `codex-releases` (Codex) and
+  `system-simulator-caches` (Xcode, Simulator, `xcodebuild`, `xctest`, `XCTRunner`,
+  `simctl`, or any booted simulator).
+- `puppeteer` leaves out just the builds of a browser that is running (Chrome for Testing or
+  `chrome-headless-shell`), without a message.
 - `browser-caches`, `chat-caches`, `streaming-caches` and `user-caches` instead leave out
   just the folders of apps that are running, without a message. Quit the app and run again
   to see them.
@@ -96,8 +110,13 @@ private-looking downloads and never ticks them for you.
 - **Some cleanup has no Trash.** `docker` prunes unused images and build cache;
   `docker-volumes` prunes unused volumes, which hold container data such as databases;
   `time-machine-local` deletes local snapshots; `simulator-devices` deletes simulators that
-  Xcode reports unavailable. These are permanent whichever action you choose, and `tiny` warns
-  you when you pick Move to Trash.
+  Xcode reports unavailable; `simulator-runtimes` deletes runtimes no simulator uses (`simctl`
+  finishes the removal in the background); `uv` runs `uv cache prune` and `pnpm` runs
+  `pnpm store prune`, which remove only entries nothing references. These are permanent
+  whichever action you choose, and `tiny` warns you when you pick Move to Trash. `pnpm` used to
+  move its store to the Trash, so a script with `--category pnpm` now prunes instead.
+- **`simulator-runtime-images` is report only.** Without Xcode, `tiny` lists the simulator
+  runtimes it finds but refuses to remove them; use System Settings → General → Storage.
 - **`app-orphans` is report only.** It lists Application Support folders that match no
   installed app, but a folder name does not prove the app is gone, so `tiny` never moves
   them. Check them in Finder.

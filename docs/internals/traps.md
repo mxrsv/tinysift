@@ -14,12 +14,44 @@ Things that are not obvious from reading one file.
 - **Move to Trash is not always recoverable.** With "Empty Trash automatically" on, Finder
   deletes it later; on a volume without a Trash it may delete at once, so the app skips paths
   off the home volume ([`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)).
-- **Some categories ignore Trash.** `docker`, `docker-volumes`, `time-machine-local` and
-  `simulator-devices` run their tool for both CLI actions. The CLI's warning lists those ids by
-  hand in [`render/clean/mod.rs`](../../crates/tiny/src/render/clean/mod.rs); add new
-  tool-backed categories there.
-- **`category_family` panics** on an unknown id. Register a new category in all four registry
-  functions ([clean.md](clean.md#the-provider-registry)).
+- **Some categories ignore Trash.** `docker`, `docker-volumes`, `pnpm`, `uv`, `time-machine-local`,
+  `simulator-devices` and `simulator-runtimes` run their tool for both CLI actions. `pnpm`
+  used to move its store to the Trash and now prunes it, so `--category pnpm` is permanent. The
+  CLI's warning lists those ids by hand in
+  [`render/clean/mod.rs`](../../crates/tiny/src/render/clean/mod.rs); add new tool-backed
+  categories there.
+- **`category_family` panics** on an unknown id. Register a new category in every registry
+  function and the `SECTIONS` test ([clean.md](clean.md#the-provider-registry)).
+- **Finder's Empty Trash empties every volume's Trash**, but the Trash row counts and fingerprints
+  only `~/.Trash`, so the bytes it reports can be lower than what disappears
+  ([clean.md](clean.md#the-desktops-checked-removal)).
+- **A partial deletion is `Failed` and counts nothing.** `remove_tree` ignores child errors, so the
+  reason often says only "Directory not empty"; re-check the path rather than trusting the count.
+- **A prune walks the cache twice** (measured before and after), and a failed prune may have
+  pruned part of the cache while counting nothing.
+- **The app and the shell can run different pnpm.** An older Homebrew pnpm and a newer nvm or
+  Corepack pnpm use different stores (`store/v10` against `store/v11` on the maintainer's Mac). The app's lookup puts nvm's pnpm before Homebrew's
+  (`ToolLookup::app`); when a prune frees less than the sized store, check which pnpm resolved.
+- **uv in Trash mode moves the whole cache folder** to the Trash, since a prune has no Trash
+  route; only Permanent mode runs `uv cache prune`.
+
+## Cleanup sizes
+
+- **Cleanup sizes are freed bytes, not `du` and not Space Lens.** On 2026-10-22 `du` showed about
+  18 GiB for four cargo `target/` folders and deleting them freed 14 GiB, because of hard links and
+  APFS clones ([`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs)). An inode split
+  between two items counts in neither, so a selection total must be measured as a union.
+
+## Administrator deletion
+
+- **The paths must follow `--`.** [`OsascriptDelete`](../../crates/tiny-core/src/clean/elevated_delete.rs)
+  passes entry names after `--`, so a name that starts with `-` is never an `osascript` option, and
+  each reaches the root shell through `quoted form of`. Never splice a name into the script.
+- **A root cache has no Trash and no unprivileged retry.** The folders were `root:admin` 755 when checked on
+  2026-10-23, so the user cannot delete them; a cancelled or failed administrator deletion is final for that run.
+- **EDR products may flag `osascript … with administrator privileges`**, and Apple may
+  deprecate the route for apps. A run that fails at once with no dialog points at `env_clear` in
+  `run_script`.
 
 ## Desktop protection
 

@@ -5,7 +5,8 @@
 Providers, discovery and both execute paths live in
 [`tiny-core/src/clean/`](../../crates/tiny-core/src/clean/mod.rs). The CLI's flow is
 [`render/clean/mod.rs`](../../crates/tiny/src/render/clean/mod.rs); the app's (scan, preview,
-checked Trash) is [`tiny-ffi/src/clean.rs`](../../crates/tiny-ffi/src/clean.rs). Terms are in the
+checked removal) is [`tiny-ffi/src/clean.rs`](../../crates/tiny-ffi/src/clean.rs) and
+[`clean/removal.rs`](../../crates/tiny-ffi/src/clean/removal.rs). Terms are in the
 [glossary](glossary.md).
 
 ## Validation first
@@ -20,15 +21,23 @@ the app reaches discovery without clap.
 
 A category exists only when its id appears in `all_providers_with`, `known_category_ids`,
 `category_family` and `comes_back` in
-[`providers/mod.rs`](../../crates/tiny-core/src/clean/providers/mod.rs). Tests require the
-providers in `known_category_ids` order, each with an `inclusion_reason` and a `comes_back`
-answer; `category_family` panics on an unknown id.
+[`providers/mod.rs`](../../crates/tiny-core/src/clean/providers/mod.rs), and in the `SECTIONS`
+table test beside them. Tests require the providers in `known_category_ids` order, each with an
+`inclusion_reason` and a `comes_back` answer; `category_family` panics on an unknown id.
+`category_section` derives the desktop section from `comes_back` (Rebuilt, or Your files when
+nothing recreates the items), except `node-modules` and `rust-targets`, which are Project build
+output. The `SECTIONS` test fails until a new id gets a deliberate section, so build output never
+lands in Rebuilt just because a build restores it.
 
-Desktop eligibility is deny by default: `desktop_trash_paths()` is true only when cleanup is
+Desktop eligibility is deny by default. `desktop_trash_paths()` is true only when cleanup is
 exactly "move each listed path to Trash", and `Destructive` risk is always report only
-(`desktop_report_only`). The `DESKTOP_TRASH` table test fails until a new id gets a deliberate
-decision. A provider whose paths come from a tool's output sets `roots_from_tool_output()`, and
-the app refuses its items outside the home folder. Shared helpers (`root_as_item`,
+(`desktop_report_only`). Three narrow exceptions each have their own provider flag and their own
+sink: `desktop_empties_trash()` (only `trash`), `desktop_tool()` (uv, pnpm, simulator runtimes)
+and `needs_admin()` (system simulator caches). `desktop_report_only` keeps its answer for them
+(`Destructive`, `NotPerPathTrash`, `NeedsAdministrator`): it means "no per-path unprivileged
+route", and the flag decides what the app may do instead. The `DESKTOP_TRASH` table test fails
+until a new id gets a deliberate decision. A provider whose paths come from a tool's output sets
+`roots_from_tool_output()`, and the app refuses its items outside the home folder. Shared helpers (`root_as_item`,
 `execute_per_item`, `run_tool`, `is_idle`, ...) sit in the same file;
 [`project_activity.rs`](../../crates/tiny-core/src/clean/providers/project_activity.rs) decides
 whether a project is idle.
@@ -36,8 +45,10 @@ whether a project is idle.
 ## Selection and discovery
 
 [`discover.rs`](../../crates/tiny-core/src/clean/discover.rs) picks providers by risk unless
-`--category` is given, which counts as consent and ignores the `--include-*` flags. The app
-always scans Safe and Review, never Destructive
+`--category` is given, which counts as consent and ignores the `--include-*` flags. A category
+that `needs_admin` is left out of the CLI's default selection and appears only when named, so it
+is refused with a reason instead of listed and then failed. The app always scans Safe and
+Review, and `Destructive` only for the Trash row when it sets `include_trash`
 ([native discovery](../../crates/tiny-ffi/src/clean.rs)).
 
 `discover_checked` runs each provider in isolation and records found, app running, unavailable
@@ -46,7 +57,7 @@ and failed categories vanish silently. The app keeps every outcome and also refu
 home folder, its ancestors and tool-printed paths outside home
 ([`protected_reason`](../../crates/tiny-core/src/clean/trash_plan.rs)).
 
-App gating has two mechanisms, both `pgrep -x` on a process name. `quit_apps()` (default
+App gating has two mechanisms, both `pgrep -x` on a process name (`pnpm` adds a third check, below). `quit_apps()` (default
 `requires_app_quit()`) skips the whole category while its app runs. `browser-caches`,
 `chat-caches`, `streaming-caches` and `user-caches` instead drop only a running app's paths
 inside `discover()` (`ScanContext::known_running`). Right before each move the app re-checks
@@ -56,6 +67,29 @@ probe still means "not running" during CLI discovery (`PgrepChecker`), but block
 to the app (`RunnerProbe`) it marks the category
 unavailable or refuses the move, while per-path discovery keeps the path for that re-check
 ([`process.rs`](../../crates/tiny-core/src/clean/process.rs)).
+
+`pnpm` runs as `node …/pnpm.cjs` under npm and Corepack installs, so a process name cannot show
+it. Its `check_item` also asks `command_line_running`, a `pgrep -f` on the command line anchored
+on a path component, so `pnpm-lock.yaml` and the store path do not match. `puppeteer` gates per
+path: each build folder names its browser (`item_apps`), and an unrecognised path is gated on
+every browser. `codex-releases` and `codex-runtimes` gate on the Codex processes and on ChatGPT
+(which installs the runtime).
+
+## Project build output
+
+`node-modules` and `rust-targets` list build output inside projects. The CLI offers only projects
+idle for `--idle-days`, as Review. The app sets `all_build_output` and lists every project, so the
+Review default would hide most of the disk: an item is Safe when the project is in a git work tree
+and its manifest, last commit and working tree are all older than `BUILD_OUTPUT_SAFE_DAYS` with
+every fact checked, and Review when it is active, outside git (`NotGitRepo`: a manifest's age
+alone proves nothing) or git cannot tell. The category stays Review, so Swift preselects exactly
+the Safe items by risk. Do not add a separate "preselected" flag that bypasses risk.
+
+A folder that holds a file git tracks is never offered, and `check_item` repeats the test through
+`refuse_tracked` right before acting, in the CLI executor too. When git cannot list the tracked
+files (no Command Line Tools), the folder is not offered either, and `FfiCleanCategory.refused`
+says why with git's first stderr line. A git repository nested inside `node_modules` is not
+detected ([`project_activity.rs`](../../crates/tiny-core/src/clean/providers/project_activity.rs)).
 
 ## Mapping actions
 
@@ -76,26 +110,143 @@ provider executes; retained overlaps are explained in the existing failure repor
 recorded in `ExecReport.failed` and the run continues; an error from a provider as a whole
 aborts the remaining groups, after earlier groups were already acted on.
 
-## The desktop's checked Trash
+## The desktop's checked removal
 
-The app never calls `CleanProvider::execute`, so no tool command or hard delete runs from it.
-`clean_discover` keeps each candidate's path, fingerprint and discovery roots in the session
-under an opaque ID, so Swift never sends a path back. `clean_preview` excludes paths the
-[saved rules](#desktop-persistent-protection) hold, drops paths another selected path covers and
-excludes any that would carry an unselected Review candidate along
-(the explicit-selection contract);
-a preview is single-use and expires. `clean_execute` consumes it, then
-[`execute_checked`](../../crates/tiny-core/src/clean/checked_execute.rs) revalidates each path,
-and everything it covers, just before moving it through the
-[`Trash`](../../crates/tiny-core/src/clean/finder_trash.rs) seam. An Automation denial or
-cancellation stops the run. Scan and execute refuse to start when `HOME` is not the account's
-home folder (`FfiError::UntrustedHome`).
+The app never calls `CleanProvider::execute`. `clean_discover` keeps each candidate's path,
+fingerprint and discovery roots in the session under an opaque ID, so Swift never sends a path
+back. `clean_preview_with_mode` (`clean_preview` is the same with `Trash`) excludes paths the
+[saved rules](#desktop-persistent-protection) hold, drops paths another selected path covers,
+excludes any that would carry an unselected Review candidate along (the explicit-selection
+contract) and fixes how each item will be removed. A preview is single-use and expires.
+[`execute_checked`](../../crates/tiny-core/src/clean/checked_execute.rs) revalidates each path, and
+everything it covers, just before acting, through the
+[`Trash`](../../crates/tiny-core/src/clean/finder_trash.rs) seam and the other sinks below. An
+Automation denial or cancellation stops the run. Scan and execute refuse to start when `HOME` is not
+the account's home folder (`FfiError::UntrustedHome`).
+
+**The delete mode is frozen in the preview.** `removal_for` in
+[`trash_plan.rs`](../../crates/tiny-core/src/clean/trash_plan.rs) turns the mode, the item and
+what it covers into a `Removal`; changing the mode means building a new preview. Merging never
+widens: a cache folder that holds a path which only goes to the Trash goes to the Trash with it.
+
+| `Removal` | Chosen when | Sink |
+| --- | --- | --- |
+| `MoveToTrash` | Trash mode; Your files always; a uv or pnpm cache in Trash mode | `FinderTrash` |
+| `Delete` | Permanent mode and the item and all it covers are Rebuilt or Project build output | `SafeDelete` ([`fs_safe.rs`](../../crates/tiny-core/src/clean/fs_safe.rs)): no symlinks, no other volume |
+| `RunTool(Prune)` | uv, pnpm in Permanent mode, tool found | the category's tool |
+| `RunTool(Request)` | simulator runtimes, both modes (no Trash route) | `simctl runtime delete` |
+| `EmptyTrash` | the `trash` row, both modes, only with `include_trash` | Finder |
+| `DeleteAsAdministrator` | `needs_admin` categories, both modes | [`elevated_delete`](#deletion-as-administrator) |
+
+`gated_items` rechecks the table at run time against the providers, so a plan can never delete what
+only goes to the Trash, never delete a tool's store, and never give a `needs_admin` category any
+other removal. `execution_order` runs the administrator batch first, then `Delete`, tool commands,
+`EmptyTrash` and last `MoveToTrash`, so emptying the Trash never takes what the same run moved
+there. Results stay in plan order. Nothing is retried another way: a failed move is not deleted, a
+failed deletion is not moved or escalated.
+
+`clean_execute` keeps its old report and refuses a preview that removes anything for good
+(`InvalidInput`, unspent). `clean_remove` runs any preview and reports `FfiRemovalOutcome` per
+item. It is the only place that builds the real `OsascriptDelete`, and it panics under
+`cfg!(test)`; tests call `remove_clean` with fakes.
+
+**Freed, moved and requested are three numbers.** Bytes freed are deleted items, the emptied Trash
+and what each prune measured; bytes moved to the Trash free nothing until the Trash is emptied;
+bytes requested belong to a tool that finishes in the background (simulator runtimes). A removal
+counts as freed only when it ended `Deleted`, `TrashEmptied` or `Pruned`; a partial deletion is
+`Failed` with `DeleteFailed` (`source_still_present`) and counts nothing, and a failed prune
+(`ToolFailed`) counts nothing even if the tool pruned part of the cache. The selection total is the union of the
+selected items: [`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs) counts a hard
+link or clone family only when it lies wholly inside an item, so an inode split between two items
+counts in neither. Discovery therefore keeps those `SharedBlocks` (`retain_completable` drops what
+no selection could complete), and `freed_together` adds back the blocks that items share only with
+each other. A prune frees at most its cache, so it makes the total an upper bound.
+
+**Tool commands** need `tool_commands` in the options; without it every tool row stays
+`ReportOnly{NotPerPathTrash}`, so an app that does not know the option cannot preselect uv into a
+whole-cache Trash move. The command runs through the bounded `CommandRunner::output`
+([`tool_command.rs`](../../crates/tiny-core/src/clean/providers/tool_command.rs)): absolute path,
+stdin closed, no shell, never elevated, killed after ten minutes. A prune is measured among the
+slow checks, before the rules are read again, so those checks also cover the time the walk takes,
+and once more afterwards. Freed bytes are `before - after` (saturating), outside the union. A
+prune walks the cache twice. A tool that cannot be found keeps the row report only; the app never deletes a tool's store
+by hand. `ToolLookup::app()` searches `PATH`, then the nvm `bin` folder for pnpm, then
+`/opt/homebrew/bin` and `/usr/local/bin`, then per-user folders (uv in `~/.local/bin` and
+`~/.cargo/bin`; pnpm in `~/Library/pnpm`, `~/.local/share/pnpm`, `~/.volta/bin`), because a
+Finder-launched app has a minimal `PATH`. Every tool runs with `COREPACK_ENABLE_NETWORK=0` and
+`COREPACK_ENABLE_DOWNLOAD_PROMPT=0` so a Corepack shim never downloads a package manager or waits
+for an answer ([`runner.rs`](../../crates/tiny-core/src/runner.rs)).
+
+**The Trash row** lists `~/.Trash` as one `Destructive` item. Its fingerprint also holds the
+directory's mtime (`PathFingerprint::of_listing`), so a Trash that changed since discovery is
+skipped instead of emptying files the user never saw.
+
+**Placeholders.** A simulator runtime has no path: its item is `<simulator-runtime:UUID>` with
+`Evidence::SimulatorRuntime`. Because every file-system check would resolve that relative name
+against the working directory, `validate` skips only the file checks for it (rules, fingerprint,
+volume, roots, protected paths) and still runs the app probe and `check_item`; only its tool acts
+on it.
 
 The [path validator](../../crates/tiny-core/src/clean/checked_execute.rs) checks every parent
 with `symlink_metadata`, including parents above a discovery root. A provider's root is not
 a trusted boundary: a tool may return the candidate itself as its root. A path containing
 any symlink parent is skipped, including system aliases such as `/var`; the executor never
 canonicalizes it into a different path to move.
+
+## Simulators
+
+`system-simulator-caches` is `/Library/Developer/CoreSimulator/Caches`, mostly `dyld/`: Safe,
+`needs_admin`, refused while Xcode, Simulator, `xcodebuild`, `xctest`, `XCTRunner` or `simctl`
+runs (`SIMULATOR_ACTIVITY`) and, when `simctl` exists, while any simulator is booted. A booted or
+unknown answer refuses every entry with a reason rather than offering any. It never gates on
+`simdiskimaged`, `CoreSimulatorService` or `SimLaunchHost`: they run without Xcode, so the caches
+would never be offered.
+
+`simulator-runtimes` joins `xcrun simctl runtime list -j` (keyed by image UUID) with
+`list devices -j` (keyed by `runtimeIdentifier`) on `runtimeIdentifier`, never on display names:
+the runtime list names an image by its full version ("iOS 26.4.1") while devices group under the
+short one ("iOS 26.4"). An image is offered only when it is Ready, deletable, the only image for
+its identifier and used by no device; `check_item` repeats the join before the delete. Deletion is
+asynchronous and can stick in "Deleting", so it is reported as requested.
+
+Without `simctl` (Xcode not installed), `simulator-runtime-images` reports the runtimes from
+CoreSimulator's image registry and nothing more: only System Settings > General > Storage removes
+them. It reads one key path at a time with `plutil -extract`, because `plutil -convert json`
+rejects the registry's `<date>` and `<data>` values. The disk images lie under
+`/System/Library/AssetsV2`, which TinySift only sizes.
+
+Cleanup never touches `/System`. `inside_system` refuses it (case-insensitively, and any `..`) in
+`execute_per_item`, the CLI per-item guard, `validate` and the administrator route's allowlist.
+
+## Deletion as administrator
+
+[`elevated_delete.rs`](../../crates/tiny-core/src/clean/elevated_delete.rs) documents the route;
+this is why it is shaped that way. A helper would be a resident root process, which the spec rules
+out, and a bundled binary run as root is unsafe because `/Applications/TinySift.app` is
+user-owned. One `/usr/bin/osascript` call with a constant script shows one macOS dialog per Clean
+and keeps nothing; the root shell runs only `/bin/sh`, `/usr/bin/pgrep` and `/bin/rm`.
+
+- **The batch runs first.** After the same `prepare()` checks every item gets, one call takes all
+  items that passed. Cancelling the dialog (AppleScript error -128) changes nothing: the run stops
+  with `AuthenticationCancelled`, every item is `NotAttempted`, and no other sink runs (OC3).
+- **The allowlist is checked twice.** Unprivileged, `check_system_cache_path` accepts only an
+  absolute, UTF-8 path without NUL, outside `/System`, directly inside `CACHES_ROOT`, not a symlink,
+  under real folders; one refusal refuses the whole batch before any dialog. The root shell
+  receives bare names, never paths, and checks again: `cd -P` into the root and `pwd -P` equal to
+  it, the name is not empty, `.`, `..` or containing `/`, and `[ -L ]` is false.
+- **The root shell guards on running tools.** Exit 75 means a simulator tool is running (the name
+  is on stderr) and becomes `Skipped(AppRunning)`; exit 70 means the guard or the root check could
+  not run and becomes a failure. The fixed `PATH` and `env_clear` keep this process's environment
+  out of the root shell. There is no timeout, because the dialog waits for the user, so the UI must
+  read as waiting for authentication.
+- **The outcome is what is left on disk.** After the call each path is `lstat`ed unprivileged:
+  gone is `Deleted` and freed, present is `DeleteFailed`. The script's exit status is never trusted
+  alone.
+- **A failure never escalates.** A failed administrator deletion is not retried another way, and no
+  other failure is ever retried as administrator.
+
+The CLI never runs `sudo`: `execute` refuses a `needs_admin` category with
+`needs administrator rights; the tiny CLI never runs sudo`.
 
 ## The desktop's checked uninstall
 
@@ -240,8 +391,9 @@ Tests never depend on what is installed or running on the machine:
 - [`runner.rs`](../../crates/tiny-core/src/runner.rs) — `CommandRunner`, with `MockRunner` for
   providers that shell out to `docker`, `git`, `tmutil`, `mdfind` and similar.
 - `discover_with_checker`, `execute_with_providers`, `discover_checked` and `execute_checked`
-  (with a fake `Trash`) take those seams; so do `discover_clean` and `execute_clean` in
-  `tiny-ffi`. Native clients must inject fake cleanup engines in their UI tests.
+  (with a fake `Trash`, `Delete` and `ElevatedDelete`) take those seams; so do `discover_clean`,
+  `execute_clean` and `remove_clean` in `tiny-ffi`. `clean_remove` itself panics under
+  `cfg!(test)`, so no test can reach the real dialog. Native clients must inject fake cleanup engines in their UI tests.
 
 [`clean_smoke.rs`](../../crates/tiny/tests/clean_smoke.rs) runs only `--dry-run` and validation
 failures, so it passes on any machine without touching data.

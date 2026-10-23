@@ -56,6 +56,12 @@ The [FFI builder](scripts/build-ffi.sh) emits the static library and matching Sw
 to an explicit output directory. The app owns copying those generated bindings into its
 Swift target. Neither the private app nor its website is part of this repository.
 
+The cleanup records gained fields and options with defaults, but new enum cases break an exhaustive
+Swift `switch`: `FfiReportOnlyReason::NeedsAdministrator` and `XcodeNotInstalled`,
+`FfiEvidence::SimulatorRuntime`, and `FfiDesktopAction::EmptyTrash`, `RequestRemoval` and
+`DeleteAsAdministrator`. Regenerate the bindings and handle every case when a client moves to a
+new revision.
+
 Read the [native safety contract](docs/internals/clean.md), [architecture](docs/internals/overview.md)
 and [documentation index](docs/README.md) before extending the interface.
 
