@@ -295,6 +295,10 @@ fn act_on(
     if let Err(reason) = validate(planned, ctx) {
         return ItemOutcome::Skipped(reason);
     }
+    // A pruned cache is measured among the slow checks, so the checks below
+    // also cover the time its walk takes.
+    let before_prune =
+        (planned.removal == Removal::RunTool(DesktopTool::Prune)).then(|| measure(planned));
     // After them, which can take long enough for the rules to change.
     if let Err(reason) = policy_unchanged(ctx.policy) {
         return stop(reason);
@@ -325,7 +329,7 @@ fn act_on(
                 |()| ItemOutcome::Deleted,
             )
         }
-        Removal::RunTool(tool) => return run_tool(planned, tool, ctx),
+        Removal::RunTool(_) => return run_tool(planned, before_prune, ctx),
     };
     finder.unwrap_or_else(|error| {
         if matches!(error, TrashError::AutomationDenied(_)) {
@@ -338,26 +342,33 @@ fn act_on(
     })
 }
 
-/// Runs the category's own tool for `planned`, once. A prune is measured
-/// before and after with the freed-bytes rule; a failure is the item's
-/// outcome and nothing else is tried.
-fn run_tool(planned: &PlannedItem, tool: DesktopTool, ctx: &ExecContext<'_>) -> ItemOutcome {
+/// The freed bytes of `planned`'s folder by the freed-bytes rule, and
+/// whether that is only an upper bound.
+fn measure(planned: &PlannedItem) -> (u64, bool) {
+    let scan = ScanContext::unchecked();
+    let bytes = dir_size_checked(&planned.item.path, &scan);
+    (bytes, !scan.take_findings().size_upper_bound.is_empty())
+}
+
+/// Runs the category's own tool for `planned`, once: a prune when its cache
+/// was measured `before`, a requested removal otherwise. A prune is measured
+/// again afterwards; a failure is the item's outcome and nothing else is
+/// tried.
+fn run_tool(
+    planned: &PlannedItem,
+    before: Option<(u64, bool)>,
+    ctx: &ExecContext<'_>,
+) -> ItemOutcome {
     let item = &planned.item;
     let Some(provider) = ctx.providers.iter().find(|p| p.id() == item.category_id) else {
         return ItemOutcome::Skipped(SkipReason::UnknownCategory);
     };
-    let measure = || {
-        let scan = ScanContext::unchecked();
-        let bytes = dir_size_checked(&item.path, &scan);
-        (bytes, !scan.take_findings().size_upper_bound.is_empty())
-    };
-    let before = (tool == DesktopTool::Prune).then(measure);
     if let Err(detail) = provider.run_desktop_tool(item) {
         return ItemOutcome::ToolFailed { detail };
     }
     match before {
         Some((before, upper_before)) => {
-            let (after, upper_after) = measure();
+            let (after, upper_after) = measure(planned);
             ItemOutcome::Pruned {
                 bytes_freed: before.saturating_sub(after),
                 upper_bound: upper_before || upper_after,
