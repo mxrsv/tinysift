@@ -373,6 +373,19 @@ mod tests {
     }
 
     #[test]
+    fn nothing_inside_system_passes_even_as_a_real_direct_child_of_its_root() {
+        // `/System/Library` is a real folder directly under `/System`, so only
+        // the `/System` check can refuse it: the root shell runs this last.
+        let library = Path::new("/System/Library");
+        assert!(library.is_dir());
+        assert_eq!(
+            check_entry(Path::new("/System"), library),
+            Err("inside /System".to_string())
+        );
+        assert!(check_system_cache_path(library).is_err());
+    }
+
+    #[test]
     fn only_real_direct_children_of_the_root_pass_the_path_check() {
         let (dir, root) = caches();
         assert!(check_entry(&root, &root.join("dyld")).is_ok());

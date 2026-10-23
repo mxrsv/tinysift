@@ -433,6 +433,27 @@ mod tests {
     }
 
     #[test]
+    fn permanent_deletion_never_enters_a_directory_on_another_device() {
+        let item = tempdir("delete-device");
+        fs::create_dir(item.join("mounted")).unwrap();
+        write_file(&item.join("mounted/precious"), b"x");
+        write_file(&item.join("top"), b"x");
+        let device = fs::symlink_metadata(&item).unwrap().dev();
+
+        // A folder whose device differs stands in for a volume mounted inside.
+        remove_dir_contents(&item, Some(device.wrapping_add(1))).unwrap();
+        assert!(item.join("mounted/precious").exists(), "left alone");
+        assert!(!item.join("top").exists());
+        assert!(
+            fs::remove_dir(&item).is_err(),
+            "the item itself cannot go while something is left in it"
+        );
+
+        remove_recursive_one_device(&item).unwrap();
+        assert!(fs::symlink_metadata(&item).is_err(), "all on one device");
+    }
+
+    #[test]
     fn dir_size_does_not_follow_symlinks() {
         let outside = tempdir("size-outside");
         write_file(&outside.join("big"), &vec![0u8; 1024]);
