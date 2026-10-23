@@ -79,7 +79,7 @@ pub struct ToolLookup {
     path: Option<OsString>,
     fallback_dirs: Vec<PathBuf>,
     /// The account's home, whose per-user install folders
-    /// (`user_tool_dirs`) are searched last.
+    /// (`user_tool_dirs`) are searched after `PATH`.
     user_home: Option<PathBuf>,
     env: Vec<(&'static str, &'static str)>,
 }
@@ -90,8 +90,8 @@ impl ToolLookup {
         Self::default()
     }
 
-    /// The app: `PATH`, then the Homebrew prefixes, then the per-user
-    /// folders of the account's own home.
+    /// The app: `PATH`, then the Homebrew prefixes, with the per-user
+    /// folders of the account's own home before them (nvm's pnpm) or after.
     pub fn app() -> Self {
         let fallbacks = APP_FALLBACK_DIRS.iter().map(PathBuf::from).collect();
         Self::new(None, fallbacks).with_user_tools(crate::clean::trash_plan::account_home())
@@ -130,14 +130,15 @@ impl ToolLookup {
             return Some(PathBuf::from(bin));
         }
         let path = self.search_path().unwrap_or_default();
-        let user_dirs = match &self.user_home {
+        let (before_fallbacks, after_fallbacks) = match &self.user_home {
             Some(home) => user_tool_dirs(home, bin),
-            None => Vec::new(),
+            None => Default::default(),
         };
         std::env::split_paths(&path)
             .filter(|dir| !dir.as_os_str().is_empty())
+            .chain(before_fallbacks)
             .chain(self.fallback_dirs.iter().cloned())
-            .chain(user_dirs)
+            .chain(after_fallbacks)
             .map(|dir| dir.join(bin))
             .find(|candidate| is_executable(candidate))
     }
@@ -174,21 +175,27 @@ fn is_executable(path: &Path) -> bool {
     std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
 }
 
-/// Per-user install folders of the tools the app runs itself (uv, pnpm),
-/// searched after `PATH` and Homebrew. Installers add them to a shell's
-/// `PATH`, which an app started from Finder never sees.
-fn user_tool_dirs(home: &Path, bin: &str) -> Vec<PathBuf> {
+/// Per-user install folders of the tools the app runs itself (uv, pnpm):
+/// the first list is searched right after `PATH`, the second after Homebrew.
+/// Installers add them to a shell's `PATH`, which an app started from Finder
+/// never sees. nvm's pnpm comes before Homebrew's, which can be a stale
+/// install with its own store (pnpm 10's `store/v10` beside the `store/v11`
+/// the user's nvm default uses).
+fn user_tool_dirs(home: &Path, bin: &str) -> (Vec<PathBuf>, Vec<PathBuf>) {
     match bin {
-        "uv" => vec![home.join(".local/bin"), home.join(".cargo/bin")],
-        "pnpm" => [
-            home.join("Library/pnpm"),
-            home.join(".local/share/pnpm"),
-            home.join(".volta/bin"),
-        ]
-        .into_iter()
-        .chain(nvm_bin_dir(home, bin))
-        .collect(),
-        _ => Vec::new(),
+        "uv" => (
+            Vec::new(),
+            vec![home.join(".local/bin"), home.join(".cargo/bin")],
+        ),
+        "pnpm" => (
+            nvm_bin_dir(home, bin).into_iter().collect(),
+            vec![
+                home.join("Library/pnpm"),
+                home.join(".local/share/pnpm"),
+                home.join(".volta/bin"),
+            ],
+        ),
+        _ => Default::default(),
     }
 }
 
@@ -676,6 +683,42 @@ mod tests {
         );
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn nvm_pnpm_wins_over_homebrew_but_not_over_path() {
+        let home = fixture_dir("nvm-first");
+        let homebrew = fixture_dir("nvm-first-homebrew");
+        let path = fixture_dir("nvm-first-path");
+        let lookup = || {
+            ToolLookup::new(Some(path.as_os_str().to_owned()), vec![homebrew.clone()])
+                .with_user_tools(Some(home.clone()))
+        };
+        for dir in [&homebrew, &home.join("Library/pnpm")] {
+            write_probe(dir, "pnpm");
+        }
+        write_probe(&nvm_bin(&home, "v24.16.0"), "pnpm");
+        assert_eq!(
+            lookup().resolve("pnpm"),
+            Some(nvm_bin(&home, "v24.16.0").join("pnpm")),
+            "the user's nvm pnpm, not a stale Homebrew one"
+        );
+        write_probe(&homebrew, "uv");
+        write_probe(&home.join(".local/bin"), "uv");
+        assert_eq!(
+            lookup().resolve("uv"),
+            Some(homebrew.join("uv")),
+            "uv keeps Homebrew first"
+        );
+        write_probe(&path, "pnpm");
+        assert_eq!(
+            lookup().resolve("pnpm"),
+            Some(path.join("pnpm")),
+            "PATH first"
+        );
+        for dir in [&home, &homebrew, &path] {
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     #[test]
