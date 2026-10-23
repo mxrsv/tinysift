@@ -83,7 +83,7 @@ along. Those overlapping selections are retained and explained in the final repo
   `docker` and `docker-volumes` (Docker Desktop), `uv` (uv or uvx), `pnpm` (pnpm, including
   when Node runs it), `codex-runtimes` (ChatGPT), `codex-releases` (Codex) and
   `system-simulator-caches` (Xcode, Simulator, `xcodebuild`, `xctest`, `XCTRunner`,
-  `simctl`, or any booted simulator).
+  `simctl`, a booted simulator's `launchd_sim`, or any booted simulator).
 - `puppeteer` leaves out just the builds of a browser that is running (Chrome for Testing or
   `chrome-headless-shell`), without a message.
 - `browser-caches`, `chat-caches`, `streaming-caches` and `user-caches` instead leave out

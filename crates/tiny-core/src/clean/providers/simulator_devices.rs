@@ -175,11 +175,34 @@ impl CleanProvider for SimulatorDevices {
     }
 }
 
-/// Whether `xcrun` finds `simctl`: a Mac with only the Command Line Tools
-/// has `xcrun` but not `simctl`. Spawn it only when CoreSimulator data
-/// exists, or the `xcrun` shim may ask to install developer tools.
+/// What `xcrun --find simctl` answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum Simctl {
+    Found,
+    /// `xcrun` exited 72 (EX_UNAVAILABLE), "unable to find utility": a Mac
+    /// with only the Command Line Tools has `xcrun` but not `simctl`.
+    Absent,
+    /// Anything else (a timeout, a spawn failure, another exit such as 1
+    /// for a broken `DEVELOPER_DIR`) is no answer, so no proof of absence.
+    Unknown,
+}
+
+/// Exit status of `xcrun --find` for a tool it cannot find.
+const XCRUN_TOOL_MISSING: i32 = 72;
+
+/// Spawn it only when CoreSimulator data exists, or the `xcrun` shim may ask
+/// to install developer tools.
+pub(super) fn simctl_lookup(runner: &dyn CommandRunner) -> Simctl {
+    match run_tool(runner, XCRUN, FIND_ARGS) {
+        Ok(out) if out.success() => Simctl::Found,
+        Ok(out) if out.status == Some(XCRUN_TOOL_MISSING) => Simctl::Absent,
+        _ => Simctl::Unknown,
+    }
+}
+
+/// Whether `simctl` is there to use; an unknown answer is not.
 pub(super) fn simctl_found(runner: &dyn CommandRunner) -> bool {
-    run_tool(runner, XCRUN, FIND_ARGS).is_ok_and(|out| out.success())
+    simctl_lookup(runner) == Simctl::Found
 }
 
 /// `01DADBA3-1A21-4914-A093-29B4D0D7B9C8`: checked before a UDID becomes a
@@ -293,6 +316,33 @@ mod tests {
         let p = SimulatorDevices::with_runner(Arc::new(found));
         assert!(p.simctl_found());
         assert_eq!(p.required_tool(), Some("simctl"));
+    }
+
+    #[test]
+    fn only_exit_72_proves_simctl_absent() {
+        use crate::runner::CommandError;
+        let lookup = |runner: MockRunner| simctl_lookup(&runner);
+        assert_eq!(
+            lookup(MockRunner::new().with_exit(XCRUN, FIND_ARGS, 0, "/usr/bin/simctl\n")),
+            Simctl::Found
+        );
+        assert_eq!(
+            lookup(MockRunner::new().with_exit(XCRUN, FIND_ARGS, 72, "")),
+            Simctl::Absent
+        );
+        // A broken DEVELOPER_DIR exits 1; a hung xcrun times out.
+        assert_eq!(
+            lookup(MockRunner::new().with_exit(XCRUN, FIND_ARGS, 1, "")),
+            Simctl::Unknown
+        );
+        let timeout = CommandError::Timeout {
+            bin: XCRUN.into(),
+            timeout_ms: 30_000,
+        };
+        assert_eq!(
+            lookup(MockRunner::new().with_output(XCRUN, FIND_ARGS, Err(timeout))),
+            Simctl::Unknown
+        );
     }
 
     #[test]

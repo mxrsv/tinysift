@@ -196,9 +196,12 @@ canonicalizes it into a different path to move.
 ## Simulators
 
 `system-simulator-caches` is `/Library/Developer/CoreSimulator/Caches`, mostly `dyld/`: Safe,
-`needs_admin`, refused while Xcode, Simulator, `xcodebuild`, `xctest`, `XCTRunner` or `simctl`
-runs (`SIMULATOR_ACTIVITY`) and, when `simctl` exists, while any simulator is booted. A booted or
-unknown answer refuses every entry with a reason rather than offering any. It never gates on
+`needs_admin`, refused while Xcode, Simulator, `xcodebuild`, `xctest`, `XCTRunner`, `simctl` or
+`launchd_sim` (each booted device's init) runs (`SIMULATOR_ACTIVITY`, checked again by the root
+shell after the dialog, which can stay open while a simulator boots headless) and, unless `xcrun
+--find simctl` exits 72 (the only proof `simctl` is absent), while any simulator is booted. A
+booted or unknown answer, including a failed lookup (a broken `DEVELOPER_DIR` exits 1, a hung
+`xcrun` times out), refuses every entry with a reason rather than offering any. It never gates on
 `simdiskimaged`, `CoreSimulatorService` or `SimLaunchHost`: they run without Xcode, so the caches
 would never be offered.
 

@@ -5,10 +5,11 @@
 //! desktop deletes them only as administrator (`elevated_delete`), and the
 //! CLI, which never runs `sudo`, refuses them.
 //!
-//! Refused while Xcode, Simulator or a build or test tool runs and, when
-//! `simctl` exists, while any simulator is booted. Never gated on
-//! `simdiskimaged`, `CoreSimulatorService` or `SimLaunchHost`: they run
-//! without Xcode, so the caches would never be offered.
+//! Refused while Xcode, Simulator, a build or test tool or a booted device's
+//! `launchd_sim` runs and, when `simctl` exists or cannot be ruled out, while
+//! any simulator is booted. Never gated on `simdiskimaged`,
+//! `CoreSimulatorService` or `SimLaunchHost`: they run without Xcode, so the
+//! caches would never be offered.
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
@@ -17,7 +18,7 @@ use std::sync::Arc;
 use crate::engine_error;
 use crate::error::Result;
 
-use super::simulator_devices::{simctl_found, XCRUN};
+use super::simulator_devices::{simctl_lookup, Simctl, XCRUN};
 use super::{run_tool, CleanProvider, NEEDS_ADMIN};
 use crate::clean::checked_execute::ancestors_are_real_dirs;
 use crate::clean::fs_safe::{dir_size_checked, is_dir_safe, list_children};
@@ -35,7 +36,10 @@ const LABEL: &str = "System simulator caches";
 pub const CACHES_ROOT: &str = "/Library/Developer/CoreSimulator/Caches";
 
 /// Processes that use or rebuild the caches (`pgrep -x` names). `XCTRunner`
-/// hosts UI tests, as Mole also guards.
+/// hosts UI tests, as Mole also guards. `launchd_sim` is the init of every
+/// booted device (`.../RuntimeRoot/sbin/launchd_sim` in each runtime): the
+/// root shell can see one booted after the last `simctl` answer, while the
+/// authentication dialog was open.
 pub const SIMULATOR_ACTIVITY: &[&str] = &[
     "Xcode",
     "Simulator",
@@ -43,6 +47,7 @@ pub const SIMULATOR_ACTIVITY: &[&str] = &[
     "xctest",
     "XCTRunner",
     "simctl",
+    "launchd_sim",
 ];
 
 const BOOTED_ARGS: &[&str] = &["simctl", "list", "devices", "booted", "-j"];
@@ -76,15 +81,18 @@ impl SystemSimulatorCaches {
     }
 
     /// Why the caches must wait for simulators, or `None` when none is
-    /// booted. Without `simctl` nothing can boot one. A failed or unexpected
-    /// answer refuses: deleting on a guess is never safe.
+    /// booted. Only a `simctl` that `xcrun` reports missing means nothing can
+    /// boot one. A failed or unexpected answer, including to the lookup,
+    /// refuses: deleting on a guess is never safe.
     fn booted_refusal(&self) -> Option<String> {
         let runner = self.runner.as_ref();
-        if !simctl_found(runner) {
-            return None;
-        }
         let unknown =
             |detail: String| Some(format!("could not check for booted simulators: {detail}"));
+        match simctl_lookup(runner) {
+            Simctl::Found => {}
+            Simctl::Absent => return None,
+            Simctl::Unknown => return unknown("xcrun could not say whether simctl exists".into()),
+        }
         let out = match run_tool(runner, XCRUN, BOOTED_ARGS) {
             Ok(out) if out.success() => out,
             Ok(out) => return unknown(out.stderr.trim().to_string()),
@@ -328,6 +336,34 @@ mod tests {
     }
 
     #[test]
+    fn a_simctl_lookup_that_fails_refuses_every_entry_unless_it_proves_absence() {
+        use crate::runner::CommandError;
+        let (_dir, root) = caches();
+        // Not an answer: a broken DEVELOPER_DIR exits 1, a hung xcrun times out.
+        let timeout = CommandError::Timeout {
+            bin: XCRUN.into(),
+            timeout_ms: 30_000,
+        };
+        for runner in [
+            MockRunner::new().with_exit(XCRUN, FIND_ARGS, 1, ""),
+            MockRunner::new().with_output(XCRUN, FIND_ARGS, Err(timeout)),
+        ] {
+            let (p, _) = provider(&root, runner);
+            let ctx = ScanContext::unchecked();
+            assert!(p.discover(&ctx).unwrap().is_empty());
+            let refused = ctx.take_findings().refused;
+            assert!(
+                refused[&root.join("dyld")].contains("could not check"),
+                "{refused:?}"
+            );
+            assert!(p.check_item(&root.join("dyld")).is_err());
+        }
+        // Exit 72 proves it: nothing can boot a simulator.
+        let (p, _) = provider(&root, no_simctl());
+        assert!(p.check_item(&root.join("dyld")).is_ok());
+    }
+
+    #[test]
     fn no_booted_simulator_offers_the_caches() {
         let (_dir, root) = caches();
         let (p, _) = provider(&root, with_simctl(Ok(NONE_BOOTED)));
@@ -405,7 +441,14 @@ mod tests {
             Some(ReportOnly::NeedsAdministrator)
         );
         let apps = p.quit_apps();
-        for app in ["Xcode", "Simulator", "xcodebuild", "xctest", "simctl"] {
+        for app in [
+            "Xcode",
+            "Simulator",
+            "xcodebuild",
+            "xctest",
+            "simctl",
+            "launchd_sim",
+        ] {
             assert!(apps.contains(&app), "{app}");
         }
         for service in ["simdiskimaged", "CoreSimulatorService", "SimLaunchHost"] {

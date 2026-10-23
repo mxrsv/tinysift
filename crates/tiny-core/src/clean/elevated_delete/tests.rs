@@ -17,7 +17,7 @@ use std::path::PathBuf;
 const ADMIN_CLAUSE: &str = r#" with prompt "TinySift wants to delete the system simulator caches." with administrator privileges"#;
 
 /// The processes the root shell guards on, as the script names them.
-const ACTIVITY: &str = "Xcode Simulator xcodebuild xctest XCTRunner simctl";
+const ACTIVITY: &str = "Xcode Simulator xcodebuild xctest XCTRunner simctl launchd_sim";
 
 /// A physical temp folder holding `Caches/` (with `dyld/23A8464/cache`,
 /// `index.db`, `sibling` and a symlink `link`) and `outside/keep`.

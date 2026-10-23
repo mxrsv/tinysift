@@ -70,7 +70,7 @@ fn entry_names<'a>(
 /// The answer is `0`, or the error number and its message on separate lines;
 /// -128 is a cancelled dialog.
 const APPLESCRIPT: &str = r#"on run argv
-	set guardStep to "for app in Xcode Simulator xcodebuild xctest XCTRunner simctl; do /usr/bin/pgrep -xq \"$app\"; case $? in 0) echo \"$app\" >&2; exit 75;; 1) ;; *) echo 'could not check for running simulator tools' >&2; exit 70;; esac; done; "
+	set guardStep to "for app in Xcode Simulator xcodebuild xctest XCTRunner simctl launchd_sim; do /usr/bin/pgrep -xq \"$app\"; case $? in 0) echo \"$app\" >&2; exit 75;; 1) ;; *) echo 'could not check for running simulator tools' >&2; exit 70;; esac; done; "
 	set enterStep to "root=/Library/Developer/CoreSimulator/Caches; cd -P \"$root\" && [ \"$(pwd -P)\" = \"$root\" ] || { echo \"$root is not a real folder\" >&2; exit 70; }; "
 	set removeStep to "status=0; for name in \"$@\"; do case $name in ''|.|..|*/*) echo \"refused: $name\" >&2; status=1; continue;; esac; if [ -L \"./$name\" ]; then echo \"refused symlink: $name\" >&2; status=1; continue; fi; /bin/rm -rfx -- \"./$name\" || status=1; done; exit $status"
 	set command to "/bin/sh -c " & quoted form of (guardStep & enterStep & removeStep) & " tinysift"
