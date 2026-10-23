@@ -259,7 +259,8 @@ pub trait CleanProvider {
     /// desktop never moves or deletes them unprivileged
     /// (`desktop_report_only`), only as administrator
     /// (`Removal::DeleteAsAdministrator`). The CLI, which never runs `sudo`,
-    /// refuses its items before `execute`.
+    /// leaves such a category out unless it is named and refuses its items
+    /// before `execute`.
     fn needs_admin(&self) -> bool {
         false
     }

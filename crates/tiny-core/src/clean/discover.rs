@@ -90,9 +90,14 @@ pub struct CheckedDiscovery {
 }
 
 /// Returns the providers selected by the CLI options. Filtering rules from
-/// the plan flag matrix.
+/// the plan flag matrix. Categories that need administrator rights come
+/// only when named: the CLI never runs `sudo` and refuses their items.
 pub fn select_providers(opts: &CleanOpts) -> Vec<Box<dyn CleanProvider>> {
-    filter_providers(opts, all_providers(opts))
+    let mut providers = filter_providers(opts, all_providers(opts));
+    if opts.category.is_empty() {
+        providers.retain(|p| !p.needs_admin());
+    }
+    providers
 }
 
 /// `select_providers` with an explicit runner for tool-backed providers.
@@ -346,6 +351,28 @@ mod tests {
         assert!(ids.contains(&"xcode-derived"));
         assert!(!ids.contains(&"user-caches"));
         assert!(!ids.contains(&"trash"));
+    }
+
+    #[test]
+    fn the_cli_lists_root_owned_caches_only_when_named() {
+        let ids = |o: &CleanOpts| {
+            select_providers(o)
+                .iter()
+                .map(|p| p.id())
+                .collect::<Vec<_>>()
+        };
+        let mut o = opts();
+        o.include_review = true;
+        assert!(!ids(&o).contains(&"system-simulator-caches"));
+        o.category = vec!["system-simulator-caches".into()];
+        assert_eq!(ids(&o), ["system-simulator-caches"]);
+        let runner = Arc::new(crate::runner::test_support::MockRunner::new());
+        let desktop = select_providers_with(&opts(), runner);
+        let id = "system-simulator-caches";
+        assert!(
+            desktop.iter().any(|p| p.id() == id),
+            "the app deletes it as administrator"
+        );
     }
 
     #[test]
