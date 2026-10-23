@@ -3,6 +3,8 @@
 //! and a failed tool is never retried another way. The fake tools only touch
 //! files this test created.
 
+use std::os::unix::fs::PermissionsExt;
+
 use super::removal::{name, planned, Sinks};
 use super::*;
 use crate::clean::fs_safe::dir_size_checked;
@@ -17,6 +19,10 @@ struct ToolFixture {
     tool: DesktopTool,
     prunes: Option<PathBuf>,
     fail: bool,
+    /// Made unreadable by the run, as a folder the tool cannot open stays.
+    locks: Option<PathBuf>,
+    /// Grows by this many bytes during the run.
+    writes: Option<(PathBuf, usize)>,
     app: Option<&'static str>,
     guard: Option<&'static str>,
     log: Arc<Mutex<Vec<String>>>,
@@ -28,6 +34,8 @@ fn tool(id: &'static str, tool: DesktopTool, sinks: &Sinks) -> ToolFixture {
         tool,
         prunes: None,
         fail: false,
+        locks: None,
+        writes: None,
         app: None,
         guard: None,
         log: sinks.log.clone(),
@@ -79,6 +87,12 @@ impl CleanProvider for ToolFixture {
         }
         if let Some(file) = &self.prunes {
             fs::remove_file(file).unwrap();
+        }
+        if let Some(dir) = &self.locks {
+            fs::set_permissions(dir, fs::Permissions::from_mode(0o000)).unwrap();
+        }
+        if let Some((file, len)) = &self.writes {
+            fs::write(file, vec![7u8; *len]).unwrap();
         }
         Ok(())
     }
@@ -144,6 +158,80 @@ fn runtime(size: u64) -> PlannedItem {
 
 fn allocated(path: &Path) -> u64 {
     fs::symlink_metadata(path).unwrap().blocks() * 512
+}
+
+fn pruned_outcome(report: &CheckedExecReport) -> (u64, bool) {
+    match &outcomes(report)[0] {
+        ItemOutcome::Pruned {
+            bytes_freed,
+            upper_bound,
+        } => (*bytes_freed, *upper_bound),
+        other => panic!("not pruned: {other:?}"),
+    }
+}
+
+fn prune_with(uv: ToolFixture, root: &Path, sinks: &Sinks) -> CheckedExecReport {
+    run_tools(
+        &TempStore::new(),
+        root,
+        &[cache(root)],
+        vec![Box::new(uv)],
+        &MockChecker::none(),
+        sinks,
+    )
+}
+
+#[test]
+fn a_prune_followed_by_an_unreadable_folder_is_only_an_upper_bound() {
+    let root = fixture_root("prune-unreadable", &[]);
+    let sinks = Sinks::default();
+    let mut uv = tool("uv", DesktopTool::Prune, &sinks);
+    uv.prunes = Some(root.join("cache/one"));
+    let report = prune_with(uv, &root, &sinks);
+    assert!(
+        !pruned_outcome(&report).1,
+        "a readable cache is measured exactly"
+    );
+    assert!(!report.freed_is_upper_bound);
+
+    // The tool leaves a folder it cannot open: `after` misses what is in it,
+    // so before minus after may be more than was freed.
+    let root = fixture_root("prune-unreadable-after", &[]);
+    let locked = root.join("cache/locked");
+    let mut uv = tool("uv", DesktopTool::Prune, &sinks);
+    uv.prunes = Some(root.join("cache/one"));
+    uv.locks = Some(locked.clone());
+    let planned = cache(&root);
+    fs::create_dir(&locked).unwrap();
+    fs::write(locked.join("hidden"), vec![7u8; 20_000]).unwrap();
+    let report = run_tools(
+        &TempStore::new(),
+        &root,
+        &[planned],
+        vec![Box::new(uv)],
+        &MockChecker::none(),
+        &sinks,
+    );
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(pruned_outcome(&report).1, "{:?}", outcomes(&report));
+    assert!(report.freed_is_upper_bound);
+    let _ = remove_recursive_safe(&root);
+}
+
+#[test]
+fn a_cache_that_grew_during_the_prune_frees_nothing() {
+    let root = fixture_root("prune-grew", &[]);
+    let sinks = Sinks::default();
+    let mut uv = tool("uv", DesktopTool::Prune, &sinks);
+    uv.writes = Some((root.join("cache/new"), 100_000));
+    let report = prune_with(uv, &root, &sinks);
+    assert_eq!(
+        pruned_outcome(&report).0,
+        0,
+        "never negative, never wrapped"
+    );
+    assert_eq!(report.bytes_freed, 0);
+    let _ = remove_recursive_safe(&root);
 }
 
 #[test]

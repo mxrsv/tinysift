@@ -30,7 +30,9 @@ Things that are not obvious from reading one file.
 - **A partial deletion is `Failed` and counts nothing.** `remove_tree` ignores child errors, so the
   reason often says only "Directory not empty"; re-check the path rather than trusting the count.
 - **A prune walks the cache twice** (measured before and after), and a failed prune may have
-  pruned part of the cache while counting nothing.
+  pruned part of the cache while counting nothing. A folder the walk after cannot read makes the
+  freed bytes an upper bound (`Pruned.upper_bound`), since the size after is then too low; one the
+  walk before could not read only understates them.
 - **The app and the shell can run different pnpm.** An older Homebrew pnpm and a newer nvm or
   Corepack pnpm use different stores (`store/v10` against `store/v11` on the maintainer's Mac). The app's lookup puts nvm's pnpm before Homebrew's
   (`ToolLookup::app`); when a prune frees less than the sized store, check which pnpm resolved.

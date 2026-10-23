@@ -91,7 +91,7 @@ pub enum ItemOutcome {
     },
     /// The tool pruned the cache folder: `bytes_freed` is its size before
     /// minus after, an upper bound when the volume could not tell which
-    /// blocks other files share.
+    /// blocks other files share or the walk after could not read everything.
     Pruned {
         bytes_freed: u64,
         upper_bound: bool,
@@ -386,7 +386,7 @@ fn prepare(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<Option<(u64, 
     // A pruned cache is measured among the slow checks, so the checks below
     // also cover the time its walk takes.
     let before_prune =
-        (planned.removal == Removal::RunTool(DesktopTool::Prune)).then(|| measure(planned));
+        (planned.removal == Removal::RunTool(DesktopTool::Prune)).then(|| measure(planned, false));
     // After them, which can take long enough for the rules to change.
     policy_unchanged(ctx.policy).map_err(Halt::Stop)?;
     if names_a_file(planned) {
@@ -445,11 +445,16 @@ fn act_on(
 }
 
 /// The freed bytes of `planned`'s folder by the freed-bytes rule, and
-/// whether that is only an upper bound.
-fn measure(planned: &PlannedItem) -> (u64, bool) {
+/// whether that is only an upper bound. `unreadable_is_upper_bound` counts a
+/// walk that could not read everything as one too: after a prune such a size
+/// is too low, so the bytes freed (before minus after) would read too high.
+fn measure(planned: &PlannedItem, unreadable_is_upper_bound: bool) -> (u64, bool) {
     let scan = ScanContext::unchecked();
     let bytes = dir_size_checked(&planned.item.path, &scan);
-    (bytes, !scan.take_findings().size_upper_bound.is_empty())
+    let findings = scan.take_findings();
+    let upper_bound = !findings.size_upper_bound.is_empty()
+        || (unreadable_is_upper_bound && !findings.unreadable.is_empty());
+    (bytes, upper_bound)
 }
 
 /// Runs the category's own tool for `planned`, once: a prune when its cache
@@ -470,7 +475,7 @@ fn run_tool(
     }
     match before {
         Some((before, upper_before)) => {
-            let (after, upper_after) = measure(planned);
+            let (after, upper_after) = measure(planned, true);
             ItemOutcome::Pruned {
                 bytes_freed: before.saturating_sub(after),
                 upper_bound: upper_before || upper_after,
