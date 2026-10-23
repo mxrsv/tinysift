@@ -20,7 +20,8 @@ use crate::error::Result;
 
 use super::ios_simulators::SIMULATOR_APPS;
 use super::simulator_devices::{is_udid, simctl_found, LIST_ARGS, XCRUN};
-use super::{run_tool, CleanProvider};
+use super::tool_command::run_tool_command;
+use super::{run_tool, CleanProvider, DesktopTool};
 use crate::clean::fs_safe::is_dir_safe;
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, Evidence, ExecAction, ExecReport, RiskLevel};
@@ -195,6 +196,18 @@ impl CleanProvider for SimulatorRuntimes {
         } else {
             Err("no longer an unused simulator runtime".into())
         }
+    }
+    /// The category exists only where `simctl` was found.
+    fn desktop_tool(&self) -> Option<DesktopTool> {
+        Some(DesktopTool::Request)
+    }
+    fn run_desktop_tool(&self, item: &CleanItem) -> std::result::Result<(), String> {
+        let uuid = placeholder_uuid(&item.path).ok_or(NOT_A_RUNTIME)?;
+        run_tool_command(
+            self.runner.as_ref(),
+            XCRUN,
+            &["simctl", "runtime", "delete", uuid],
+        )
     }
     /// Trash and HardDelete both run `simctl runtime delete`: a runtime
     /// has no Trash semantics.
@@ -401,6 +414,27 @@ mod tests {
         assert_eq!(
             runner.run_calls.lock().unwrap().clone(),
             vec![expected.clone(), expected]
+        );
+    }
+
+    #[test]
+    fn the_desktop_requests_removal_through_simctl_with_the_identifier_only() {
+        let runner = listing().with_exit(XCRUN, &["simctl", "runtime", "delete", ORPHAN], 0, "");
+        let (runtimes, runner) = provider(runner);
+        assert_eq!(runtimes.desktop_tool(), Some(DesktopTool::Request));
+        assert_eq!(
+            runtimes.run_desktop_tool(&item(placeholder(ORPHAN))),
+            Ok(())
+        );
+        assert_eq!(
+            runtimes.run_desktop_tool(&item(PathBuf::from("/System/Library/AssetsV2/x.dmg"))),
+            Err(NOT_A_RUNTIME.into())
+        );
+        let calls = runner.output_calls.lock().unwrap().clone();
+        assert_eq!(calls, [format!("{XCRUN} simctl runtime delete {ORPHAN}")]);
+        assert!(
+            runner.run_calls.lock().unwrap().is_empty(),
+            "never the CLI's unbounded run"
         );
     }
 

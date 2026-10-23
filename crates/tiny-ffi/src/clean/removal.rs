@@ -45,6 +45,9 @@ pub enum FfiRemovalFailure {
     TrashFailed,
     /// Permanent deletion failed part way or not at all.
     DeleteFailed,
+    /// The category's own tool failed or could not run; part of a cache may
+    /// be pruned.
+    ToolFailed,
 }
 
 /// How one preview item ended. Nothing is ever retried another way: a failed
@@ -56,6 +59,14 @@ pub enum FfiRemovalOutcome {
     Deleted,
     /// The Trash row: Finder emptied the Trash; its bytes are freed.
     TrashEmptied,
+    /// The cache's own tool pruned it; `bytes_freed` is the cache's size
+    /// before minus after.
+    Pruned {
+        bytes_freed: u64,
+    },
+    /// The category's tool accepted the removal and finishes it in the
+    /// background (simulator runtimes): neither freed nor moved yet.
+    RemovalRequested,
     Failed {
         reason: FfiRemovalFailure,
         detail: String,
@@ -87,21 +98,26 @@ pub struct FfiRemovalReport {
     pub results: Vec<FfiRemovalResult>,
     /// Discovery-time sizes of every preview item.
     pub bytes_selected: u64,
-    /// What the deleted items and the emptied Trash freed: their sizes plus
-    /// blocks shared only between them, counted once.
+    /// What the deleted items and the emptied Trash freed (their sizes plus
+    /// blocks shared only between them, counted once), plus what each prune
+    /// freed as measured around it.
     pub bytes_freed: u64,
     /// `bytes_freed` counts blocks the volume could not show as unshared.
     pub bytes_freed_is_upper_bound: bool,
     /// Discovery-time sizes of the items moved to the Trash, which keeps
     /// them on disk: not freed space.
     pub bytes_moved_to_trash: u64,
-    /// Items deleted, plus the Trash row when it was emptied.
+    /// Items deleted or pruned, plus the Trash row when it was emptied.
     pub deleted_count: u64,
     pub moved_count: u64,
     pub failed_count: u64,
     pub skipped_count: u64,
     pub not_attempted_count: u64,
     pub stopped: Option<FfiStopReason>,
+    /// Discovery-time sizes of the items whose removal a tool accepted and
+    /// finishes in the background: neither freed nor moved.
+    #[uniffi(default = 0)]
+    pub bytes_requested: u64,
 }
 
 impl From<FfiDeleteMode> for DeleteMode {
@@ -125,13 +141,14 @@ pub(super) struct Run<'a> {
 
 #[uniffi::export]
 impl TinySession {
-    /// Runs a preview: each item is moved to the Trash, deleted for good or,
-    /// for the Trash row, emptied, as the preview said
-    /// (`FfiPreviewItem.permanent`). Consumed before the first change, so it
-    /// never runs twice. Every guard of `clean_execute` applies to every
-    /// item. Permanent removals run first, so emptying the Trash never takes
-    /// what this run moves there. A Finder Automation denial or cancellation
-    /// stops the run; any other failure stays with its item.
+    /// Runs a preview: each item is moved to the Trash, deleted for good,
+    /// pruned or removed by its category's own tool (bounded, never through
+    /// a shell or elevated) or, for the Trash row, emptied, as the preview
+    /// said (`FfiPreviewItem.permanent`). Consumed before the first change, so
+    /// it never runs twice. Every guard of `clean_execute` applies to every
+    /// item. Permanent removals and tools run first, so emptying the Trash
+    /// never takes what this run moves there. A Finder Automation denial or
+    /// cancellation stops the run; any other failure stays with its item.
     pub fn clean_remove(
         &self,
         preview_id: String,
@@ -335,12 +352,15 @@ fn removal_report(
         failed_count: count(|o| {
             matches!(
                 o,
-                ItemOutcome::Failed { .. } | ItemOutcome::DeleteFailed { .. }
+                ItemOutcome::Failed { .. }
+                    | ItemOutcome::DeleteFailed { .. }
+                    | ItemOutcome::ToolFailed { .. }
             )
         }),
         skipped_count: count(|o| matches!(o, ItemOutcome::Skipped(_))),
         not_attempted_count: count(|o| matches!(o, ItemOutcome::NotAttempted)),
         stopped: executed.stopped.clone().map(Into::into),
+        bytes_requested: executed.bytes_requested(),
     };
     let results = items
         .iter()
@@ -389,6 +409,14 @@ impl From<ItemOutcome> for FfiRemovalOutcome {
                 Self::Skipped { reason, detail }
             }
             ItemOutcome::NotAttempted => Self::NotAttempted,
+            ItemOutcome::Pruned { bytes_freed, .. } => Self::Pruned { bytes_freed },
+            ItemOutcome::RemovalRequested => Self::RemovalRequested,
+            // The cache or runtime is still there, at most partly pruned.
+            ItemOutcome::ToolFailed { detail } => Self::Failed {
+                reason: FfiRemovalFailure::ToolFailed,
+                detail,
+                source_still_present: true,
+            },
         }
     }
 }

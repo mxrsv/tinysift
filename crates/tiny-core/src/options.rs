@@ -42,6 +42,12 @@ pub struct CleanOptions {
     /// so the desktop can offer emptying it. The CLI never sets it.
     #[serde(default)]
     pub include_trash: bool,
+
+    /// The desktop may act on categories cleaned by their own tool
+    /// (`CleanProvider::desktop_tool`). Discovery does not read it; the CLI
+    /// never sets it.
+    #[serde(default)]
+    pub tool_commands: bool,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -74,6 +80,7 @@ impl Default for CleanOptions {
             idle_days: 30,
             all_build_output: false,
             include_trash: false,
+            tool_commands: false,
         }
     }
 }

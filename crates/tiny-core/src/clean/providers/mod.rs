@@ -9,6 +9,8 @@ use super::scan_context::ScanContext;
 use super::trash_plan::inside_system;
 use super::types::{CleanItem, ComesBack, ExecAction, ExecReport, RiskLevel};
 
+pub use tool_command::DesktopTool;
+
 pub mod android_sdk;
 pub mod app_orphans;
 pub mod browser_caches;
@@ -37,6 +39,7 @@ pub mod simulator_runtimes;
 pub mod streaming_caches;
 pub mod system_simulator_caches;
 pub mod time_machine_local;
+pub mod tool_command;
 pub mod trash;
 pub mod user_caches;
 pub mod user_logs;
@@ -235,6 +238,21 @@ pub trait CleanProvider {
     /// Destructive, so it is never moved or deleted path by path.
     fn desktop_empties_trash(&self) -> bool {
         false
+    }
+
+    /// The command the desktop may run instead of acting on paths, when the
+    /// app asks for tool commands and the tool is found: `Prune` for a cache
+    /// its tool prunes, `Request` for a removal its tool finishes in the
+    /// background. `None` for every per-path category. `desktop_report_only`
+    /// still names why a path-by-path action is not offered.
+    fn desktop_tool(&self) -> Option<DesktopTool> {
+        None
+    }
+
+    /// Runs the `desktop_tool` command for `item` through
+    /// `tool_command::run_tool_command`; `Err` says why it failed.
+    fn run_desktop_tool(&self, _item: &CleanItem) -> std::result::Result<(), String> {
+        Err(format!("{} has no tool command", self.id()))
     }
 
     /// True when acting on the items needs administrator rights. The

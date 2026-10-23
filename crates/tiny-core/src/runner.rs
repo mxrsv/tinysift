@@ -9,13 +9,14 @@
 //!
 //! A bare tool name is resolved once to an absolute path, which is then
 //! spawned. `ToolLookup` decides where to look: the CLI searches `PATH`
-//! only; the app also searches the Homebrew prefixes, because a
-//! Finder-launched app inherits a minimal `PATH`.
+//! only; the app also searches the Homebrew prefixes and, for the tools it
+//! runs itself, their per-user install folders, because a Finder-launched
+//! app inherits a minimal `PATH`.
 
 use std::ffi::OsString;
 use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
@@ -64,12 +65,23 @@ pub const TOOL_TIMEOUT: Duration = Duration::from_secs(30);
 /// Searched after `PATH` by the app (`ToolLookup::app`).
 pub const APP_FALLBACK_DIRS: &[&str] = &["/opt/homebrew/bin", "/usr/local/bin"];
 
+/// Set for every tool the app runs: a Corepack shim (pnpm installed through
+/// nvm's Node) must never download a package manager or wait for an answer.
+pub const APP_TOOL_ENV: &[(&str, &str)] = &[
+    ("COREPACK_ENABLE_NETWORK", "0"),
+    ("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"),
+];
+
 /// Where a bare tool name is searched.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolLookup {
     /// `None` reads `PATH` from the environment at resolution time.
     path: Option<OsString>,
     fallback_dirs: Vec<PathBuf>,
+    /// The account's home, whose per-user install folders
+    /// (`user_tool_dirs`) are searched last.
+    user_home: Option<PathBuf>,
+    env: Vec<(&'static str, &'static str)>,
 }
 
 impl ToolLookup {
@@ -78,9 +90,11 @@ impl ToolLookup {
         Self::default()
     }
 
-    /// The app: `PATH`, then the Homebrew prefixes.
+    /// The app: `PATH`, then the Homebrew prefixes, then the per-user
+    /// folders of the account's own home.
     pub fn app() -> Self {
-        Self::new(None, APP_FALLBACK_DIRS.iter().map(PathBuf::from).collect())
+        let fallbacks = APP_FALLBACK_DIRS.iter().map(PathBuf::from).collect();
+        Self::new(None, fallbacks).with_user_tools(crate::clean::trash_plan::account_home())
     }
 
     /// Explicit `PATH` and fallbacks, so tests never touch the process env.
@@ -88,6 +102,17 @@ impl ToolLookup {
         Self {
             path,
             fallback_dirs,
+            ..Self::default()
+        }
+    }
+
+    /// Also searches the per-user install folders under `home` and runs
+    /// every tool with `APP_TOOL_ENV`.
+    pub fn with_user_tools(self, home: Option<PathBuf>) -> Self {
+        Self {
+            user_home: home,
+            env: APP_TOOL_ENV.to_vec(),
+            ..self
         }
     }
 
@@ -105,35 +130,102 @@ impl ToolLookup {
             return Some(PathBuf::from(bin));
         }
         let path = self.search_path().unwrap_or_default();
+        let user_dirs = match &self.user_home {
+            Some(home) => user_tool_dirs(home, bin),
+            None => Vec::new(),
+        };
         std::env::split_paths(&path)
             .filter(|dir| !dir.as_os_str().is_empty())
             .chain(self.fallback_dirs.iter().cloned())
+            .chain(user_dirs)
             .map(|dir| dir.join(bin))
-            .find(|candidate| {
-                std::fs::metadata(candidate)
-                    .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
-            })
+            .find(|candidate| is_executable(candidate))
     }
 
-    /// `PATH` for the child: tools found in a fallback dir (`npm`) often
-    /// look up siblings (`node`) through `PATH` themselves.
-    fn child_path(&self) -> Option<OsString> {
-        if self.fallback_dirs.is_empty() && self.path.is_none() {
+    /// `PATH` for the child: tools found in a fallback dir (`npm`) or a
+    /// per-user folder (nvm's `pnpm`) often look up siblings (`node`)
+    /// through `PATH` themselves, so `tool_dir` is added too.
+    fn child_path(&self, tool_dir: Option<&Path>) -> Option<OsString> {
+        if self.fallback_dirs.is_empty() && self.path.is_none() && self.user_home.is_none() {
             return None;
         }
         let path = self.search_path().unwrap_or_default();
-        let dirs = std::env::split_paths(&path).chain(self.fallback_dirs.iter().cloned());
+        let mut dirs: Vec<PathBuf> = std::env::split_paths(&path)
+            .chain(self.fallback_dirs.iter().cloned())
+            .collect();
+        if let Some(dir) = tool_dir.filter(|dir| !dirs.iter().any(|d| d == dir)) {
+            dirs.push(dir.to_path_buf());
+        }
         std::env::join_paths(dirs).ok()
     }
 
     fn command(&self, bin: &str) -> Option<Command> {
         let resolved = self.resolve(bin)?;
-        let mut command = Command::new(resolved);
-        if let Some(path) = self.child_path() {
+        let mut command = Command::new(&resolved);
+        if let Some(path) = self.child_path(resolved.parent()) {
             command.env("PATH", path);
         }
+        command.envs(self.env.iter().copied());
         Some(command)
     }
+}
+
+fn is_executable(path: &Path) -> bool {
+    std::fs::metadata(path).is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+}
+
+/// Per-user install folders of the tools the app runs itself (uv, pnpm),
+/// searched after `PATH` and Homebrew. Installers add them to a shell's
+/// `PATH`, which an app started from Finder never sees.
+fn user_tool_dirs(home: &Path, bin: &str) -> Vec<PathBuf> {
+    match bin {
+        "uv" => vec![home.join(".local/bin"), home.join(".cargo/bin")],
+        "pnpm" => [
+            home.join("Library/pnpm"),
+            home.join(".local/share/pnpm"),
+            home.join(".volta/bin"),
+        ]
+        .into_iter()
+        .chain(nvm_bin_dir(home, bin))
+        .collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// The `bin` folder of one nvm-installed Node that has `bin`: the version
+/// `~/.nvm/alias/default` names (`24`, `v24.16.0`) when one matches, else
+/// the highest version. An alias that names no version (`lts/*`) falls back
+/// to the highest too.
+fn nvm_bin_dir(home: &Path, bin: &str) -> Option<PathBuf> {
+    let versions_dir = home.join(".nvm/versions/node");
+    let mut versions: Vec<(Vec<u64>, PathBuf)> = std::fs::read_dir(&versions_dir)
+        .ok()?
+        .flatten()
+        .filter_map(|entry| {
+            let name = entry.file_name().into_string().ok()?;
+            let version = parse_version(&name)?;
+            Some((version, versions_dir.join(name).join("bin")))
+        })
+        .filter(|(_, dir)| is_executable(&dir.join(bin)))
+        .collect();
+    versions.sort();
+    let alias = std::fs::read_to_string(home.join(".nvm/alias/default")).ok();
+    let default = alias
+        .as_deref()
+        .and_then(|alias| parse_version(alias.trim()))
+        .and_then(|wanted| {
+            versions
+                .iter()
+                .rev()
+                .find(|(version, _)| version.starts_with(&wanted))
+        });
+    default.or(versions.last()).map(|(_, dir)| dir.clone())
+}
+
+/// `v24.16.0` or `24` as numbers; `None` for anything else.
+fn parse_version(text: &str) -> Option<Vec<u64>> {
+    let digits = text.strip_prefix('v').unwrap_or(text);
+    digits.split('.').map(|part| part.parse().ok()).collect()
 }
 
 pub trait CommandRunner: Send + Sync {
@@ -516,6 +608,94 @@ mod tests {
             outcome.stdout
         );
         let _ = std::fs::remove_dir_all(&prefix);
+    }
+
+    /// A fake tool at `dir/name` that prints its `PATH` and Corepack flags.
+    fn write_probe(dir: &std::path::Path, name: &str) {
+        std::fs::create_dir_all(dir).unwrap();
+        let body = "echo \"$PATH|$COREPACK_ENABLE_NETWORK|$COREPACK_ENABLE_DOWNLOAD_PROMPT\"";
+        write_tool(dir, name, body);
+    }
+
+    fn nvm_bin(home: &std::path::Path, version: &str) -> PathBuf {
+        home.join(".nvm/versions/node").join(version).join("bin")
+    }
+
+    #[test]
+    fn the_app_finds_uv_and_pnpm_in_per_user_folders_only_after_path() {
+        let home = fixture_dir("user-tools");
+        let empty = fixture_dir("user-tools-path");
+        let lookup = |path: &std::path::Path| {
+            ToolLookup::new(Some(path.as_os_str().to_owned()), Vec::new())
+                .with_user_tools(Some(home.clone()))
+        };
+        write_probe(&home.join(".local/bin"), "uv");
+        write_probe(&home.join(".local/bin"), "npm");
+        write_probe(&home.join("Library/pnpm"), "pnpm");
+        assert_eq!(
+            lookup(&empty).resolve("uv"),
+            Some(home.join(".local/bin/uv"))
+        );
+        assert_eq!(
+            lookup(&empty).resolve("pnpm"),
+            Some(home.join("Library/pnpm/pnpm"))
+        );
+        assert_eq!(lookup(&empty).resolve("npm"), None, "only uv and pnpm");
+        write_probe(&empty, "uv");
+        assert_eq!(
+            lookup(&empty).resolve("uv"),
+            Some(empty.join("uv")),
+            "PATH first"
+        );
+        let cli = ToolLookup::new(Some(OsString::new()), Vec::new());
+        assert_eq!(cli.resolve("pnpm"), None, "the CLI never looks there");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn nvm_pnpm_comes_from_the_default_alias_or_the_highest_version() {
+        let home = fixture_dir("nvm");
+        let empty = fixture_dir("nvm-path");
+        let lookup = ToolLookup::new(Some(empty.as_os_str().to_owned()), Vec::new())
+            .with_user_tools(Some(home.clone()));
+        for version in ["v9.1.0", "v10.0.0"] {
+            write_probe(&nvm_bin(&home, version), "pnpm");
+        }
+        std::fs::create_dir_all(nvm_bin(&home, "v24.16.0")).unwrap();
+        let pnpm = |version: &str| Some(nvm_bin(&home, version).join("pnpm"));
+        assert_eq!(lookup.resolve("pnpm"), pnpm("v10.0.0"), "numeric, not text");
+        std::fs::create_dir_all(home.join(".nvm/alias")).unwrap();
+        std::fs::write(home.join(".nvm/alias/default"), "9\n").unwrap();
+        assert_eq!(lookup.resolve("pnpm"), pnpm("v9.1.0"), "the default alias");
+        std::fs::write(home.join(".nvm/alias/default"), "24").unwrap();
+        assert_eq!(
+            lookup.resolve("pnpm"),
+            pnpm("v10.0.0"),
+            "the default has no pnpm"
+        );
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&empty);
+    }
+
+    #[test]
+    fn a_per_user_tool_finds_its_node_and_never_downloads_through_corepack() {
+        let home = fixture_dir("corepack");
+        let bin = nvm_bin(&home, "v24.16.0");
+        write_probe(&bin, "pnpm");
+        let lookup = ToolLookup::new(Some(OsString::from("/usr/bin:/bin")), Vec::new())
+            .with_user_tools(Some(home.clone()));
+        let outcome = ToolRunner::new(lookup)
+            .output("pnpm", &[], GENEROUS)
+            .expect("fixture tool runs");
+        let printed = outcome.stdout.trim().to_string();
+        let (path, flags) = printed.split_once('|').unwrap();
+        assert!(
+            std::env::split_paths(path).any(|dir| dir == bin),
+            "its own folder is on PATH for `node`: {path}"
+        );
+        assert_eq!(flags, "0|0");
+        let _ = std::fs::remove_dir_all(&home);
     }
 
     #[test]

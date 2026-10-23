@@ -139,6 +139,7 @@ fn old_callers_keep_the_trash_only_flow() {
         idle_days: 30,
         all_build_output: true,
         include_trash,
+        tool_commands: false,
     };
     assert!(CleanOptions::from(options(true)).include_trash);
     assert!(!CleanOptions::from(options(false)).include_trash);

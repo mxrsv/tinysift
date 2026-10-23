@@ -19,6 +19,7 @@ mod protection_writes;
 mod removal;
 mod selection;
 mod simulators;
+mod tools;
 
 // ---------- discovery and preview (T4b) ----------
 

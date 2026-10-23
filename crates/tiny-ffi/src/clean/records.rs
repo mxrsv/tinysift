@@ -27,6 +27,12 @@ pub struct FfiCleanOptions {
     /// Other Destructive categories stay report only.
     #[uniffi(default = false)]
     pub include_trash: bool,
+    /// Let the app act on categories cleaned by their own tool, when the
+    /// tool is found: uv and pnpm caches become `MoveToTrash` (pruned by the
+    /// tool with `FfiDeleteMode::Permanent`, moved to the Trash otherwise),
+    /// simulator runtimes `RequestRemoval`. Off, they stay report only.
+    #[uniffi(default = false)]
+    pub tool_commands: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -57,12 +63,17 @@ pub enum FfiCategoryStatus {
 pub enum FfiDesktopAction {
     /// The app may act on the candidates: a preview moves them to the Trash
     /// or, with `FfiDeleteMode::Permanent`, deletes Rebuilt automatically
-    /// and Project build output for good.
+    /// and Project build output for good, or has a cache's own tool prune it
+    /// (uv, pnpm with `tool_commands`).
     MoveToTrash,
     /// The Trash row (`include_trash` only): a selected row is emptied for
     /// good through Finder, in either delete mode. Never preselected
     /// (Destructive).
     EmptyTrash,
+    /// Simulator runtimes (`tool_commands` only): the category's own tool
+    /// removes each selected item for good in either delete mode, and
+    /// finishes in the background, so the result says it was requested.
+    RequestRemoval,
     /// Shown for information; the app does not act on it (`reason` says why).
     ReportOnly { reason: FfiReportOnlyReason },
 }
@@ -225,8 +236,8 @@ pub struct FfiPreviewItem {
     /// Other discovered candidates at this path or inside it, selected or
     /// not, sorted by path. Moving this item moves them too.
     pub covers: Vec<FfiCoveredCandidate>,
-    /// Removed for good: deleted, or the Trash row emptied. False means
-    /// moved to the Trash.
+    /// Removed for good: deleted, pruned by its tool, removal requested from
+    /// its tool, or the Trash row emptied. False means moved to the Trash.
     #[uniffi(default = false)]
     pub permanent: bool,
 }
@@ -270,9 +281,11 @@ pub struct FfiPreview {
     /// Sum of `items` sizes as measured at discovery. Not freed space.
     pub bytes_selected: u64,
     pub expires_in_seconds: u64,
-    /// What the `permanent` items free together: their sizes, plus blocks
-    /// they share only with each other (hard links, APFS clones) counted
-    /// once. Report-only candidates are never in a preview.
+    /// What the deleted items, prunes and the Trash row free together: their
+    /// sizes, plus blocks they share only with each other (hard links, APFS
+    /// clones) counted once. A prune frees at most its cache's size, so it
+    /// makes this an upper bound. Report-only candidates are never in a
+    /// preview.
     #[uniffi(default = 0)]
     pub bytes_to_free: u64,
     /// `bytes_to_free` counts blocks the volume could not show as unshared
@@ -283,6 +296,10 @@ pub struct FfiPreview {
     /// until the Trash is emptied.
     #[uniffi(default = 0)]
     pub bytes_to_trash: u64,
+    /// Sum of the sizes of the items whose removal a tool is asked for
+    /// (simulator runtimes): neither freed nor moved when the run ends.
+    #[uniffi(default = 0)]
+    pub bytes_requested: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -385,6 +402,7 @@ impl From<FfiCleanOptions> for CleanOptions {
             idle_days: options.idle_days,
             all_build_output: options.all_build_output,
             include_trash: options.include_trash,
+            tool_commands: options.tool_commands,
         }
     }
 }
@@ -500,7 +518,12 @@ impl From<ItemOutcome> for FfiItemOutcome {
             ItemOutcome::NotAttempted => Self::NotAttempted,
             // `clean_execute` refuses a preview that removes anything for
             // good, and uninstall only moves to the Trash.
-            ItemOutcome::Deleted | ItemOutcome::TrashEmptied | ItemOutcome::DeleteFailed { .. } => {
+            ItemOutcome::Deleted
+            | ItemOutcome::TrashEmptied
+            | ItemOutcome::DeleteFailed { .. }
+            | ItemOutcome::Pruned { .. }
+            | ItemOutcome::RemovalRequested
+            | ItemOutcome::ToolFailed { .. } => {
                 unreachable!("a Trash-only run reported a permanent removal")
             }
         }

@@ -1,8 +1,8 @@
 //! The desktop's cleanup: each planned path is revalidated right before it
-//! is moved to the Trash, deleted for good or, for the Trash row, emptied,
+//! is moved to the Trash, deleted for good, handed to its category's own
+//! tool (`CleanProvider::run_desktop_tool`) or, for the Trash row, emptied,
 //! as its plan says (`Removal`), and every path gets its own outcome. No
-//! failure is retried another way. It never calls `CleanProvider::execute`,
-//! so no provider command runs from here.
+//! failure is retried another way. It never calls `CleanProvider::execute`.
 //!
 //! The run holds the [`StoreLease`] of the saved "always keep" rules. Before
 //! each move it re-reads them: a policy that changed or cannot be read stops
@@ -17,11 +17,12 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::finder_trash::{Trash, TrashError};
-use super::fs_safe::{Delete, PathFingerprint};
+use super::fs_safe::{dir_size_checked, Delete, PathFingerprint};
 use super::process::AppProbe;
 use super::protection::{Evaluation, Matcher, Relation, INTERNAL_ID_PREFIX};
 use super::protection_store::{StoreError, StoreLease};
-use super::providers::{desktop_report_only, CleanProvider};
+use super::providers::{desktop_report_only, CleanProvider, DesktopTool};
+use super::scan_context::ScanContext;
 use super::trash_plan::{
     freed_together, inside_system, protected_reason, removal_for, DeleteMode, PlannedItem, Removal,
 };
@@ -84,15 +85,33 @@ pub enum ItemOutcome {
         detail: String,
         source_present: bool,
     },
+    /// The tool pruned the cache folder: `bytes_freed` is its size before
+    /// minus after, an upper bound when the volume could not tell which
+    /// blocks other files share.
+    Pruned {
+        bytes_freed: u64,
+        upper_bound: bool,
+    },
+    /// The tool accepted the removal and finishes it in the background
+    /// (`simctl runtime delete`): neither freed nor moved yet.
+    RemovalRequested,
+    /// The tool command failed or could not run; part of the cache may be
+    /// pruned. Nothing else is tried: no deletion, no Trash, no elevation.
+    ToolFailed {
+        detail: String,
+    },
     Skipped(SkipReason),
     /// Execution stopped before this path.
     NotAttempted,
 }
 
 impl ItemOutcome {
-    /// Deleted, or the Trash emptied: the item's bytes are free now.
+    /// Deleted, pruned, or the Trash emptied: the item's bytes are free now.
     pub fn frees_space(&self) -> bool {
-        matches!(self, Self::Deleted | Self::TrashEmptied)
+        matches!(
+            self,
+            Self::Deleted | Self::TrashEmptied | Self::Pruned { .. }
+        )
     }
 }
 
@@ -118,7 +137,8 @@ pub struct CheckedExecReport {
     pub results: Vec<ItemResult>,
     pub stopped: Option<StopReason>,
     /// What the deleted items and the emptied Trash freed, blocks shared
-    /// between them counted once (`freed_together`).
+    /// between them counted once (`freed_together`), plus what each prune
+    /// freed as measured around it.
     pub bytes_freed: u64,
     /// `bytes_freed` counts blocks the volume could not show as unshared.
     pub freed_is_upper_bound: bool,
@@ -134,6 +154,12 @@ impl CheckedExecReport {
     /// Trash frees no space until Trash is emptied.
     pub fn bytes_moved_to_trash(&self) -> u64 {
         self.sum(|outcome| *outcome == ItemOutcome::MovedToTrash)
+    }
+
+    /// Sizes measured at discovery of the items whose removal a tool
+    /// accepted and finishes in the background: neither freed nor moved.
+    pub fn bytes_requested(&self) -> u64 {
+        self.sum(|outcome| *outcome == ItemOutcome::RemovalRequested)
     }
 
     pub fn moved_count(&self) -> usize {
@@ -200,12 +226,27 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
     if stopped.is_none() {
         crate::progress::report(ctx.progress, "trash", total, Some(total), "Done");
     }
-    let (bytes_freed, freed_is_upper_bound) = freed_together(
+    // A prune's freed bytes were measured around it, so it stays out of the union.
+    let (removed, removed_upper_bound) = freed_together(
         plan.iter()
             .zip(&outcomes)
-            .filter(|(_, outcome)| outcome.frees_space())
+            .filter(|(_, outcome)| {
+                matches!(outcome, ItemOutcome::Deleted | ItemOutcome::TrashEmptied)
+            })
             .map(|(planned, _)| planned),
     );
+    let (pruned, pruned_upper_bound) =
+        outcomes
+            .iter()
+            .fold((0u64, false), |(sum, upper), outcome| match outcome {
+                ItemOutcome::Pruned {
+                    bytes_freed,
+                    upper_bound,
+                } => (sum.saturating_add(*bytes_freed), upper || *upper_bound),
+                _ => (sum, upper),
+            });
+    let bytes_freed = removed.saturating_add(pruned);
+    let freed_is_upper_bound = removed_upper_bound || pruned_upper_bound;
     let results = plan
         .iter()
         .zip(outcomes)
@@ -222,14 +263,15 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
     }
 }
 
-/// Plan indexes in run order: deletions, then emptying the Trash, then
-/// moves to the Trash, each in plan order.
+/// Plan indexes in run order: deletions, tool commands, then emptying the
+/// Trash, then moves to the Trash, each in plan order.
 fn execution_order(plan: &[PlannedItem]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..plan.len()).collect();
     order.sort_by_key(|&index| match plan[index].removal {
         Removal::Delete => 0,
-        Removal::EmptyTrash => 1,
-        Removal::MoveToTrash => 2,
+        Removal::RunTool(_) => 1,
+        Removal::EmptyTrash => 2,
+        Removal::MoveToTrash => 3,
     });
     order
 }
@@ -257,8 +299,10 @@ fn act_on(
     if let Err(reason) = policy_unchanged(ctx.policy) {
         return stop(reason);
     }
-    if let Err(reason) = protection_skip(ctx.policy, &planned.item.path) {
-        return ItemOutcome::Skipped(reason);
+    if names_a_file(planned) {
+        if let Err(reason) = protection_skip(ctx.policy, &planned.item.path) {
+            return ItemOutcome::Skipped(reason);
+        }
     }
     // Last check before the mutation.
     if ctx.is_cancelled() {
@@ -281,6 +325,7 @@ fn act_on(
                 |()| ItemOutcome::Deleted,
             )
         }
+        Removal::RunTool(tool) => return run_tool(planned, tool, ctx),
     };
     finder.unwrap_or_else(|error| {
         if matches!(error, TrashError::AutomationDenied(_)) {
@@ -291,6 +336,35 @@ fn act_on(
             source_present: fs::symlink_metadata(path).is_ok(),
         }
     })
+}
+
+/// Runs the category's own tool for `planned`, once. A prune is measured
+/// before and after with the freed-bytes rule; a failure is the item's
+/// outcome and nothing else is tried.
+fn run_tool(planned: &PlannedItem, tool: DesktopTool, ctx: &ExecContext<'_>) -> ItemOutcome {
+    let item = &planned.item;
+    let Some(provider) = ctx.providers.iter().find(|p| p.id() == item.category_id) else {
+        return ItemOutcome::Skipped(SkipReason::UnknownCategory);
+    };
+    let measure = || {
+        let scan = ScanContext::unchecked();
+        let bytes = dir_size_checked(&item.path, &scan);
+        (bytes, !scan.take_findings().size_upper_bound.is_empty())
+    };
+    let before = (tool == DesktopTool::Prune).then(measure);
+    if let Err(detail) = provider.run_desktop_tool(item) {
+        return ItemOutcome::ToolFailed { detail };
+    }
+    match before {
+        Some((before, upper_before)) => {
+            let (after, upper_after) = measure();
+            ItemOutcome::Pruned {
+                bytes_freed: before.saturating_sub(after),
+                upper_bound: upper_before || upper_after,
+            }
+        }
+        None => ItemOutcome::RemovalRequested,
+    }
 }
 
 /// The stored rules are still exactly the ones this run holds.
@@ -354,7 +428,12 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
     if inside_system(&item.path) {
         return Err(SkipReason::ProtectedPath("inside /System".into()));
     }
-    protection_skip(ctx.policy, &item.path)?;
+    let on_disk = names_a_file(planned);
+    if on_disk {
+        protection_skip(ctx.policy, &item.path)?;
+    } else if planned.removal != Removal::RunTool(DesktopTool::Request) {
+        return Err(SkipReason::Missing);
+    }
     let gated = gated_items(planned, ctx)?;
     let apps: BTreeSet<String> = gated
         .iter()
@@ -376,6 +455,10 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
             .check_item(path)
             .map_err(SkipReason::ProviderGuard)?;
     }
+    if !on_disk {
+        // A tool's placeholder: only its tool, after the checks above, acts on it.
+        return Ok(());
+    }
     let meta = fs::symlink_metadata(&item.path).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => SkipReason::Missing,
         _ => SkipReason::SafetyCheckFailed(e.to_string()),
@@ -385,9 +468,9 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
     }
     let fingerprint = match planned.removal {
         Removal::EmptyTrash => PathFingerprint::of_listing(&meta),
-        Removal::MoveToTrash | Removal::Delete => PathFingerprint::of(&meta),
+        _ => PathFingerprint::of(&meta),
     };
-    if fingerprint != planned.fingerprint {
+    if planned.fingerprint.as_ref() != Some(&fingerprint) {
         return Err(SkipReason::Changed);
     }
     if meta.dev() != home_device(ctx.home)? {
@@ -407,6 +490,13 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
     Ok(())
 }
 
+/// False for a tool's placeholder such as `<simulator-runtime:UUID>`, a
+/// relative name that every file-system check would resolve against the
+/// working directory, so none may run on it.
+fn names_a_file(planned: &PlannedItem) -> bool {
+    planned.item.path.is_absolute()
+}
+
 /// Device of the home folder, whose volume is known to have a Trash.
 pub(crate) fn home_device(home: Option<&Path>) -> Result<u64, SkipReason> {
     let home = home.ok_or_else(|| SkipReason::SafetyCheckFailed("home folder unknown".into()))?;
@@ -417,9 +507,11 @@ pub(crate) fn home_device(home: Option<&Path>) -> Result<u64, SkipReason> {
 
 /// The item and every item merged into it, each with its provider. Any
 /// unknown or report-only provider refuses the whole removal; only the Trash
-/// row's own provider may empty the Trash, and nothing else. A deletion
-/// needs every one of them in Rebuilt automatically or Project build output
-/// (`removal_for`), so a plan never deletes what only goes to the Trash.
+/// row's own provider may empty the Trash, only a category's own tool may
+/// run, and a pruned cache may also go to the Trash. A deletion needs every
+/// one of them in Rebuilt automatically or Project build output
+/// (`removal_for`), so a plan never deletes what only goes to the Trash, and
+/// never a tool's store.
 fn gated_items<'a>(
     planned: &'a PlannedItem,
     ctx: &'a ExecContext<'_>,
@@ -433,8 +525,11 @@ fn gated_items<'a>(
                 .iter()
                 .find(|p| p.id() == item.category_id)
                 .ok_or(SkipReason::UnknownCategory)?;
+            let tool = provider.desktop_tool();
             let allowed = match planned.removal {
                 Removal::EmptyTrash if index == 0 => provider.desktop_empties_trash(),
+                Removal::RunTool(planned_tool) if index == 0 => tool == Some(planned_tool),
+                Removal::MoveToTrash if index == 0 && tool == Some(DesktopTool::Prune) => true,
                 _ => desktop_report_only(provider.as_ref()).is_none(),
             };
             if !allowed {
@@ -444,7 +539,8 @@ fn gated_items<'a>(
         })
         .collect::<Result<Vec<_>, _>>()?;
     if planned.removal == Removal::Delete
-        && removal_for(&planned.item, &planned.covers, DeleteMode::Permanent) != Removal::Delete
+        && removal_for(&planned.item, &planned.covers, DeleteMode::Permanent, None)
+            != Removal::Delete
     {
         return Err(SkipReason::ProviderGuard(
             "only the Trash may take it".into(),

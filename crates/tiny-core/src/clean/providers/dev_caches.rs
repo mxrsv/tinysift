@@ -2,7 +2,10 @@ use crate::error::Result;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use super::{execute_per_item, execute_tool_command, root_as_item, run_tool, CleanProvider};
+use super::tool_command::run_tool_command;
+use super::{
+    execute_per_item, execute_tool_command, root_as_item, run_tool, CleanProvider, DesktopTool,
+};
 use crate::clean::fs_safe::is_dir_safe;
 use crate::clean::process::command_line_running;
 use crate::clean::scan_context::ScanContext;
@@ -272,6 +275,12 @@ impl CleanProvider for PnpmStore {
             PNPM_PRUNE,
         )
     }
+    fn desktop_tool(&self) -> Option<DesktopTool> {
+        self.runner.which("pnpm").then_some(DesktopTool::Prune)
+    }
+    fn run_desktop_tool(&self, _item: &CleanItem) -> std::result::Result<(), String> {
+        run_tool_command(self.runner.as_ref(), "pnpm", PNPM_PRUNE)
+    }
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         match command_line_running(self.runner.as_ref(), PNPM_COMMAND_LINE) {
             Ok(false) => {}
@@ -394,6 +403,13 @@ impl CleanProvider for UvCache {
     }
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
         execute_tool_command(self.runner.as_ref(), items, action, UV_ID, "uv", UV_PRUNE)
+    }
+    /// Never without uv: its default cache alone stays report only.
+    fn desktop_tool(&self) -> Option<DesktopTool> {
+        self.runner.which("uv").then_some(DesktopTool::Prune)
+    }
+    fn run_desktop_tool(&self, _item: &CleanItem) -> std::result::Result<(), String> {
+        run_tool_command(self.runner.as_ref(), "uv", UV_PRUNE)
     }
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         still_tool_path(self.runner.as_ref(), "uv", UV_CACHE_DIR, path)
@@ -572,6 +588,38 @@ mod tests {
         assert_eq!(report.removed_paths, vec![cache.clone()]);
         assert_eq!(calls(&runner), ["uv cache prune"]);
         assert!(cache.exists(), "uv decides what to remove");
+    }
+
+    #[test]
+    fn the_desktop_prunes_with_uv_or_pnpm_bounded_and_only_when_found() {
+        let item = |id: &str| CleanItem {
+            category_id: id.into(),
+            category_label: id.into(),
+            path: PathBuf::from("/reviewed/cache"),
+            size: 1,
+            risk: RiskLevel::Safe,
+            evidence: Vec::new(),
+        };
+        let missing: Arc<dyn CommandRunner> = Arc::new(MockRunner::new());
+        assert_eq!(UvCache::with_runner(missing.clone()).desktop_tool(), None);
+        assert_eq!(PnpmStore::with_runner(missing).desktop_tool(), None);
+
+        let runner = Arc::new(
+            MockRunner::new()
+                .with_which("uv")
+                .with_which("pnpm")
+                .with_exit("uv", UV_PRUNE, 0, "")
+                .with_exit("pnpm", PNPM_PRUNE, 1, ""),
+        );
+        let uv = UvCache::with_runner(runner.clone());
+        let pnpm = PnpmStore::with_runner(runner.clone());
+        assert_eq!(uv.desktop_tool(), Some(DesktopTool::Prune));
+        assert_eq!(pnpm.desktop_tool(), Some(DesktopTool::Prune));
+        assert_eq!(uv.run_desktop_tool(&item(UV_ID)), Ok(()));
+        assert!(pnpm.run_desktop_tool(&item(PNPM_ID)).is_err());
+        let bounded = runner.output_calls.lock().unwrap().clone();
+        assert_eq!(bounded, ["uv cache prune", "pnpm store prune"]);
+        assert!(calls(&runner).is_empty(), "never the CLI's unbounded run");
     }
 
     // ---------- pnpm ----------

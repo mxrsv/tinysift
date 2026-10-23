@@ -5,8 +5,9 @@
 //! the options used). A preview is built only from those candidate IDs, and
 //! execution only from a preview ID, so Swift never hands Rust a path to act
 //! on. Execution moves each path through the core `Trash` route, deletes it
-//! through `fs_safe`, or empties the Trash through Finder, as the preview
-//! decided; it never calls a provider's own cleanup.
+//! through `fs_safe`, runs the category's own tool command, or empties the
+//! Trash through Finder, as the preview decided; it never calls a
+//! provider's `execute`.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -24,7 +25,7 @@ use tiny_core::clean::protection::{PolicySnapshot, RuleScope};
 use tiny_core::clean::protection_store::ProtectionStore;
 use tiny_core::clean::providers::{
     all_providers_with, category_family, category_section, comes_back, desktop_report_only,
-    known_category_ids, CleanProvider, ReportOnly,
+    known_category_ids, CleanProvider, DesktopTool, ReportOnly,
 };
 use tiny_core::clean::scan_context::{ScanContext, Unreadable};
 use tiny_core::clean::trash_plan::{
@@ -94,6 +95,8 @@ struct StoredCandidate {
     /// Only what other movable candidates could complete
     /// (`SharedBlocks::retain_completable`).
     shared: SharedBlocks,
+    /// The category's own tool, when the app asked for tool commands.
+    tool: Option<DesktopTool>,
 }
 
 struct StoredPreview {
@@ -151,8 +154,10 @@ impl TinySession {
 
     /// `clean_preview` for the app's delete mode: with `Permanent`, items in
     /// Rebuilt automatically and Project build output are deleted for good,
-    /// unless they would carry along a path that only goes to the Trash. Your
-    /// files always go to the Trash. Run it with `clean_remove`.
+    /// unless they would carry along a path that only goes to the Trash, and
+    /// a uv or pnpm cache is pruned by its tool. Your files always go to the
+    /// Trash; a simulator runtime's removal is requested in either mode. Run
+    /// it with `clean_remove`.
     pub fn clean_preview_with_mode(
         &self,
         candidate_ids: Vec<String>,
@@ -227,14 +232,18 @@ impl TinySession {
         let (mut kept, covered) = partition_overlaps(planned, |(_, plan)| plan.item.path.as_path());
         for (id, plan) in &mut kept {
             plan.covers = covered_candidates(discovery, id, &plan.item.path);
-            let empties_trash = discovery
-                .candidates
-                .get(id.as_str())
-                .is_some_and(|c| c.desktop_action == FfiDesktopAction::EmptyTrash);
+            let candidate = discovery.candidates.get(id.as_str());
+            let empties_trash =
+                candidate.is_some_and(|c| c.desktop_action == FfiDesktopAction::EmptyTrash);
             plan.removal = if empties_trash {
                 Removal::EmptyTrash
             } else {
-                removal_for(&plan.item, &plan.covers, mode)
+                removal_for(
+                    &plan.item,
+                    &plan.covers,
+                    mode,
+                    candidate.and_then(|c| c.tool),
+                )
             };
         }
         excluded.extend(
@@ -246,10 +255,17 @@ impl TinySession {
             .iter()
             .map(|(id, plan)| preview_item(discovery, &selected, id, plan))
             .collect();
-        let permanent = |plan: &&PlannedItem| plan.removal != Removal::MoveToTrash;
         let plans = || kept.iter().map(|(_, plan)| plan);
-        let (bytes_to_free, bytes_to_free_is_upper_bound) =
-            freed_together(plans().filter(permanent));
+        let with = |removal: Removal| move |plan: &&PlannedItem| plan.removal == removal;
+        // A requested removal is neither freed nor moved when the run ends.
+        let frees = |plan: &&PlannedItem| {
+            matches!(
+                plan.removal,
+                Removal::Delete | Removal::EmptyTrash | Removal::RunTool(DesktopTool::Prune)
+            )
+        };
+        let (bytes_to_free, bytes_to_free_is_upper_bound) = freed_together(plans().filter(frees));
+        let request = Removal::RunTool(DesktopTool::Request);
         let preview_id = format!("p{}", state.next_id());
         let preview = FfiPreview {
             preview_id: preview_id.clone(),
@@ -259,7 +275,8 @@ impl TinySession {
             expires_in_seconds: ttl.as_secs(),
             bytes_to_free,
             bytes_to_free_is_upper_bound,
-            bytes_to_trash: total_size(plans().filter(|p| !permanent(p)).map(|p| &p.item)),
+            bytes_to_trash: total_size(plans().filter(with(Removal::MoveToTrash)).map(|p| &p.item)),
+            bytes_requested: total_size(plans().filter(with(request)).map(|p| &p.item)),
         };
         state.preview = Some(StoredPreview {
             id: preview_id,
@@ -347,11 +364,11 @@ impl TinySession {
             .categories
             .into_iter()
             .map(|category| {
-                let action = desktop_action(providers, &category.id, &options);
+                let (action, tool) = desktop_action(providers, &category.id, &options);
                 let needs_admin = providers
                     .iter()
                     .any(|p| p.id() == category.id && p.needs_admin());
-                store_category(id, category, action, needs_admin, &mut candidates)
+                store_category(id, category, action, tool, needs_admin, &mut candidates)
             })
             .collect();
         keep_completable_shared_blocks(&mut candidates);
@@ -389,25 +406,34 @@ impl TinySession {
     }
 }
 
+/// What the app may do with a category, and the tool it runs for it. The
+/// Trash row and tool commands are offered only when the app asks for them.
 fn desktop_action(
     providers: &[Box<dyn CleanProvider>],
     id: &str,
     options: &CleanOptions,
-) -> FfiDesktopAction {
+) -> (FfiDesktopAction, Option<DesktopTool>) {
     let provider = providers.iter().find(|p| p.id() == id);
     if options.include_trash && provider.is_some_and(|p| p.desktop_empties_trash()) {
-        return FfiDesktopAction::EmptyTrash;
+        return (FfiDesktopAction::EmptyTrash, None);
+    }
+    let tool = provider.and_then(|p| p.desktop_tool());
+    match tool.filter(|_| options.tool_commands) {
+        Some(DesktopTool::Prune) => return (FfiDesktopAction::MoveToTrash, tool),
+        Some(DesktopTool::Request) => return (FfiDesktopAction::RequestRemoval, tool),
+        None => {}
     }
     let reason = match provider {
         Some(provider) => desktop_report_only(provider.as_ref()),
         None => Some(ReportOnly::NotPerPathTrash),
     };
-    match reason {
+    let action = match reason {
         None => FfiDesktopAction::MoveToTrash,
         Some(reason) => FfiDesktopAction::ReportOnly {
             reason: reason.into(),
         },
-    }
+    };
+    (action, None)
 }
 
 /// The provider's facts, or the path's own mtime when the category rule
@@ -431,6 +457,7 @@ fn store_category(
     discovery_id: u64,
     category: CheckedCategory,
     desktop_action: FfiDesktopAction,
+    tool: Option<DesktopTool>,
     needs_admin: bool,
     candidates: &mut HashMap<String, StoredCandidate>,
 ) -> FfiCleanCategory {
@@ -483,7 +510,12 @@ fn store_category(
                     evidence: candidate_evidence(&item),
                     size_is_upper_bound: checked.size_is_upper_bound,
                 });
-                let meta = std::fs::symlink_metadata(&item.path).ok();
+                // A tool's placeholder names no file: never stat it.
+                let meta = item
+                    .path
+                    .is_absolute()
+                    .then(|| std::fs::symlink_metadata(&item.path).ok())
+                    .flatten();
                 let fingerprint = match desktop_action {
                     FfiDesktopAction::EmptyTrash => PathFingerprint::of_listing,
                     _ => PathFingerprint::of,
@@ -498,6 +530,7 @@ fn store_category(
                         desktop_action,
                         size_is_upper_bound: checked.size_is_upper_bound,
                         shared: checked.shared,
+                        tool,
                     },
                 );
             }
@@ -600,13 +633,14 @@ fn plan_selection(
                     detail: format!("{path} is report-only on the desktop"),
                 });
             }
-            let fingerprint =
-                candidate
-                    .fingerprint
-                    .clone()
-                    .ok_or_else(|| FfiError::InvalidInput {
-                        detail: format!("{path} could not be inspected at discovery"),
-                    })?;
+            // Only a tool's placeholder may have no fingerprint.
+            let fingerprint = candidate.fingerprint.clone();
+            if fingerprint.is_none() && candidate.desktop_action != FfiDesktopAction::RequestRemoval
+            {
+                return Err(FfiError::InvalidInput {
+                    detail: format!("{path} could not be inspected at discovery"),
+                });
+            }
             let plan = PlannedItem {
                 item: candidate.item.clone(),
                 fingerprint,

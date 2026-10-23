@@ -85,6 +85,7 @@ fn the_desktop_option_reaches_core_options() {
         idle_days: 30,
         all_build_output,
         include_trash: false,
+        tool_commands: false,
     };
     assert!(CleanOptions::from(options(true)).all_build_output);
     assert!(!CleanOptions::from(options(false)).all_build_output);

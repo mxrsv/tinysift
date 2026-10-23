@@ -8,14 +8,15 @@ use crate::clean::fs_safe::dir_size_checked;
 /// Records every Trash move, Empty Trash and deletion in one log, so the
 /// order across routes is visible; fails the paths it is told to.
 #[derive(Default)]
-struct Sinks {
-    log: Mutex<Vec<String>>,
-    fail_trash: Option<TrashError>,
-    fail_delete: Option<&'static str>,
+pub(super) struct Sinks {
+    /// Shared, so a fake tool can log into the same sequence.
+    pub(super) log: Arc<Mutex<Vec<String>>>,
+    pub(super) fail_trash: Option<TrashError>,
+    pub(super) fail_delete: Option<&'static str>,
 }
 
 impl Sinks {
-    fn log(&self) -> Vec<String> {
+    pub(super) fn log(&self) -> Vec<String> {
         self.log.lock().unwrap().clone()
     }
 
@@ -24,7 +25,7 @@ impl Sinks {
     }
 }
 
-fn name(path: &Path) -> String {
+pub(super) fn name(path: &Path) -> String {
     path.file_name().unwrap().to_string_lossy().into_owned()
 }
 
@@ -98,7 +99,7 @@ fn providers() -> Vec<Box<dyn CleanProvider>> {
     ]
 }
 
-fn planned(category: &str, root: &Path, name: &str, removal: Removal) -> PlannedItem {
+pub(super) fn planned(category: &str, root: &Path, name: &str, removal: Removal) -> PlannedItem {
     PlannedItem {
         removal,
         ..plan(category, root, name)
@@ -115,7 +116,7 @@ fn trash_row(root: &Path) -> PlannedItem {
     fs::File::open(&bin).unwrap().set_modified(past).unwrap();
     let meta = fs::symlink_metadata(&bin).unwrap();
     PlannedItem {
-        fingerprint: PathFingerprint::of_listing(&meta),
+        fingerprint: Some(PathFingerprint::of_listing(&meta)),
         roots: vec![bin.clone()],
         ..planned("trash", root, ".Trash", Removal::EmptyTrash)
     }
@@ -309,7 +310,7 @@ fn permanent_deletion_keeps_every_guard() {
         planned("user-logs", &root, "kept", Removal::Delete),
         planned("rust-targets", &root, "guarded", Removal::Delete),
         PlannedItem {
-            fingerprint: fingerprint(&root.join("link")).unwrap(),
+            fingerprint: fingerprint(&root.join("link")).ok(),
             ..planned("user-logs", &root, "link", Removal::Delete)
         },
         changed,

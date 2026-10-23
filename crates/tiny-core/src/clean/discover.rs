@@ -334,6 +334,7 @@ mod tests {
             idle_days: 30,
             all_build_output: false,
             include_trash: false,
+            tool_commands: false,
         }
     }
 

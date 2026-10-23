@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::freed_size::{union_bytes, SharedBlocks};
 use super::fs_safe::PathFingerprint;
-use super::providers::{category_section, Section};
+use super::providers::{category_section, DesktopTool, Section};
 use super::types::CleanItem;
 
 /// One selected path with the trusted discovery-time data execution checks
@@ -14,7 +14,9 @@ use super::types::CleanItem;
 #[derive(Debug, Clone)]
 pub struct PlannedItem {
     pub item: CleanItem,
-    pub fingerprint: PathFingerprint,
+    /// `None` only for a tool's placeholder (`<simulator-runtime:UUID>`),
+    /// which names no file.
+    pub fingerprint: Option<PathFingerprint>,
     /// Directories discovery listed or walked for the item's category;
     /// execution acts only on paths inside one of them.
     pub roots: Vec<PathBuf>,
@@ -41,6 +43,8 @@ pub enum Removal {
     Delete,
     /// Finder's Empty Trash: only the `trash` row (`desktop_empties_trash`).
     EmptyTrash,
+    /// The category's own tool command (`desktop_tool`).
+    RunTool(DesktopTool),
 }
 
 /// The app's setting for what comes back on its own (OC1). `Trash` is how
@@ -56,19 +60,28 @@ pub enum DeleteMode {
 /// carry along, sits in Rebuilt automatically or Project build output;
 /// otherwise `MoveToTrash`, so Your files and unregistered categories always
 /// go to the Trash (OC1, OC2). Merging never widens: a cache folder holding
-/// a path that only goes to the Trash goes to the Trash with it. The Trash
+/// a path that only goes to the Trash goes to the Trash with it. A category
+/// with a `tool` runs it instead of deleting: a prune in Permanent mode only,
+/// a requested removal in both, since it has no Trash route. The Trash
 /// row's `EmptyTrash` comes from its provider, not from here.
-pub fn removal_for(item: &CleanItem, covers: &[CleanItem], mode: DeleteMode) -> Removal {
+pub fn removal_for(
+    item: &CleanItem,
+    covers: &[CleanItem],
+    mode: DeleteMode,
+    tool: Option<DesktopTool>,
+) -> Removal {
+    let permanent = mode == DeleteMode::Permanent;
     let rebuilt = |item: &CleanItem| {
         matches!(
             category_section(&item.category_id),
             Some(Section::Rebuilt | Section::BuildOutput)
         )
     };
-    if mode == DeleteMode::Permanent && std::iter::once(item).chain(covers).all(rebuilt) {
-        Removal::Delete
-    } else {
-        Removal::MoveToTrash
+    match tool {
+        Some(DesktopTool::Request) => Removal::RunTool(DesktopTool::Request),
+        Some(DesktopTool::Prune) if permanent => Removal::RunTool(DesktopTool::Prune),
+        None if permanent && std::iter::once(item).chain(covers).all(rebuilt) => Removal::Delete,
+        Some(DesktopTool::Prune) | None => Removal::MoveToTrash,
     }
 }
 

@@ -246,6 +246,7 @@ impl From<&CleanOpts> for tiny_core::options::CleanOptions {
             // The CLI lists only idle projects' build output.
             all_build_output: false,
             include_trash: false,
+            tool_commands: false,
         }
     }
 }

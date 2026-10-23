@@ -10,7 +10,7 @@ use crate::clean::types::{ExecAction, ExecReport, RiskLevel};
 use crate::error::Result;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 /// Makes every fixture directory unique within the process, even for
 /// parallel tests that read the same clock tick.
@@ -19,6 +19,7 @@ static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 mod protection;
 mod races;
 mod removal;
+mod tools;
 
 struct Fixture {
     id: &'static str,
@@ -121,7 +122,7 @@ fn fixture_root(label: &str, names: &[&str]) -> PathBuf {
 fn plan(category: &str, root: &Path, name: &str) -> PlannedItem {
     let path = root.join(name);
     PlannedItem {
-        fingerprint: fingerprint(&path).unwrap(),
+        fingerprint: fingerprint(&path).ok(),
         item: CleanItem {
             category_id: category.into(),
             category_label: category.into(),
@@ -437,7 +438,7 @@ fn home_its_ancestors_and_tool_paths_outside_home_are_refused() {
     let outside = fixture_root("outside", &["cache"]);
     let mut at_home = plan("logs", &home, "");
     at_home.item.path = home.clone();
-    at_home.fingerprint = fingerprint(&home).unwrap();
+    at_home.fingerprint = fingerprint(&home).ok();
     let tool_outside = plan("npm", &outside, "cache");
     let plain_outside = plan("logs", &outside, "cache");
     let providers: Vec<Box<dyn CleanProvider>> = vec![Box::new(fixture("logs")), {
