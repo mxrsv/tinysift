@@ -1,46 +1,78 @@
-# TinySift Core
+<div align="center">
 
-The Rust engine, `tiny` command-line tool and UniFFI interface used by TinySift.
-The [workspace](Cargo.toml) keeps all three crates together so a change to cleanup consent
-or process identity can be tested across the engine and native interface in one revision.
+<img src=".github/readme/icon.svg" width="96" alt="">
 
-**TinySift for Mac** is the free app built on this engine: it shows what fills your disk and
-frees what you pick. Get it from [tinysift.app](https://tinysift.app) or with Homebrew:
+# TinySift
+
+**Know your Mac. Then clean it.**
+
+A free Mac app that shows what slows your Mac and what fills its disk, then cleans only what you
+pick. This repository is its open-source engine, where the rules that touch your files live.
+
+[![Latest beta](https://img.shields.io/github/v/release/mxrsv/tinysift?include_prereleases&label=beta)](https://github.com/mxrsv/tinysift/releases)
+[![CI](https://img.shields.io/github/actions/workflow/status/mxrsv/tinysift/ci.yml?branch=main&label=CI)](https://github.com/mxrsv/tinysift/actions/workflows/ci.yml)
+[![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)](LICENSE)
+[![macOS 14+ on Apple silicon](https://img.shields.io/badge/macOS_14+-Apple_silicon-black?logo=apple)](https://tinysift.app)
+
+[Website](https://tinysift.app) · [Download](https://github.com/mxrsv/tinysift/releases) · [Discussions](https://github.com/mxrsv/tinysift/discussions) · [Privacy](https://tinysift.app/privacy)
+
+<img src=".github/readme/app-overview.png" width="860" alt="TinySift Overview: live CPU, memory, startup disk and listening ports">
+
+<sub>Sample data.</sub>
+
+</div>
+
+## Install
 
 ```bash
 brew install --cask mxrsv/tap/tinysift
 ```
 
-It needs Apple silicon and macOS 14 or later. Watch this repository's releases to hear about
-new versions, and ask questions or report a folder it missed in
-[Discussions](https://github.com/mxrsv/tinysift/discussions).
+Or download the DMG from [tinysift.app](https://tinysift.app) or the
+[Releases page](https://github.com/mxrsv/tinysift/releases). TinySift needs Apple silicon and
+macOS 14 or later; every DMG is Developer ID signed and notarized by Apple
+([release guide](docs/operations/release.md)). The [setup guide](https://tinysift.app/docs) covers
+Full Disk Access. TinySift is in beta: watch this repository's releases to hear about new versions.
 
-## Repository names
+## What it does
 
-This Rust workspace is the public GitHub repository `mxrsv/tinysift`, matching the TinySift
-brand. Its [GitHub Releases](https://github.com/mxrsv/tinysift/releases) host the signed app
-DMGs (all are beta pre-releases, so the sidebar shows only tags; open the Releases page);
-the [release guide](docs/operations/release.md) holds the rules.
-The private SwiftUI app and website belong to `mxrsv/tinycore`.
-Local directories remain `tinysift-core` for Rust and `tiny-cli` for the app;
-the [native builder](scripts/build-ffi.sh) does not depend on GitHub naming.
-Commit and PR rules are in [CONTRIBUTING](CONTRIBUTING.md).
+| Screen | What you get |
+| --- | --- |
+| **Overview** | CPU, memory, startup disk and listening ports, live. |
+| **CPU and RAM** | Every app and background process ranked by what it uses, with Quit and Force Quit ([processes](https://tinysift.app/docs#processes)). |
+| **Clean** | Developer caches, logs and leftovers: Xcode DerivedData, simulators, `node_modules`, npm, pnpm, cargo and [more](docs/user/clean.md#categories). |
+| **Storage** | What fills the disk, folder by folder. It only reads ([scan](docs/user/scan.md)). |
+| **Apps** | Installed apps by size; Uninstall moves an app and the files it left to the Trash ([uninstall contract](docs/internals/clean.md#the-desktops-checked-uninstall)). |
 
-## Build and check
+## Safe by design
 
-Use Rust 1.91 or newer. From this checkout:
+The rules that decide what may change on disk run in this repository's Rust engine, under the app's
+screens, so you can read and test them.
+
+- **Scanning only reads.** Nothing on disk changes until you open the review, see every path and
+  confirm. The review is single-use and expires ([clean contract](docs/internals/clean.md#the-desktops-checked-removal)).
+- **You pick.** Anything marked Review moves only when you tick it yourself; a folder that holds a
+  Review item you did not tick is left alone ([explicit selection](docs/internals/clean.md#the-desktops-checked-removal)).
+- **You see what is permanent.** Your own files, such as old downloads, only ever go to the Trash.
+  Caches and build output that tools create again are deleted for good by default; a setting sends
+  most of them to the Trash instead. The confirmation says how much goes each way ([removal routes](docs/internals/clean.md#the-desktops-checked-removal)).
+- **Every path is checked again just before anything happens to it**
+  ([`checked_execute.rs`](crates/tiny-core/src/clean/checked_execute.rs)), and a permanent deletion
+  never follows a symlink or crosses to another volume ([`fs_safe.rs`](crates/tiny-core/src/clean/fs_safe.rs)).
+- **Your data stays on your Mac.** No account and no analytics; the app goes online only to check
+  for updates ([privacy](https://tinysift.app/privacy)).
+
+## Command line
+
+The same engine ships as `tiny`, a command-line tool for terminals and scripts. Build it from this
+checkout with Rust 1.91 or newer, then preview a cleanup without changing anything:
 
 ```bash
 cargo install --path crates/tiny
-cargo fmt --all --check
-cargo test --workspace --all-targets --locked
-cargo clippy --workspace --all-targets --locked -- -D warnings
+tiny clean --dry-run
 ```
 
-macOS is required for Finder, port inspection and tool-backed cleanup. Portable tests also run
-on Linux; see [development](docs/operations/development.md) for the limits of those checks.
-
-## Commands
+### Commands
 
 | Command | Guide |
 | --- | --- |
@@ -50,23 +82,23 @@ on Linux; see [development](docs/operations/development.md) for the limits of th
 | `tiny uninstall` | [Uninstalling apps](docs/user/uninstall.md) |
 | `tiny processes` | [Processes](docs/user/processes.md) |
 
-## Native integration
+## Contributing
 
-The [FFI builder](scripts/build-ffi.sh) emits the static library and matching Swift bindings
-to an explicit output directory. The app owns copying those generated bindings into its
-Swift target. Neither the private app nor its website is part of this repository.
+Found a bug, or a folder TinySift missed?
+[Open an issue](https://github.com/mxrsv/tinysift/issues/new/choose). Questions and ideas go to
+[Discussions](https://github.com/mxrsv/tinysift/discussions).
 
-The cleanup records gained fields and options with defaults, but new enum cases break an exhaustive
-Swift `switch`: `FfiReportOnlyReason::NeedsAdministrator` and `XcodeNotInstalled`,
-`FfiEvidence::SimulatorRuntime`, and `FfiDesktopAction::EmptyTrash`, `RequestRemoval` and
-`DeleteAsAdministrator`. Regenerate the bindings and handle every case when a client moves to a
-new revision.
+Pull requests are welcome. Read [CONTRIBUTING](CONTRIBUTING.md) first, and run the same gates as CI:
 
-`TinySession.clean_places` (`FfiCleanPlace`) is additive: it lists the categories a scan with the
-same options can return, before any scan.
+```bash
+cargo fmt --all --check
+cargo test --workspace --all-targets --locked
+cargo clippy --workspace --all-targets --locked -- -D warnings
+```
 
-Read the [native safety contract](docs/internals/clean.md), [architecture](docs/internals/overview.md)
-and [documentation index](docs/README.md) before extending the interface.
+The [documentation index](docs/README.md) leads to the architecture, the native safety contract and
+the [development guide](docs/operations/development.md), including how a native client builds the
+FFI library and its Swift bindings.
 
 ## License
 

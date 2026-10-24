@@ -38,8 +38,28 @@ The builder uses the native Rust host target and this repository's `target/`, ig
 `CARGO_TARGET_DIR`/`CARGO_BUILD_TARGET` overrides. It first builds the static archive without
 `bindgen` or `test-hooks`, then generates bindings from that archive. The output contains
 `libtiny_ffi.a`, `tiny_ffi.swift`, `tiny_ffiFFI.h` and `module.modulemap`.
-The client must consume these outputs together and regenerate them after an FFI change.
+The client must consume these outputs together and regenerate them after an FFI change; the app
+owns copying the generated bindings into its Swift target.
+
+The cleanup records gained fields and options with defaults, but new enum cases break an exhaustive
+Swift `switch`: `FfiReportOnlyReason::NeedsAdministrator` and `XcodeNotInstalled`,
+`FfiEvidence::SimulatorRuntime`, and `FfiDesktopAction::EmptyTrash`, `RequestRemoval` and
+`DeleteAsAdministrator`. Regenerate the bindings and handle every case when a client moves to a
+new revision. `TinySession.clean_places` (`FfiCleanPlace`) is additive: it lists the categories a
+scan with the same options can return, before any scan.
 
 Rust tests cover the [session](../../crates/tiny-ffi/src/session.rs) and
 [cleanup boundary](../../crates/tiny-ffi/src/clean.rs). Native UI/actor tests and packaging are
 owned by the app repository, and remain necessary before shipping an app against a new core pin.
+Read the [native safety contract](../internals/clean.md) and [architecture](../internals/overview.md)
+before extending the interface.
+
+## Repository names
+
+This Rust workspace is the public GitHub repository `mxrsv/tinysift`, matching the TinySift
+brand. Its [GitHub Releases](https://github.com/mxrsv/tinysift/releases) host the signed app
+DMGs (all are beta pre-releases, so the sidebar shows only tags; open the Releases page);
+the [release guide](release.md) holds the rules.
+The private SwiftUI app and website belong to `mxrsv/tinycore`, so neither is part of this repository.
+Local directories remain `tinysift-core` for Rust and `tiny-cli` for the app;
+the [native builder](../../scripts/build-ffi.sh) does not depend on GitHub naming.

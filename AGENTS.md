@@ -7,7 +7,7 @@ and the [`tiny-ffi` UniFFI boundary](crates/tiny-ffi/src/lib.rs). Native present
 website live in the separate private app repository. Start with [docs](docs/README.md).
 This workspace's public GitHub repository is `mxrsv/tinysift`; its local directory remains
 `tinysift-core`. The private app GitHub repository is `mxrsv/tinycore`, in the local `tiny-cli`
-directory. See the [repository names](README.md#repository-names) before changing remotes or links.
+directory. See the [repository names](docs/operations/development.md#repository-names) before changing remotes or links.
 
 ## Common commands
 

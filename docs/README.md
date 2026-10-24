@@ -14,7 +14,7 @@
 - [Clean contract](internals/clean.md) — providers, consent and persistent protection.
 - [Glossary](internals/glossary.md) — canonical Rust/FFI vocabulary.
 - [Traps](internals/traps.md) — platform and safety constraints.
-- [Development](operations/development.md) — Cargo gates and native bindings.
+- [Development](operations/development.md) — Cargo gates, native bindings and repository names.
 - [Releases](operations/release.md) — tags, DMG assets, notes and checks.
 - [Contributing](../CONTRIBUTING.md) — commit and PR rules.
 
