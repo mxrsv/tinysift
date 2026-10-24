@@ -22,6 +22,10 @@ const MAX_CHILDREN: usize = 100;
 const RETAIN_DEPTH: usize = 1;
 const MAX_DEPTH: usize = 64;
 const MAX_SKIPPED: usize = 200;
+/// Walk threads. Measured on a 3.1M-file tree: 4 threads match 12 in wall time at under half the kernel CPU.
+const WALK_THREADS: usize = 4;
+/// Nested work stealing stacks stolen directory walks on top of waiting ones, so workers get more than the default.
+const WALK_STACK_BYTES: usize = 16 * 1024 * 1024;
 /// On macOS the data volume is also reachable through firmlinks under `/`, with the same `st_dev`.
 const DATA_VOLUME: &str = "/System/Volumes/Data";
 
@@ -95,14 +99,16 @@ pub fn scan(
     cancel: Option<&AtomicBool>,
     progress: ProgressCallback<'_>,
 ) -> Result<SpaceReport> {
-    scan_with_depth(root, cancel, progress, MAX_DEPTH)
+    scan_with(root, cancel, progress, MAX_DEPTH, WALK_THREADS)
 }
 
-fn scan_with_depth(
+/// Runs the scan on its own `threads`-wide pool, so it never occupies Rayon's global pool.
+fn scan_with(
     root: &Path,
     cancel: Option<&AtomicBool>,
     progress: ProgressCallback<'_>,
     max_depth: usize,
+    threads: usize,
 ) -> Result<SpaceReport> {
     validate_path(root)?;
     let root_meta = fs::symlink_metadata(root)?;
@@ -119,7 +125,7 @@ fn scan_with_depth(
         root_dev: device(&root_meta),
         max_depth,
     };
-    let mut top = Top::default();
+    let mut top = Walker::new(shared);
     let mut entries: Vec<PathBuf> = Vec::new();
     for entry in fs::read_dir(root)? {
         if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
@@ -137,25 +143,34 @@ fn scan_with_depth(
         Some(entries.len() as u64),
         "Reading directory sizes",
     );
-    // Parallelize immediate branches. Recursion is bounded and never follows symlinks.
+    // Every directory fans its subdirectories out over the pool. Recursion is bounded and never
+    // follows symlinks.
+    let pool = rayon::ThreadPoolBuilder::new()
+        .num_threads(threads)
+        .stack_size(WALK_STACK_BYTES)
+        .thread_name(|index| format!("space-lens-{index}"))
+        .build()
+        .map_err(|err| Error::Operation(format!("Could not start the scan workers: {err}")))?;
     let done = AtomicU64::new(0);
-    let results: Vec<_> = entries
-        .par_iter()
-        .map(|path| {
-            let mut walker = Walker::new(shared);
-            let visit = walker.walk(path, 0);
-            if !walker.cancelled() {
-                report(
-                    progress,
-                    "space-lens",
-                    done.fetch_add(1, Ordering::Relaxed) + 1,
-                    Some(entries.len() as u64),
-                    &path.display().to_string(),
-                );
-            }
-            (visit, walker)
-        })
-        .collect();
+    let results: Vec<_> = pool.install(|| {
+        entries
+            .par_iter()
+            .map(|path| {
+                let mut walker = Walker::new(shared);
+                let visit = walker.walk(path, 0);
+                if !walker.cancelled() {
+                    report(
+                        progress,
+                        "space-lens",
+                        done.fetch_add(1, Ordering::Relaxed) + 1,
+                        Some(entries.len() as u64),
+                        &path.display().to_string(),
+                    );
+                }
+                (visit, walker)
+            })
+            .collect()
+    });
     let mut root_node = new_node(root, &root_meta);
     root_node.age_seconds = 0;
     for (visit, walker) in results {
@@ -180,34 +195,6 @@ fn scan_with_depth(
     })
 }
 
-/// Report-level totals gathered from every branch.
-#[derive(Default)]
-struct Top {
-    skipped: Vec<String>,
-    skipped_count: u64,
-    depth_limited_count: u64,
-    other_volume_count: u64,
-    incomplete: bool,
-}
-
-impl Top {
-    fn skip(&mut self, path: &Path) {
-        self.skipped_count += 1;
-        if self.skipped.len() < MAX_SKIPPED {
-            self.skipped.push(path.display().to_string());
-        }
-    }
-
-    fn merge(&mut self, walker: Walker<'_>) {
-        self.skipped_count += walker.skipped_count;
-        let room = MAX_SKIPPED.saturating_sub(self.skipped.len());
-        self.skipped.extend(walker.skipped.into_iter().take(room));
-        self.depth_limited_count += walker.depth_limited_count;
-        self.other_volume_count += walker.other_volume_count;
-        self.incomplete |= walker.incomplete;
-    }
-}
-
 enum Visit {
     Node(SpaceNode),
     /// Symlink or special file: intentionally not counted.
@@ -228,6 +215,7 @@ struct Shared<'a> {
     max_depth: usize,
 }
 
+/// Walks one subtree and tallies what it met; the tallies of parallel subtrees are merged in order.
 struct Walker<'a> {
     shared: Shared<'a>,
     skipped: Vec<String>,
@@ -247,6 +235,15 @@ impl<'a> Walker<'a> {
             other_volume_count: 0,
             incomplete: false,
         }
+    }
+
+    fn merge(&mut self, other: Walker<'_>) {
+        self.skipped_count += other.skipped_count;
+        let room = MAX_SKIPPED.saturating_sub(self.skipped.len());
+        self.skipped.extend(other.skipped.into_iter().take(room));
+        self.depth_limited_count += other.depth_limited_count;
+        self.other_volume_count += other.other_volume_count;
+        self.incomplete |= other.incomplete;
     }
 
     fn cancelled(&self) -> bool {
@@ -333,6 +330,10 @@ impl<'a> Walker<'a> {
         entries: impl Iterator<Item = io::Result<fs::DirEntry>>,
         depth: usize,
     ) {
+        // Files are counted as they are read, so a flat directory of millions of files streams
+        // through `trim` instead of piling up as nodes. Subdirectories wait and are walked in
+        // parallel: work stealing keeps the pool busy however lopsided the tree is.
+        let mut subdirs: Vec<PathBuf> = Vec::new();
         for entry in entries {
             // Do not drain a large directory or construct paths after cancellation.
             if self.cancelled() {
@@ -342,16 +343,29 @@ impl<'a> Walker<'a> {
                 self.mark_unreadable(node, path);
                 continue;
             };
-            match self.walk(&entry.path(), depth + 1) {
-                Visit::Node(child) => {
-                    absorb(node, child, depth < RETAIN_DEPTH);
-                    if node.children.len() >= MAX_CHILDREN * 2 {
-                        trim(node);
-                    }
-                }
-                Visit::Failed => node.unreadable = true,
-                Visit::Ignored => {}
+            if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                subdirs.push(entry.path());
+                continue;
             }
+            let visit = self.walk(&entry.path(), depth + 1);
+            take(node, visit, depth);
+        }
+        if self.cancelled() {
+            return;
+        }
+        let shared = self.shared;
+        // An indexed collect keeps the listing order, so results do not depend on which thread wins.
+        let results: Vec<_> = subdirs
+            .par_iter()
+            .map(|dir| {
+                let mut walker = Walker::new(shared);
+                let visit = walker.walk(dir, depth + 1);
+                (visit, walker)
+            })
+            .collect();
+        for (visit, walker) in results {
+            take(node, visit, depth);
+            self.merge(walker);
         }
     }
 
@@ -426,6 +440,20 @@ fn allocated(meta: &fs::Metadata) -> u64 {
 #[cfg(not(unix))]
 fn allocated(meta: &fs::Metadata) -> u64 {
     meta.len()
+}
+
+/// Folds one child's outcome into `node` (a directory at `depth`), trimming once it holds twice the cap.
+fn take(node: &mut SpaceNode, visit: Visit, depth: usize) {
+    match visit {
+        Visit::Node(child) => {
+            absorb(node, child, depth < RETAIN_DEPTH);
+            if node.children.len() >= MAX_CHILDREN * 2 {
+                trim(node);
+            }
+        }
+        Visit::Failed => node.unreadable = true,
+        Visit::Ignored => {}
+    }
 }
 
 /// Adds `child` to `node`'s totals; keeps it as a child only when `retain`, else records it as omitted.

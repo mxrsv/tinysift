@@ -51,10 +51,13 @@ The clean pipeline, its registry and the desktop's checked removal are in [clean
 
 Process sampling must remain independent of filesystem scan workers.
 [`tiny-core` disables sysinfo's optional `multithread` feature](../../crates/tiny-core/Cargo.toml)
-while retaining its other capabilities: otherwise process refresh queues behind the
-same global Rayon pool used by [Storage scans](../../crates/tiny-core/src/space_lens.rs).
+while retaining its other capabilities: otherwise process refresh queues on Rayon's
+global pool behind any scan that uses it. Scans keep to bounded pools of their own:
+[Storage scans](../../crates/tiny-core/src/space_lens.rs) and the desktop's
+[`node_modules` sizing](../../crates/tiny-core/src/clean/providers/node_modules.rs) each use
+four threads, since more threads did not walk faster and cost twice the kernel CPU.
 The [sampler contention regression](../../crates/tiny-core/src/processes/snapshot.rs)
-holds that pool busy in an isolated test process and requires a real sample to finish
+holds the global pool busy in an isolated test process and requires a real sample to finish
 before releasing the scan worker.
 
 `clean`, `uninstall` and port lookups assume macOS tools: Finder, `pgrep`, `mdls`, `tmutil`,

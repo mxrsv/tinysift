@@ -132,7 +132,7 @@ fn depth_stop_has_its_own_reason_and_stays_a_lower_bound() {
     let deep = dir.path().join("a/b/c");
     fs::create_dir_all(&deep).unwrap();
     fs::write(deep.join("file"), b"12345").unwrap();
-    let result = scan_with_depth(dir.path(), None, None, 2).unwrap();
+    let result = scan_with(dir.path(), None, None, 2, WALK_THREADS).unwrap();
     let b = find(find(&result.root, "a"), "b");
     assert!(b.depth_limited && result.root.depth_limited);
     assert!(!b.unreadable && !result.root.unreadable);
@@ -318,13 +318,14 @@ fn cancelling_while_scanning_stops_the_remaining_branches() {
             flag.store(true, Ordering::Release);
         }
     };
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(1)
-        .build()
-        .unwrap();
-    let report = pool
-        .install(|| scan(dir.path(), Some(&flag), Some(&cancel_after_first_branch)))
-        .unwrap();
+    let report = scan_with(
+        dir.path(),
+        Some(&flag),
+        Some(&cancel_after_first_branch),
+        MAX_DEPTH,
+        1,
+    )
+    .unwrap();
     assert!(report.cancelled);
     assert_eq!(
         report.files_scanned, 5,
@@ -387,4 +388,47 @@ fn skipped_paths_are_capped_but_counted_in_full_across_branches() {
     assert_eq!(report.skipped_paths.len(), MAX_SKIPPED);
     assert_eq!(report.skipped_count, (MAX_SKIPPED + 5 + 10) as u64);
     assert!(report.incomplete);
+}
+
+/// Every field of a report that must not depend on the pool, with paths in a stable order.
+fn comparable(report: &SpaceReport) -> (String, Vec<String>) {
+    let mut skipped = report.skipped_paths.clone();
+    skipped.sort();
+    let mut shape = report.clone();
+    shape.skipped_paths.clear();
+    shape.root.age_seconds = 0;
+    (serde_json::to_string(&shape).unwrap(), skipped)
+}
+
+#[test]
+fn pool_width_does_not_change_the_report() {
+    let dir = temp();
+    let mut locked = Vec::new();
+    for branch in 0..6 {
+        let sub = dir.path().join(format!("b{branch}"));
+        fs::create_dir(&sub).unwrap();
+        for i in 0..4 {
+            fs::write(sub.join(format!("f{i}")), vec![0u8; branch * 10 + i + 1]).unwrap();
+            let inner = sub.join(format!("d{i}/e/f"));
+            fs::create_dir_all(&inner).unwrap();
+            fs::write(inner.join("leaf"), vec![0u8; 100 * (i + 1)]).unwrap();
+        }
+        let path = sub.join("locked");
+        lock(&path);
+        locked.push(path);
+    }
+    // Both links sit in one directory, so which of them is counted does not depend on timing.
+    fs::write(dir.path().join("b0/orig"), vec![0u8; 5000]).unwrap();
+    fs::hard_link(dir.path().join("b0/orig"), dir.path().join("b0/link")).unwrap();
+    let _restore = Restore(locked);
+    // A depth limit of 3 stops each `bN/dI/e/f` from being entered.
+    for max_depth in [MAX_DEPTH, 3] {
+        let single = scan_with(dir.path(), None, None, max_depth, 1).unwrap();
+        assert_eq!(single.skipped_count, 6);
+        assert_eq!(single.depth_limited_count > 0, max_depth < MAX_DEPTH);
+        for threads in [2, WALK_THREADS, 12] {
+            let wide = scan_with(dir.path(), None, None, max_depth, threads).unwrap();
+            assert_eq!(comparable(&wide), comparable(&single), "{threads} threads");
+        }
+    }
 }
