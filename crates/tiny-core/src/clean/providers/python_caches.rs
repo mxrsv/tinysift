@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::error::Result;
 
 use super::project_activity::assess;
-use super::{dev_search_roots, execute_per_item, is_idle, CleanProvider};
+use super::{dev_search_roots, execute_per_item, is_idle, is_node_modules, CleanProvider};
 use crate::clean::fs_safe::{dir_size_checked, walk_with};
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, Evidence, ExecAction, ExecReport, RiskLevel};
@@ -104,10 +104,11 @@ impl CleanProvider for PythonCaches {
 /// Walks `root` symlink-safe and returns every `__pycache__` dir. Manifest
 /// check NOT required — pycache is always safe to delete. Virtualenvs are
 /// not descended: their caches go with the venv, not as separate items.
+/// `node_modules` is skipped: it is most of the tree and is listed whole.
 pub fn find_pycache(ctx: &ScanContext<'_>, root: &Path) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     walk_with(root, ctx, |path, meta| {
-        if !meta.file_type().is_dir() || is_named_venv(path) {
+        if !meta.file_type().is_dir() || is_node_modules(path) || is_named_venv(path) {
             return false;
         }
         if path.file_name().and_then(|n| n.to_str()) == Some("__pycache__") {
@@ -122,11 +123,12 @@ pub fn find_pycache(ctx: &ScanContext<'_>, root: &Path) -> Vec<PathBuf> {
 /// Walks `root` symlink-safe and returns every venv-style dir that holds a
 /// `pyvenv.cfg` and whose parent has a python manifest (pyproject.toml /
 /// setup.py / requirements.txt) AND the manifest is idle. The name alone is
-/// not enough: a package folder called `env/` is source code.
+/// not enough: a package folder called `env/` is source code. `node_modules`
+/// is skipped: it is most of the tree and is listed whole.
 pub fn find_orphan_venv(ctx: &ScanContext<'_>, root: &Path, idle_days: u64) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     walk_with(root, ctx, |path, meta| {
-        if !meta.file_type().is_dir() {
+        if !meta.file_type().is_dir() || is_node_modules(path) {
             return false;
         }
         if is_named_venv(path) {
@@ -237,6 +239,29 @@ mod tests {
         fs::create_dir_all(root.join("p/src/__pycache__")).unwrap();
         let found = find_pycache(&ScanContext::unchecked(), &root);
         assert_eq!(found, vec![root.join("p/src/__pycache__")]);
+        let _ = crate::clean::fs_safe::remove_recursive_safe(&root);
+    }
+
+    #[test]
+    fn node_modules_is_not_walked() {
+        let root = tempdir("nodemods");
+        let inside = root.join("web/node_modules/node-gyp");
+        fs::create_dir_all(inside.join("gyp/__pycache__")).unwrap();
+        make_venv(&inside.join("venv"));
+        let manifest = inside.join("requirements.txt");
+        fs::write(&manifest, b"requests\n").unwrap();
+        let old = std::time::SystemTime::now() - std::time::Duration::from_secs(90 * 86_400);
+        std::fs::File::open(&manifest)
+            .unwrap()
+            .set_modified(old)
+            .unwrap();
+        fs::create_dir_all(root.join("web/src/__pycache__")).unwrap();
+        let ctx = ScanContext::unchecked();
+        assert_eq!(
+            find_pycache(&ctx, &root),
+            vec![root.join("web/src/__pycache__")]
+        );
+        assert!(find_orphan_venv(&ctx, &root, 30).is_empty());
         let _ = crate::clean::fs_safe::remove_recursive_safe(&root);
     }
 

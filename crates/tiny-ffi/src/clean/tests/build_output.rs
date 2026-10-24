@@ -257,8 +257,9 @@ fn safe_build_output_moves_without_review_consent_and_review_output_still_needs_
     std::fs::create_dir(root.join(".git")).unwrap();
     let idle = project(&root, "idle-crate", "Cargo.toml", "target", 10);
     let web = project(&root, "web", "package.json", "node_modules", 10);
-    // An active crate inside the idle project's node_modules.
-    let active = project(&web, "dep", "Cargo.toml", "target", 1);
+    // An active package inside the idle crate's target. Nothing inside a
+    // node_modules is a separate candidate: other walks stop there.
+    let active = project(&idle, "dep", "package.json", "node_modules", 1);
     let session = TestSession::new();
     let discovery = discover_build_output(&session, &root, Arc::new(Git::untracked()));
     for category in &discovery.categories {
@@ -269,10 +270,10 @@ fn safe_build_output_moves_without_review_consent_and_review_output_still_needs_
     assert_eq!(risk_of(&discovery, &web), FfiRisk::Safe);
     assert_eq!(risk_of(&discovery, &active), FfiRisk::Review);
 
-    let web_id = id_of(&discovery, "web/node_modules");
-    let active_id = id_of(&discovery, "dep/target");
+    let idle_id = id_of(&discovery, "idle-crate/target");
+    let active_id = id_of(&discovery, "dep/node_modules");
     // A Safe folder carrying an unselected Review one is excluded (PC-C3)...
-    let preview = session.clean_preview(vec![web_id.clone()]).unwrap();
+    let preview = session.clean_preview(vec![idle_id.clone()]).unwrap();
     assert!(preview.items.is_empty());
     assert_eq!(
         preview.excluded[0].reason,
@@ -281,14 +282,14 @@ fn safe_build_output_moves_without_review_consent_and_review_output_still_needs_
         }
     );
     // ...until the Review one is selected too.
-    let both = session.clean_preview(vec![web_id, active_id]).unwrap();
+    let both = session.clean_preview(vec![idle_id, active_id]).unwrap();
     assert_eq!(both.items.len(), 1);
-    assert!(both.items[0].path.ends_with("web/node_modules"));
+    assert!(both.items[0].path.ends_with("idle-crate/target"));
 
     // A Safe item alone previews and moves; execution rebuilds the providers
     // from the stored options.
     let preview = session
-        .clean_preview(vec![id_of(&discovery, "idle-crate/target")])
+        .clean_preview(vec![id_of(&discovery, "web/node_modules")])
         .unwrap();
     let factory = |stored: &CleanOptions| {
         assert!(stored.all_build_output);
@@ -306,6 +307,6 @@ fn safe_build_output_moves_without_review_consent_and_review_output_still_needs_
         )
         .unwrap();
     assert_eq!(outcomes(&report), vec![FfiItemOutcome::MovedToTrash]);
-    assert_eq!(*trash.moved.lock().unwrap(), vec![idle]);
+    assert_eq!(*trash.moved.lock().unwrap(), vec![web]);
     remove(&root);
 }

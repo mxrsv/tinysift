@@ -4,7 +4,7 @@ use std::sync::Arc;
 use crate::error::Result;
 
 use super::project_activity::{assess_build_output, refuse_tracked, BUILD_OUTPUT_SAFE_DAYS};
-use super::{dev_search_roots, execute_per_item, is_idle, CleanProvider};
+use super::{dev_search_roots, execute_per_item, is_idle, is_node_modules, CleanProvider};
 use crate::clean::fs_safe::{dir_size_checked, walk_with};
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
@@ -114,7 +114,8 @@ impl CleanProvider for RustTargets {
 
 /// Walks `root` symlink-safe and returns every `target` dir whose parent
 /// has a `Cargo.toml`, modified more than `idle_days` ago unless that is
-/// `None`. Does NOT descend into a `target` dir once found.
+/// `None`. Does NOT descend into a `target` dir once found. `node_modules` is
+/// skipped: it is most of the tree and is listed whole.
 pub fn find_rust_targets(
     ctx: &ScanContext<'_>,
     root: &Path,
@@ -122,7 +123,7 @@ pub fn find_rust_targets(
 ) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     walk_with(root, ctx, |path, meta| {
-        if !meta.file_type().is_dir() {
+        if !meta.file_type().is_dir() || is_node_modules(path) {
             return false;
         }
         let is_target = path.file_name().and_then(|n| n.to_str()) == Some("target");
@@ -208,6 +209,19 @@ mod tests {
         let found = find_rust_targets(&ScanContext::unchecked(), &root, Some(30));
         assert_eq!(found.len(), 1);
         assert_eq!(found[0], outer);
+        let _ = crate::clean::fs_safe::remove_recursive_safe(&root);
+    }
+
+    #[test]
+    fn does_not_descend_into_node_modules() {
+        let root = tempdir("nodemods");
+        let inside = root.join("web/node_modules/native");
+        fs::create_dir_all(inside.join("target")).unwrap();
+        let manifest = inside.join("Cargo.toml");
+        fs::write(&manifest, b"[package]\nname = \"x\"\n").unwrap();
+        backdate(&manifest, 40);
+        let found = find_rust_targets(&ScanContext::unchecked(), &root, Some(30));
+        assert!(found.is_empty());
         let _ = crate::clean::fs_safe::remove_recursive_safe(&root);
     }
 

@@ -448,6 +448,13 @@ pub(crate) fn dev_search_roots() -> Vec<std::path::PathBuf> {
         .collect()
 }
 
+/// True for a directory named `node_modules`. Walks for other ecosystems stop
+/// there: it holds most of a dev folder's entries and the node-modules
+/// provider already lists it whole.
+pub(crate) fn is_node_modules(dir: &std::path::Path) -> bool {
+    dir.file_name().and_then(|n| n.to_str()) == Some("node_modules")
+}
+
 /// True iff `manifest_path` exists and was modified more than `idle_days`
 /// days ago. Treats unreadable mtime as "not idle" (conservative — won't
 /// flag a project we can't measure).
