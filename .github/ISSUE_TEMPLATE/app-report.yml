@@ -1,0 +1,20 @@
+# Opened prefilled by the TinySift Mac app (Help > Report a Problem…, sidebar > Send Feedback).
+# The app fills `mac` through the query parameter of the same id, so keep the ids stable.
+name: TinySift app problem or feedback
+description: Report a problem with the TinySift Mac app, or send feedback about it.
+title: "App: "
+labels: [app]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected and what you saw instead.
+    validations:
+      required: true
+  - type: textarea
+    id: mac
+    attributes:
+      label: Mac info
+      description: Filled in by TinySift. Delete any line you prefer not to share.
+      render: text
