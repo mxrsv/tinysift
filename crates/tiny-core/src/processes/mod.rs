@@ -1,5 +1,6 @@
 //! Process inspection and actions shared by the CLI and the native app.
 
+mod footprint;
 pub mod ports;
 pub mod pressure;
 pub mod snapshot;

@@ -24,8 +24,7 @@ pub struct FfiProcessInfo {
     pub cpu_percent: Option<f32>,
     pub cpu_measured: bool,
     /// Physical footprint, not resident memory: dirty private memory plus its compressed
-    /// and swapped pages, without clean file-backed or shared library pages. `None` when
-    /// macOS denies the read.
+    /// and swapped pages. `None` when it cannot be read.
     pub memory_bytes: Option<u64>,
     pub executable_path: Option<String>,
     /// Why `process_terminate` would refuse this process, if anything. Lets
