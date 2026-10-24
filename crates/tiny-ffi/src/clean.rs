@@ -142,6 +142,21 @@ impl TinySession {
         self.discover_clean(options, &providers, &probe, &token, progress.as_ref())
     }
 
+    /// The categories `clean_discover` would scan with these options, in scan
+    /// order, without scanning or taking the operation gate. A scan may omit
+    /// one whose tool or folder is absent on this Mac, so this is the most it
+    /// can return, not what it will find.
+    pub fn clean_places(&self, options: FfiCleanOptions) -> Vec<FfiCleanPlace> {
+        let options = CleanOptions::from(options);
+        select_providers_with(&options, app_runner())
+            .iter()
+            .map(|p| FfiCleanPlace {
+                id: p.id().to_string(),
+                label: p.label().to_string(),
+            })
+            .collect()
+    }
+
     /// Builds a preview from candidate IDs of the current discovery. Unknown
     /// or stale IDs are rejected; paths the saved "always keep" rules hold,
     /// and overlapping paths, are listed as excluded. Unreadable saved rules

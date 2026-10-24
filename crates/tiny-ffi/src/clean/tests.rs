@@ -14,6 +14,7 @@ use super::*;
 
 mod build_output;
 mod execute_protection;
+mod places;
 mod protection;
 mod protection_writes;
 mod removal;

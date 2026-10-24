@@ -35,6 +35,15 @@ pub struct FfiCleanOptions {
     pub tool_commands: bool,
 }
 
+/// One category a scan with the same options can return, known before the
+/// scan. A category that does not apply on this Mac (its tool or folder is
+/// absent) may still be left out of the scan's result.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiCleanPlace {
+    pub id: String,
+    pub label: String,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum FfiRisk {
     Safe,

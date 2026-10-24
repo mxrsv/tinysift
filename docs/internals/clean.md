@@ -29,6 +29,12 @@ nothing recreates the items), except `node-modules` and `rust-targets`, which ar
 output. The `SECTIONS` test fails until a new id gets a deliberate section, so build output never
 lands in Rebuilt just because a build restores it.
 
+`clean_places(options)` (`FfiCleanPlace`: `id`, `label`) lists the categories `clean_discover` would
+scan with the same options, from the same `select_providers_with`, so a count shown before a scan is
+never hard-coded. It is the most a scan can return: a category whose tool or folder is absent
+(`available()` false without a `required_tool`) is dropped from the scan result. The
+`places` tests fail when the list drifts from the registry, the visibility filter or `category_section`.
+
 Desktop eligibility is deny by default. `desktop_trash_paths()` is true only when cleanup is
 exactly "move each listed path to Trash", and `Destructive` risk is always report only
 (`desktop_report_only`). Three narrow exceptions each have their own provider flag and their own

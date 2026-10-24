@@ -62,6 +62,9 @@ Swift `switch`: `FfiReportOnlyReason::NeedsAdministrator` and `XcodeNotInstalled
 `DeleteAsAdministrator`. Regenerate the bindings and handle every case when a client moves to a
 new revision.
 
+`TinySession.clean_places` (`FfiCleanPlace`) is additive: it lists the categories a scan with the
+same options can return, before any scan.
+
 Read the [native safety contract](docs/internals/clean.md), [architecture](docs/internals/overview.md)
 and [documentation index](docs/README.md) before extending the interface.
 
