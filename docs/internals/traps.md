@@ -90,8 +90,8 @@ Things that are not obvious from reading one file.
   `AutomationDenied` ([`finder_trash.rs`](../../crates/tiny-core/src/clean/finder_trash.rs)).
   Grant access in System Settings → Privacy & Security → Automation.
 - **The port smoke test is macOS-only and needs `/usr/sbin/lsof`.** It skips without
-  `python3` ([`processes_smoke.rs`](../../crates/tiny/tests/processes_smoke.rs)); Linux
-  [CI](../../.github/workflows/ci.yml) retains the platform-independent port fixture tests.
+  `python3` ([`processes_smoke.rs`](../../crates/tiny/tests/processes_smoke.rs)); the
+  platform-independent port fixture tests run everywhere.
 
 ## Code layout
 

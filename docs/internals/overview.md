@@ -65,5 +65,5 @@ before releasing the scan worker.
 `ToolLookup::app`, because a Finder-launched app gets a minimal `PATH`
 ([`runner.rs`](../../crates/tiny-core/src/runner.rs)). Outside macOS-only tests, the only
 `cfg(target_os)` gate is the memory-pressure sysctl, which reads `None` elsewhere
-([`pressure.rs`](../../crates/tiny-core/src/processes/pressure.rs)); the workspace builds on
-Linux and fails at run time wherever it shells out to a macOS tool.
+([`pressure.rs`](../../crates/tiny-core/src/processes/pressure.rs)); on other platforms the
+workspace fails at run time wherever it shells out to a macOS tool, and no CI checks it there.
