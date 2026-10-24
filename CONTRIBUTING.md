@@ -19,22 +19,53 @@ Read the [development guide](docs/operations/development.md) and the
 
 ## Commits
 
-Use [Conventional Commits](https://www.conventionalcommits.org) with a scope:
-`type(scope): description`, imperative, lower-case, no trailing period, ≤ 72 characters.
+Use [Conventional Commits](https://www.conventionalcommits.org) with a scope. Enable the
+[commit-msg check](.githooks/commit-msg) once per clone:
 
-- **Types:** `feat`, `fix`, `docs`, `test`, `refactor`, `perf`, `chore`.
-- **Scopes** follow the code area: `clean`, `uninstall`, `processes`, `storage`, `space-lens`,
-  `ffi`, `core`, `docs`, `license`.
-- Breaking changes to the CLI, the FFI records or the consent contract add `!` after the scope
-  (`feat(ffi)!: …`) and a `BREAKING CHANGE:` footer.
+```bash
+git config core.hooksPath .githooks
+```
+
+It checks the header form, its length, the blank line before the body and the language; the
+rest of the list is for reviewers. [CI](.github/workflows/commit-messages.yml) runs the same
+check on every commit pushed to `main` or proposed in a PR, and on the PR title and body.
+
+- **Header:** `type(scope): description`, at most 72 characters. Write the description in the
+  imperative mood (`add`, not `added` or `adds`), start it with a lower-case word and end it
+  without a period.
+- **Types:** `feat` (new behavior), `fix` (bug fix), `perf` (faster or lighter, same results),
+  `refactor` (no behavior change), `test`, `docs`, `build` (Cargo, build scripts), `ci`
+  (workflows), `chore` (repository upkeep).
+- **Scopes** are kebab-case and name the area changed: `clean`, `uninstall`, `processes`,
+  `storage`, `space-lens`, `ffi`, `core` for code; `docs`, `readme`, `release`, `agents`,
+  `github`, `license` for repository files.
+- **Body:** optional, after one blank line, wrapped at 72 characters. Explain what changed and
+  why; the diff already shows how.
+- **Breaking changes** to the CLI, the FFI records or the consent contract add `!` after the
+  scope (`feat(ffi)!: …`) and a `BREAKING CHANGE:` footer.
 - One commit is one complete, buildable piece of work. Do not mix unrelated changes.
 - Everything committed is English: code, comments, docs, CLI copy, commit messages, PR text
-  and review comments.
+  and review comments. The check rejects Vietnamese letters, so it also rejects accented words
+  such as `café`.
+- Messages git writes itself (`Merge …`, `Revert "…"`, `fixup!`, `squash!`, `amend!`) are exempt.
+
+```text
+fix(clean): stop moving into the Trash after a failed emptying
+
+Finder may still be emptying after a timed-out or failed Empty Trash, and
+would take what the run moves in. The empty script now runs under
+'with timeout of 540 seconds' (below the runner's 600) so a large Trash is
+not reported failed after AppleScript's two-minute default.
+```
+
+Early commits predate these rules and stay as they are: release tags and the app's pinned core
+revision point at their hashes, so history is never rewritten.
 
 ## Pull requests
 
 - One concern per PR, title in the same `type(scope): description` form.
-- The body explains what changed and why, and lists how you tested it.
+- Fill in the [template](.github/pull_request_template.md): what changed and why, and how you
+  tested it.
 - CI must be green before merge.
 
 ## Releases

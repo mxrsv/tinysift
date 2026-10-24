@@ -1,0 +1,58 @@
+#!/usr/bin/env perl
+# Checks a commit message against the rules in CONTRIBUTING.md#commits.
+# Git runs it as the commit-msg hook (`git config core.hooksPath .githooks`);
+# CI runs it on every pushed commit and on the pull request title and body.
+use strict;
+use warnings;
+use utf8;
+use Encode qw(decode FB_CROAK);
+use Unicode::Normalize qw(NFC);
+
+my $TYPES = 'feat|fix|perf|refactor|test|docs|build|ci|chore';
+my $MAX_HEADER = 72;
+# Letters only Vietnamese uses in practice; English text never needs them.
+my $VIETNAMESE = qr/[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i;
+# Messages git writes itself.
+my $GENERATED = qr/^(?:Merge |Revert "|fixup! |squash! |amend! )/;
+
+my $file = shift or die "usage: commit-msg <message-file>\n";
+open my $fh, '<:raw', $file or die "commit-msg: cannot read $file: $!\n";
+my $raw = do { local $/; <$fh> };
+close $fh;
+
+my $text = eval { decode('UTF-8', $raw, FB_CROAK) };
+defined $text or die "commit-msg: the message is not valid UTF-8\n";
+# macOS input can arrive decomposed (NFD); compose it so accents match as one letter.
+$text = NFC($text);
+$text =~ s/\r\n?/\n/g;
+# Git hands the hook the message before stripping comments and the `commit -v` diff.
+$text =~ s/^# -+ >8 -+\n.*//ms;
+my @lines = grep { !/^#/ } split /\n/, $text;
+shift @lines while @lines && $lines[0] =~ /^\s*$/;
+
+my $header = $lines[0] // '';
+exit 0 if $header =~ $GENERATED;
+# A squash merge appends ` (#N)` to the PR title; the PR check already counted the title.
+(my $subject = $header) =~ s/ \(#\d+\)$//;
+
+my @errors;
+if ($subject =~ /^(?:$TYPES)\([a-z0-9]+(?:-[a-z0-9]+)*\)!?: (\S.*)$/) {
+    my $description = $1;
+    push @errors, 'start the description with a lower-case word' if $description =~ /^\p{Lu}/;
+    push @errors, 'drop the trailing period' if $description =~ /\.$/;
+} else {
+    push @errors, "write the header as `type(scope): description`; type is one of: "
+        . join(', ', split /\|/, $TYPES) . '; scope is kebab-case';
+}
+my $length = length $subject;
+push @errors, "shorten the header to $MAX_HEADER characters (it has $length)" if $length > $MAX_HEADER;
+push @errors, 'leave one blank line between the header and the body' if @lines > 1 && $lines[1] ne '';
+if (my ($line) = grep { $_ =~ $VIETNAMESE } @lines) {
+    push @errors, "write the message in English; found: \"$line\"";
+}
+
+exit 0 unless @errors;
+binmode STDERR, ':encoding(UTF-8)';
+print STDERR "commit-msg: \"$header\" breaks the commit rules (CONTRIBUTING.md#commits):\n";
+print STDERR "  - $_\n" for @errors;
+exit 1;

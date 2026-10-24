@@ -49,8 +49,9 @@ directory. See the [repository names](docs/operations/development.md#repository-
 
 ## Commits and releases
 
-Commit and PR rules are in [CONTRIBUTING](CONTRIBUTING.md); app DMG releases follow the
-[release guide](docs/operations/release.md).
+Commit and PR rules are in [CONTRIBUTING](CONTRIBUTING.md); run
+`git config core.hooksPath .githooks` once per clone so the commit-msg check enforces them.
+App DMG releases follow the [release guide](docs/operations/release.md).
 
 ## Documentation
 
