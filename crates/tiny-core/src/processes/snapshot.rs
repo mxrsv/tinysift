@@ -714,6 +714,24 @@ mod tests {
     }
 
     #[test]
+    fn cli_json_keeps_resident_memory_and_hides_the_footprint() {
+        let info = ProcessInfo {
+            footprint_bytes: Some(1024),
+            ..to_info(raw(4096, 501), true, 501)
+        };
+        let snapshot = ProcessSnapshot {
+            processes: vec![info],
+            sampled_at: 1,
+            cpu_measured: true,
+            system_usage: SystemUsage::default(),
+        };
+        let json = serde_json::to_value(snapshot).unwrap();
+        let process = &json["processes"][0];
+        assert_eq!(process["memoryBytes"], 4096);
+        assert!(process.get("footprintBytes").is_none());
+    }
+
+    #[test]
     fn measured_sample_keeps_cpu_value() {
         let info = to_info(raw(4096, 501), true, 501);
         assert_eq!(info.cpu_percent, Some(12.5));

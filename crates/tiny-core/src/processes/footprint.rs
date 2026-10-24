@@ -3,7 +3,8 @@
 /// Dirty private memory plus its compressed and swapped pages, without clean file-backed or
 /// shared library pages, as `top`'s MEM column reports. `None` when the read fails: macOS
 /// denies it for another user's process, the process is gone, or the platform has no
-/// `proc_pid_rusage`.
+/// `proc_pid_rusage`. An exited process that is not reaped yet reads zero, so zero is
+/// `None` too: a live process always holds some dirty memory.
 #[cfg(target_os = "macos")]
 pub(crate) fn phys_footprint(pid: u32) -> Option<u64> {
     let pid = libc::c_int::try_from(pid).ok()?;
@@ -17,7 +18,9 @@ pub(crate) fn phys_footprint(pid: u32) -> Option<u64> {
             (&mut info as *mut libc::rusage_info_v2).cast(),
         )
     };
-    (status == 0).then_some(info.ri_phys_footprint)
+    (status == 0)
+        .then_some(info.ri_phys_footprint)
+        .filter(|&bytes| bytes > 0)
 }
 
 #[cfg(not(target_os = "macos"))]
@@ -45,6 +48,22 @@ mod tests {
         // launchd (pid 1) belongs to root, so only a root test run may read it.
         let root = Sampler::new().current_uid() == 0;
         assert_eq!(phys_footprint(1).is_some(), root);
+    }
+
+    #[test]
+    fn exited_child_not_yet_reaped_is_unreadable_not_zero() {
+        let mut child = Command::new("/usr/bin/true").spawn().unwrap();
+        let pid = child.id();
+        // SAFETY: an all-zero `siginfo_t` is a valid value to fill.
+        let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+        // WNOWAIT returns once the child has exited and leaves it unreaped.
+        // SAFETY: `info` outlives the call.
+        let status =
+            unsafe { libc::waitid(libc::P_PID, pid, &mut info, libc::WEXITED | libc::WNOWAIT) };
+        let footprint = phys_footprint(pid);
+        child.wait().unwrap();
+        assert_eq!(status, 0);
+        assert_eq!(footprint, None);
     }
 
     /// A child test process holds the memory, so other tests' allocations cannot move the

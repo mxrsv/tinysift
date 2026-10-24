@@ -426,13 +426,17 @@ mod tests {
             .expect("own process is sampled");
         assert!(me.is_current_user);
         assert!(me.cpu_measured);
-        assert!(me.memory_bytes.is_some_and(|bytes| bytes > 0));
+        // Only macOS reads a footprint; elsewhere memory stays unavailable.
+        assert_eq!(
+            me.memory_bytes.is_some_and(|bytes| bytes > 0),
+            cfg!(target_os = "macos")
+        );
         assert_eq!(me.refusal, Some(FfiRefusal::OwnProcess));
     }
 
     #[test]
     fn memory_crosses_the_boundary_as_the_footprint() {
-        let info = ProcessInfo {
+        let info = |footprint_bytes| ProcessInfo {
             pid: 42,
             name: "sample".into(),
             user: None,
@@ -443,10 +447,15 @@ mod tests {
             cpu_percent: None,
             cpu_measured: false,
             memory_bytes: Some(4096),
-            footprint_bytes: Some(1024),
+            footprint_bytes,
             exe: None,
         };
-        assert_eq!(FfiProcessInfo::from(info).memory_bytes, Some(1024));
+        assert_eq!(
+            FfiProcessInfo::from(info(Some(1024))).memory_bytes,
+            Some(1024)
+        );
+        // An unread footprint never falls back to resident memory.
+        assert_eq!(FfiProcessInfo::from(info(None)).memory_bytes, None);
     }
 
     #[test]
