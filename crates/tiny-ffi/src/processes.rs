@@ -23,6 +23,9 @@ pub struct FfiProcessInfo {
     /// Per-core percentage; can exceed 100. `None` when not measured.
     pub cpu_percent: Option<f32>,
     pub cpu_measured: bool,
+    /// Physical footprint, not resident memory: dirty private memory plus its compressed
+    /// and swapped pages, without clean file-backed or shared library pages. `None` when
+    /// macOS denies the read.
     pub memory_bytes: Option<u64>,
     pub executable_path: Option<String>,
     /// Why `process_terminate` would refuse this process, if anything. Lets
@@ -325,7 +328,7 @@ impl From<ProcessInfo> for FfiProcessInfo {
             start_time: info.start_time,
             cpu_percent: info.cpu_percent,
             cpu_measured: info.cpu_measured,
-            memory_bytes: info.memory_bytes,
+            memory_bytes: info.footprint_bytes,
             executable_path: info
                 .exe
                 .and_then(|path| path.into_os_string().into_string().ok()),
@@ -424,7 +427,27 @@ mod tests {
             .expect("own process is sampled");
         assert!(me.is_current_user);
         assert!(me.cpu_measured);
+        assert!(me.memory_bytes.is_some_and(|bytes| bytes > 0));
         assert_eq!(me.refusal, Some(FfiRefusal::OwnProcess));
+    }
+
+    #[test]
+    fn memory_crosses_the_boundary_as_the_footprint() {
+        let info = ProcessInfo {
+            pid: 42,
+            name: "sample".into(),
+            user: None,
+            uid: None,
+            is_current_user: false,
+            parent_pid: None,
+            start_time: 1,
+            cpu_percent: None,
+            cpu_measured: false,
+            memory_bytes: Some(4096),
+            footprint_bytes: Some(1024),
+            exe: None,
+        };
+        assert_eq!(FfiProcessInfo::from(info).memory_bytes, Some(1024));
     }
 
     #[test]

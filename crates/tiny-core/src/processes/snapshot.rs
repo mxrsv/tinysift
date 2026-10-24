@@ -29,6 +29,11 @@ pub struct ProcessInfo {
     pub cpu_measured: bool,
     /// Resident memory. `None` when the process cannot be inspected.
     pub memory_bytes: Option<u64>,
+    /// Physical footprint: dirty private memory plus its compressed and swapped pages,
+    /// without clean file-backed or shared library pages, as `top`'s MEM column reports.
+    /// Native app only; preserve the existing CLI JSON contract.
+    #[serde(skip)]
+    pub footprint_bytes: Option<u64>,
     #[serde(skip)]
     pub exe: Option<PathBuf>,
 }
@@ -165,6 +170,7 @@ pub(crate) fn to_info(raw: RawProcess, cpu_measured: bool, current_uid: u32) -> 
         cpu_percent: measured.then_some(raw.cpu),
         cpu_measured: measured,
         memory_bytes: readable.then_some(raw.memory),
+        footprint_bytes: None,
         exe: raw.exe,
     }
 }
@@ -344,7 +350,12 @@ impl Sampler {
                     raw.name = name;
                 }
                 let count = seen.map_or(0, |s| s.count);
-                to_info(raw, count >= REFRESHES_FOR_CPU, self.current_uid)
+                let info = to_info(raw, count >= REFRESHES_FOR_CPU, self.current_uid);
+                // A process whose task info was denied denies this read too; skip the call.
+                ProcessInfo {
+                    footprint_bytes: info.memory_bytes.and_then(|_| phys_footprint(info.pid)),
+                    ..info
+                }
             })
             .collect();
         ProcessSnapshot {
@@ -354,6 +365,28 @@ impl Sampler {
             system_usage: self.system_usage(),
         }
     }
+}
+
+/// `None` when macOS denies the read, as it does for another user's process.
+#[cfg(target_os = "macos")]
+fn phys_footprint(pid: u32) -> Option<u64> {
+    let pid = libc::c_int::try_from(pid).ok()?;
+    // SAFETY: an all-zero `rusage_info_v2` is a valid value of plain integers.
+    let mut info: libc::rusage_info_v2 = unsafe { std::mem::zeroed() };
+    // SAFETY: `info` is the structure the RUSAGE_INFO_V2 flavor fills.
+    let status = unsafe {
+        libc::proc_pid_rusage(
+            pid,
+            libc::RUSAGE_INFO_V2,
+            (&mut info as *mut libc::rusage_info_v2).cast(),
+        )
+    };
+    (status == 0).then_some(info.ri_phys_footprint)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn phys_footprint(_pid: u32) -> Option<u64> {
+    None
 }
 
 pub(crate) fn unix_now() -> u64 {
@@ -668,6 +701,107 @@ mod tests {
         // so a name kept from before the exec would read as a changed identity.
         assert_ne!(before.name, "sleep");
         assert_eq!(after.name, "sleep");
+    }
+
+    /// A child test process holds the memory, so other tests' allocations cannot move the reading.
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn footprint_counts_dirty_memory_but_not_a_mapped_file() {
+        use std::io::{BufRead, BufReader};
+        use std::process::{Command, Stdio};
+
+        const CHILD: &str = "TINY_FOOTPRINT_TEST_DIR";
+        const MIB: u64 = 1 << 20;
+        if let Some(dir) = std::env::var_os(CHILD) {
+            hold_dirty_memory_and_a_mapped_file(std::path::Path::new(&dir));
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let mut child = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "processes::snapshot::tests::footprint_counts_dirty_memory_but_not_a_mapped_file",
+                "--nocapture",
+            ])
+            .env(CHILD, dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let ready = lines
+            .by_ref()
+            .map_while(Result::ok)
+            .any(|line| line.starts_with(FOOTPRINT_READY));
+        let snapshot = Sampler::new().sample();
+        // Closing stdin releases the child before any assertion can fail; draining keeps
+        // its last output off a closed pipe.
+        drop(child.stdin.take());
+        lines.for_each(drop);
+        child.wait().unwrap();
+        assert!(ready, "the child must reach the mapped state");
+        let held = snapshot
+            .processes
+            .iter()
+            .find(|p| p.pid == child.id())
+            .expect("child appears in the sample");
+        let footprint = held.footprint_bytes.expect("own child is readable");
+        // 64 MiB of dirty memory counts; the 64 MiB mapped file would push it past 128 MiB.
+        assert!(
+            (64 * MIB..112 * MIB).contains(&footprint),
+            "footprint {} MiB",
+            footprint / MIB
+        );
+        // SAFETY: getuid has no preconditions and cannot fail.
+        if unsafe { libc::getuid() } != 0 {
+            let launchd = snapshot.processes.iter().find(|p| p.pid == 1);
+            assert!(launchd.is_none_or(|p| p.footprint_bytes.is_none()));
+        }
+    }
+
+    #[cfg(target_os = "macos")]
+    const FOOTPRINT_READY: &str = "footprint-test-ready";
+
+    #[cfg(target_os = "macos")]
+    fn hold_dirty_memory_and_a_mapped_file(dir: &std::path::Path) {
+        use std::os::fd::AsRawFd;
+
+        const LEN: usize = 64 << 20;
+        // Pseudo-random bytes, so compressing the pages cannot shrink them.
+        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
+        let data: Vec<u8> = (0..LEN)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                state as u8
+            })
+            .collect();
+        let path = dir.join("mapped");
+        std::fs::write(&path, &data).unwrap();
+        let file = std::fs::File::open(&path).unwrap();
+        // SAFETY: a fresh read-only private mapping of a file this process just wrote.
+        let map = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                LEN,
+                libc::PROT_READ,
+                libc::MAP_PRIVATE,
+                file.as_raw_fd(),
+                0,
+            )
+        };
+        assert_ne!(map, libc::MAP_FAILED);
+        // SAFETY: reads a constant system value.
+        let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).unwrap();
+        let touched: u64 = (0..LEN)
+            .step_by(page)
+            // SAFETY: every offset lies inside the LEN-byte mapping.
+            .map(|offset| u64::from(unsafe { *map.cast::<u8>().add(offset) }))
+            .sum();
+        println!("{FOOTPRINT_READY} {touched} {}", data[LEN - 1]);
+        let mut line = String::new();
+        let _ = std::io::stdin().read_line(&mut line);
     }
 
     #[test]

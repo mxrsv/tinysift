@@ -247,6 +247,7 @@ mod tests {
             cpu_percent: None,
             cpu_measured: false,
             memory_bytes: None,
+            footprint_bytes: None,
             exe: None,
         }
     }

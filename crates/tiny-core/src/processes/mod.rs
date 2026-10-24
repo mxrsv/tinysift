@@ -133,6 +133,7 @@ mod tests {
             cpu_percent: Some(pid as f32),
             cpu_measured: true,
             memory_bytes: Some(u64::from(pid)),
+            footprint_bytes: None,
             exe: None,
         }
     }
