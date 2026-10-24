@@ -42,6 +42,36 @@ pub struct ScanFindings {
     pub refused: BTreeMap<PathBuf, String>,
 }
 
+impl ScanFindings {
+    /// Folds what a worker recorded into `self`, leaving exactly what one
+    /// context would hold had the worker's walks run on it: counts add up and
+    /// the first error already seen is kept.
+    pub fn absorb(&mut self, other: ScanFindings) {
+        for (path, theirs) in other.unreadable {
+            self.unreadable
+                .entry(path)
+                .and_modify(|ours| ours.entries += theirs.entries)
+                .or_insert(theirs);
+        }
+        self.roots.extend(other.roots);
+        self.size_upper_bound.extend(other.size_upper_bound);
+        self.shared.extend(other.shared);
+        self.refused.extend(other.refused);
+    }
+}
+
+/// The probe of a worker context: workers never decide anything about
+/// running apps, so a call is a bug and must be visible.
+struct NoProbe;
+
+impl AppProbe for NoProbe {
+    fn probe(&self, name: &str) -> std::result::Result<bool, String> {
+        Err(format!("worker contexts cannot probe for {name}"))
+    }
+}
+
+static WORKER_PROBE: NoProbe = NoProbe;
+
 pub struct ScanContext<'a> {
     cancel: Option<&'a AtomicBool>,
     probe: &'a dyn AppProbe,
@@ -80,6 +110,24 @@ impl<'a> ScanContext<'a> {
     /// "not running", exactly as before checked discovery existed.
     pub fn unchecked() -> ScanContext<'static> {
         ScanContext::new(None, &LEGACY_PROBE)
+    }
+
+    /// The flag a worker thread needs to build its own [`Self::worker`].
+    /// The context itself is not `Sync`, but the flag is.
+    pub fn cancel_flag(&self) -> Option<&'a AtomicBool> {
+        self.cancel
+    }
+
+    /// A context for one parallel task: it shares the cancel flag, records
+    /// into findings of its own and answers no app probe. Hand its
+    /// `take_findings` back to the parent through [`Self::absorb`].
+    pub fn worker(cancel: Option<&'a AtomicBool>) -> Self {
+        Self::new(cancel, &WORKER_PROBE)
+    }
+
+    /// Records what a worker context found, as if it had run here.
+    pub fn absorb(&self, findings: ScanFindings) {
+        self.findings.borrow_mut().absorb(findings);
     }
 
     pub fn is_cancelled(&self) -> bool {
@@ -157,6 +205,7 @@ impl<'a> ScanContext<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clean::freed_size::SharedBlocks;
     use crate::clean::process::test_support::{FailingProbe, MockChecker};
 
     #[test]
@@ -178,6 +227,56 @@ mod tests {
         assert!(!ctx.is_cancelled());
         flag.store(true, Ordering::Release);
         assert!(ctx.is_cancelled());
+    }
+
+    #[test]
+    fn worker_shares_the_flag_records_apart_and_never_probes() {
+        let flag = AtomicBool::new(false);
+        let mock = MockChecker::none();
+        let parent = ScanContext::new(Some(&flag), &mock);
+        let worker = ScanContext::worker(parent.cancel_flag());
+        worker.note_unreadable(Path::new("/a"), &io::ErrorKind::PermissionDenied.into());
+        assert!(parent.take_findings().unreadable.is_empty());
+        assert!(worker.app_running("Xcode").is_err());
+        assert!(!worker.known_running("Xcode"));
+        flag.store(true, Ordering::Release);
+        assert!(worker.is_cancelled());
+    }
+
+    #[test]
+    fn absorb_adds_counts_and_keeps_the_first_error() {
+        let denied = || io::Error::from(io::ErrorKind::PermissionDenied);
+        let other = || io::Error::other("later");
+        let parent = ScanContext::unchecked();
+        parent.note_unreadable(Path::new("/a"), &denied());
+        parent.add_root(Path::new("/r1"));
+        let worker = ScanContext::worker(None);
+        worker.note_unreadable(Path::new("/a"), &other());
+        worker.note_unreadable(Path::new("/a"), &other());
+        worker.note_unreadable(Path::new("/b"), &other());
+        worker.add_root(Path::new("/r2"));
+        worker.note_size_upper_bound(Path::new("/b"));
+        worker.note_shared_blocks(Path::new("/b"), SharedBlocks::default());
+        worker.note_refused(Path::new("/c"), "why".into());
+        // The same calls on one context are the reference.
+        let one = ScanContext::unchecked();
+        one.note_unreadable(Path::new("/a"), &denied());
+        one.add_root(Path::new("/r1"));
+        one.note_unreadable(Path::new("/a"), &other());
+        one.note_unreadable(Path::new("/a"), &other());
+        one.note_unreadable(Path::new("/b"), &other());
+        one.add_root(Path::new("/r2"));
+        one.note_size_upper_bound(Path::new("/b"));
+        one.note_shared_blocks(Path::new("/b"), SharedBlocks::default());
+        one.note_refused(Path::new("/c"), "why".into());
+        parent.absorb(worker.take_findings());
+        let merged = parent.take_findings();
+        assert_eq!(merged, one.take_findings());
+        assert_eq!(merged.unreadable[Path::new("/a")].entries, 3);
+        assert_eq!(
+            merged.unreadable[Path::new("/a")].first_error,
+            denied().to_string()
+        );
     }
 
     #[test]
