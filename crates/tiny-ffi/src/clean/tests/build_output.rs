@@ -63,14 +63,23 @@ impl CommandRunner for Git {
         _: Duration,
     ) -> Result<CommandOutcome, CommandError> {
         assert_eq!(bin, "/usr/bin/git");
-        // `--no-optional-locks -C <dir> <subcommand> ...`
-        Ok(match args.get(3) {
+        // `<inspect-only options> -C <dir> <subcommand> ...`
+        let subcommand = args
+            .iter()
+            .position(|a| *a == "-C")
+            .map(|i| args.get(i + 2));
+        Ok(match subcommand.flatten() {
             Some(&"log") => {
                 let now = SystemTime::now().duration_since(SystemTime::UNIX_EPOCH);
                 answer(format!("{}\n", now.unwrap().as_secs() - 30 * 86_400))
             }
             Some(&"status") => answer(String::new()),
             Some(&"ls-files") => self.ls_files.clone(),
+            // The fixture repositories define no filter of their own.
+            Some(&"config") => CommandOutcome {
+                status: Some(1),
+                ..answer(String::new())
+            },
             other => panic!("unexpected git {other:?}"),
         })
     }

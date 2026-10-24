@@ -14,6 +14,29 @@ use crate::runner::{CommandError, CommandOutcome, CommandRunner, TOOL_TIMEOUT};
 
 /// Absolute on purpose: a Finder-launched app has a minimal `PATH`.
 const GIT: &str = "/usr/bin/git";
+/// Options for every git call on a repository we only inspect. It must not
+/// write the index (`--no-optional-locks`), and no program its own config
+/// names may run: a filesystem monitor, a hook or a signature check. `-c`
+/// outranks the repository's config and reaches the processes git starts.
+const INSPECT_ONLY: [&str; 7] = [
+    "--no-optional-locks",
+    "-c",
+    "core.fsmonitor=false",
+    "-c",
+    "core.hooksPath=/dev/null",
+    "-c",
+    "log.showSignature=false",
+];
+/// `status` without submodules: their worktrees and config are not ours to run.
+pub(crate) const STATUS: [&str; 5] = [
+    "status",
+    "--porcelain",
+    "--ignore-submodules=all",
+    "--",
+    ".",
+];
+/// Filter drivers `status` would run on a file it has to re-read.
+const FILTER_DRIVERS: &str = r"^filter\..*\.(clean|process)$";
 const SECS_PER_DAY: i64 = 86_400;
 
 /// Days without edits, commits or uncommitted changes after which the
@@ -227,10 +250,32 @@ fn last_commit(runner: &dyn CommandRunner, project: &str) -> Result<Option<i64>>
     Ok(out.and_then(|text| text.trim().parse().ok()))
 }
 
-/// False when there are uncommitted changes or git cannot answer.
+/// False when there are uncommitted changes or git cannot answer, and when
+/// the repository's own config defines a filter `status` could run.
 fn work_tree_clean(runner: &dyn CommandRunner, project: &str) -> Result<bool> {
-    let out = git(runner, project, &["status", "--porcelain", "--", "."])?;
+    if !no_repository_filter(runner, project)? {
+        return Ok(false);
+    }
+    let out = git(runner, project, &STATUS)?;
     Ok(out.is_some_and(|text| text.trim().is_empty()))
+}
+
+/// True when no `clean` or `process` filter comes from the repository's own
+/// config (local or worktree, includes followed). Filters from the user's
+/// global or system config, such as Git LFS, are the user's own. False when
+/// git cannot tell.
+fn no_repository_filter(runner: &dyn CommandRunner, project: &str) -> Result<bool> {
+    let args = ["config", "--show-scope", "--get-regexp", FILTER_DRIVERS];
+    match run_git(runner, project, &args) {
+        Ok(outcome) if outcome.success() => Ok(outcome
+            .stdout
+            .lines()
+            .all(|line| line.starts_with("global\t") || line.starts_with("system\t"))),
+        // `--get-regexp` exits 1 when nothing matches.
+        Ok(outcome) => Ok(outcome.status == Some(1)),
+        Err(CommandError::Timeout { .. } | CommandError::NonUtf8(_)) => Ok(false),
+        Err(CommandError::NotFound(_) | CommandError::Spawn { .. }) => Err(unavailable()),
+    }
 }
 
 /// Stdout of a successful git call. A non-zero exit, timeout or non-UTF-8
@@ -245,19 +290,30 @@ fn git_answer(
     project: &str,
     args: &[&str],
 ) -> Result<std::result::Result<String, String>> {
-    // --no-optional-locks: status must not write the index of a repo we only inspect.
-    let mut full = vec!["--no-optional-locks", "-C", project];
-    full.extend_from_slice(args);
-    match runner.output(GIT, &full, TOOL_TIMEOUT) {
+    match run_git(runner, project, args) {
         Ok(outcome) if outcome.success() => Ok(Ok(outcome.stdout)),
         Ok(outcome) => Ok(Err(exit_detail(&outcome))),
         Err(e @ (CommandError::Timeout { .. } | CommandError::NonUtf8(_))) => {
             Ok(Err(e.to_string()))
         }
-        Err(CommandError::NotFound(_) | CommandError::Spawn { .. }) => Err(engine_error!(
-            "git is unavailable, so projects inside git repositories cannot be checked"
-        )),
+        Err(CommandError::NotFound(_) | CommandError::Spawn { .. }) => Err(unavailable()),
     }
+}
+
+/// `git <INSPECT_ONLY> -C <project> <args>`.
+fn run_git(
+    runner: &dyn CommandRunner,
+    project: &str,
+    args: &[&str],
+) -> std::result::Result<CommandOutcome, CommandError> {
+    let mut full = INSPECT_ONLY.to_vec();
+    full.extend_from_slice(&["-C", project]);
+    full.extend_from_slice(args);
+    runner.output(GIT, &full, TOOL_TIMEOUT)
+}
+
+fn unavailable() -> crate::error::Error {
+    engine_error!("git is unavailable, so projects inside git repositories cannot be checked")
 }
 
 /// The exit status and git's first stderr line, e.g. the `/usr/bin/git`
@@ -291,6 +347,36 @@ fn now_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs() as i64)
+}
+
+/// Git argument lists for mocks in this module and its providers.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::Path;
+
+    use super::{FILTER_DRIVERS, GIT, INSPECT_ONLY};
+    use crate::runner::test_support::MockRunner;
+
+    /// `args` as `git_answer` sends them for `project`.
+    pub(crate) fn git_args(project: &Path, args: &[&str]) -> Vec<String> {
+        let project = project.to_str().unwrap();
+        INSPECT_ONLY
+            .iter()
+            .chain(&["-C", project])
+            .chain(args)
+            .map(|s| s.to_string())
+            .collect()
+    }
+
+    /// `runner`, answering that `project`'s config defines no filter.
+    pub(crate) fn no_filters(runner: MockRunner, project: &Path) -> MockRunner {
+        let args = git_args(
+            project,
+            &["config", "--show-scope", "--get-regexp", FILTER_DRIVERS],
+        );
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        runner.with_exit(GIT, &args, 1, "")
+    }
 }
 
 #[cfg(test)]
@@ -434,19 +520,14 @@ mod tests {
         manifest
     }
 
-    fn git_args(project: &Path, rest: &[&str]) -> Vec<String> {
-        let mut args = vec!["--no-optional-locks".to_string(), "-C".to_string()];
-        args.push(project.to_str().unwrap().to_string());
-        args.extend(rest.iter().map(|s| s.to_string()));
-        args
-    }
+    use super::test_support::{git_args, no_filters};
 
     /// Mock git answering `log` with `commit_secs_ago` and `status` with `dirty`.
     fn mock_git(project: &Path, commit_days_ago: i64, status: &str) -> MockRunner {
         let log = git_args(project, &["log", "-1", "--format=%ct", "--", "."]);
-        let st = git_args(project, &["status", "--porcelain", "--", "."]);
+        let st = git_args(project, &STATUS);
         let ct = now_secs() - commit_days_ago * SECS_PER_DAY;
-        MockRunner::new()
+        no_filters(MockRunner::new(), project)
             .with_exit(GIT, &as_strs(&log), 0, &format!("{ct}\n"))
             .with_exit(GIT, &as_strs(&st), 0, status)
     }
@@ -521,13 +602,124 @@ mod tests {
         assert_eq!(run(&runner, &manifest).unwrap(), None);
     }
 
+    /// A committed repository whose config runs `.git/probe.sh` as a
+    /// filesystem monitor and, with `filter`, as a clean filter for every
+    /// file. The script leaves `.git/ran` behind.
+    fn hostile_repo(filter: bool) -> tempfile::TempDir {
+        let repo = tempfile::tempdir().unwrap();
+        let dir = repo.path();
+        let setup = |args: &[&str]| {
+            let status = std::process::Command::new(GIT)
+                .args([
+                    "-c",
+                    "core.hooksPath=/dev/null",
+                    "-c",
+                    "commit.gpgSign=false",
+                ])
+                .arg("-C")
+                .arg(dir)
+                .args(args)
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap()
+                .status;
+            assert!(status.success(), "git {args:?}");
+        };
+        fs::write(dir.join("file.txt"), "kept\n").unwrap();
+        setup(&["init", "-q"]);
+        setup(&["add", "file.txt"]);
+        setup(&[
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@t",
+            "commit",
+            "-qm",
+            "init",
+        ]);
+        let script = dir.join(".git/probe.sh");
+        let ran = dir.join(".git/ran");
+        fs::write(
+            &script,
+            format!("#!/bin/sh\ntouch '{}'\ncat\n", ran.display()),
+        )
+        .unwrap();
+        let mut perms = fs::metadata(&script).unwrap().permissions();
+        std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+        fs::set_permissions(&script, perms).unwrap();
+        let script = script.to_str().unwrap();
+        setup(&["config", "core.fsmonitor", script]);
+        if filter {
+            fs::write(dir.join(".git/info/attributes"), "* filter=probe\n").unwrap();
+            setup(&["config", "filter.probe.clean", script]);
+        }
+        // An mtime equal to the index's makes git re-read the file through filters.
+        let index = fs::metadata(dir.join(".git/index"))
+            .unwrap()
+            .modified()
+            .unwrap();
+        fs::File::open(dir.join("file.txt"))
+            .unwrap()
+            .set_modified(index)
+            .unwrap();
+        repo
+    }
+
+    #[test]
+    fn inspecting_a_repository_runs_no_program_its_config_names() {
+        if !Path::new(GIT).exists() {
+            return;
+        }
+        let repo = hostile_repo(false);
+        let dir = repo.path().to_str().unwrap();
+        let runner = crate::runner::RealRunner;
+        assert!(last_commit(&runner, dir).unwrap().is_some());
+        assert!(work_tree_clean(&runner, dir).unwrap());
+        assert!(!repo.path().join(".git/ran").exists(), "the fsmonitor ran");
+    }
+
+    #[test]
+    fn a_repository_defining_its_own_filter_is_not_asked_for_status() {
+        if !Path::new(GIT).exists() {
+            return;
+        }
+        let repo = hostile_repo(true);
+        let dir = repo.path().to_str().unwrap();
+        assert!(!work_tree_clean(&crate::runner::RealRunner, dir).unwrap());
+        assert!(
+            !repo.path().join(".git/ran").exists(),
+            "the clean filter ran"
+        );
+    }
+
+    #[test]
+    fn filters_from_the_users_own_config_still_allow_status() {
+        let project = Path::new("/p");
+        let args = git_args(
+            project,
+            &["config", "--show-scope", "--get-regexp", FILTER_DRIVERS],
+        );
+        let answer = |stdout: &str| {
+            let runner = MockRunner::new()
+                .with_exit(GIT, &as_strs(&args), 0, stdout)
+                .with_exit(GIT, &as_strs(&git_args(project, &STATUS)), 0, "");
+            work_tree_clean(&runner, "/p").unwrap()
+        };
+        assert!(answer("global\tfilter.lfs.clean git-lfs clean -- %f\nsystem\tfilter.lfs.process git-lfs filter-process\n"));
+        assert!(!answer(
+            "global\tfilter.lfs.clean git-lfs clean -- %f\nlocal\tfilter.x.clean ./x\n"
+        ));
+        assert!(!answer("worktree\tfilter.x.process ./x\n"));
+    }
+
     #[test]
     fn git_status_failure_is_not_offered() {
         let root = tempdir("status-fails");
         mark_repo(&root);
         let manifest = old_manifest(&root);
         let project = manifest.parent().unwrap();
-        let st = git_args(project, &["status", "--porcelain", "--", "."]);
+        let st = git_args(project, &STATUS);
         let runner = mock_git(project, 60, "").with_exit(GIT, &as_strs(&st), 128, "");
         assert_eq!(run(&runner, &manifest).unwrap(), None);
     }
@@ -717,7 +909,7 @@ mod tests {
             evidence.as_slice(),
             [Evidence::ManifestModified { .. }]
         ));
-        let st = git_args(dir, &["status", "--porcelain", "--", "."]);
+        let st = git_args(dir, &STATUS);
         let timeout = CommandError::Timeout {
             bin: GIT.to_string(),
             timeout_ms: 30_000,
