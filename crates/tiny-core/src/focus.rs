@@ -183,7 +183,11 @@ mod tests {
         let mut ids: Vec<_> = log.sessions.iter().map(|s| s.started_at_unix).collect();
         ids.sort_unstable();
         assert_eq!(ids, (0..=WRITERS as u64).collect::<Vec<_>>());
-        let original = log.sessions.iter().find(|s| s.started_at_unix == 0).unwrap();
+        let original = log
+            .sessions
+            .iter()
+            .find(|s| s.started_at_unix == 0)
+            .unwrap();
         assert_eq!(original.finished_at_unix, seed.sessions[0].finished_at_unix);
         assert_eq!(original.minutes, seed.sessions[0].minutes);
         assert_eq!(original.label, seed.sessions[0].label);
