@@ -33,9 +33,11 @@ mod elevation;
 mod failure;
 mod info;
 mod install;
+mod outdated;
 mod plan;
 mod run;
 mod tracked;
+mod update;
 
 pub use brew::{brew_lookup, locate_brew, Brew, HomebrewStatus, BREW_ENV, BREW_PATH};
 pub use brew_env::{brew_env_warnings, BrewEnvWarning};
@@ -47,9 +49,11 @@ pub use elevation::Elevation;
 pub use failure::CaskFailure;
 pub use info::{display_version, read_cask_info, valid_token, CaskInfo};
 pub use install::{plan_install, run_install};
+pub use outdated::{list_outdated, still_outdated, OutdatedCask};
 pub use plan::{CaskAction, CaskPlanItem};
 pub use run::{run_item, CaskProgress, ProgressSink, RunOutcome, Stage, RUN_TIMEOUT};
 pub use tracked::{list_tracked, TrackedCask};
+pub use update::{check_apps_closed, plan_updates, run_state, run_updates, ExecutableOf, RunState};
 
 #[cfg(test)]
 mod test_support;

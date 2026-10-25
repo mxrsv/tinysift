@@ -68,3 +68,20 @@ pub(super) fn outcome(status: i32, stdout: &str, stderr: &str) -> CommandOutcome
         stderr: stderr.into(),
     }
 }
+
+/// `brew outdated --cask --json=v2` for `(token, installed, current, pinned)`.
+pub(super) fn outdated_json(casks: &[(&str, &str, &str, bool)]) -> String {
+    let casks: Vec<Value> = casks
+        .iter()
+        .map(|(token, installed, current, pinned)| {
+            json!({
+                "name": token,
+                "installed_versions": [installed],
+                "current_version": current,
+                "pinned": pinned,
+                "pinned_version": null,
+            })
+        })
+        .collect();
+    json!({"formulae": [], "casks": casks}).to_string()
+}

@@ -97,6 +97,8 @@ impl Said {
 pub enum RunOutcome {
     Done,
     Cancelled,
+    /// An earlier cask in the run was cancelled, so this one never started.
+    NotAttempted,
     Failed(CaskFailure),
 }
 
