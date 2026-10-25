@@ -13,6 +13,8 @@ use std::time::SystemTime;
 use super::freed_size::FreedBytes;
 use super::scan_context::ScanContext;
 
+mod remove_tree;
+
 /// Yields every entry under `root` without descending into symlinks. Symlink
 /// entries themselves are yielded (so callers can remove them), but their
 /// targets are not walked.
@@ -288,53 +290,17 @@ fn visit_files(
 }
 
 /// Recursively removes `root`, never following symlinks. Files and symlink
-/// entries go through `fs::remove_file`; directories are removed bottom-up
-/// via `fs::remove_dir`. Never calls `fs::remove_dir_all`.
+/// entries are unlinked relative to pinned directory descriptors; ancestors
+/// must be real directories. Refuses observed replacement or read failures.
 pub fn remove_recursive_safe(root: &Path) -> std::io::Result<()> {
-    remove_tree(root, false)
+    remove_tree::remove(root, false)
 }
 
 /// `remove_recursive_safe` that also never enters a directory on another
 /// device than `root` (a volume mounted inside it). Such a directory stays,
 /// so removing `root` fails instead of reaching into another volume.
 pub fn remove_recursive_one_device(root: &Path) -> std::io::Result<()> {
-    remove_tree(root, true)
-}
-
-fn remove_tree(root: &Path, one_device: bool) -> std::io::Result<()> {
-    let meta = match fs::symlink_metadata(root) {
-        Ok(m) => m,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
-        Err(e) => return Err(e),
-    };
-    let ft = meta.file_type();
-    if ft.is_symlink() || ft.is_file() {
-        return fs::remove_file(root);
-    }
-    if !ft.is_dir() {
-        return Ok(());
-    }
-    remove_dir_contents(root, one_device.then_some(meta.dev()))?;
-    fs::remove_dir(root)
-}
-
-fn remove_dir_contents(dir: &Path, device: Option<u64>) -> std::io::Result<()> {
-    let entries = fs::read_dir(dir)?;
-    for entry in entries.flatten() {
-        let path = entry.path();
-        let meta = match fs::symlink_metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
-        let ft = meta.file_type();
-        if ft.is_symlink() || ft.is_file() {
-            let _ = fs::remove_file(&path);
-        } else if ft.is_dir() && device.is_none_or(|dev| dev == meta.dev()) {
-            remove_dir_contents(&path, device)?;
-            let _ = fs::remove_dir(&path);
-        }
-    }
-    Ok(())
+    remove_tree::remove(root, true)
 }
 
 /// The desktop's permanent deletion, a seam so tests can make it fail.
@@ -371,7 +337,7 @@ mod tests {
         );
         base.push(unique);
         fs::create_dir_all(&base).unwrap();
-        base
+        fs::canonicalize(base).unwrap()
     }
 
     fn write_file(p: &Path, bytes: &[u8]) {
@@ -433,24 +399,18 @@ mod tests {
     }
 
     #[test]
-    fn permanent_deletion_never_enters_a_directory_on_another_device() {
-        let item = tempdir("delete-device");
-        fs::create_dir(item.join("mounted")).unwrap();
-        write_file(&item.join("mounted/precious"), b"x");
-        write_file(&item.join("top"), b"x");
-        let device = fs::symlink_metadata(&item).unwrap().dev();
+    fn permanent_deletion_refuses_symlinked_ancestors() {
+        let holder = tempfile::tempdir().unwrap();
+        let holder = fs::canonicalize(holder.path()).unwrap();
+        let outside = holder.join("outside");
+        fs::create_dir_all(outside.join("item")).unwrap();
+        fs::write(outside.join("item/precious"), b"keep").unwrap();
+        let alias = holder.join("alias");
+        std::os::unix::fs::symlink(&outside, &alias).unwrap();
 
-        // A folder whose device differs stands in for a volume mounted inside.
-        remove_dir_contents(&item, Some(device.wrapping_add(1))).unwrap();
-        assert!(item.join("mounted/precious").exists(), "left alone");
-        assert!(!item.join("top").exists());
-        assert!(
-            fs::remove_dir(&item).is_err(),
-            "the item itself cannot go while something is left in it"
-        );
-
-        remove_recursive_one_device(&item).unwrap();
-        assert!(fs::symlink_metadata(&item).is_err(), "all on one device");
+        let result = SafeDelete.delete(&alias.join("item"));
+        assert!(result.is_err(), "a symlinked ancestor must refuse deletion");
+        assert_eq!(fs::read(outside.join("item/precious")).unwrap(), b"keep");
     }
 
     #[test]

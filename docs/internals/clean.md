@@ -144,6 +144,17 @@ widens: a cache folder that holds a path which only goes to the Trash goes to th
 | `EmptyTrash` | the `trash` row, both modes, only with `include_trash` | Finder |
 | `DeleteAsAdministrator` | `needs_admin` categories, both modes | [`elevated_delete`](#deletion-as-administrator) |
 
+The ordinary permanent-delete [walker](../../crates/tiny-core/src/clean/fs_safe/remove_tree.rs)
+opens each ancestor and directory relative to a pinned parent descriptor with `O_NOFOLLOW`.
+It checks the opened directory's identity and device before reading its entries; child mutations
+use single names with `unlinkat`, so replacing a directory with a symlink cannot redirect the
+walk to its target. Read and mutation errors propagate as failures, with no pathname fallback.
+This is not an atomic filesystem transaction: a real directory substituted before the initial
+identity read can still be selected; an opened directory renamed elsewhere remains the same
+object and can still be traversed. The final identity check and `unlinkat` are separate calls,
+so a last-moment replacement entry can be unlinked, but its symlink target is never followed.
+Concurrent additions can leave a partial deletion and `ENOTEMPTY`.
+
 `gated_items` rechecks the table at run time against the providers, so a plan can never delete what
 only goes to the Trash, never delete a tool's store, and never give a `needs_admin` category any
 other removal. `execution_order` runs the administrator batch first, then `Delete`, tool commands,

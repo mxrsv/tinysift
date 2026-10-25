@@ -27,8 +27,15 @@ Things that are not obvious from reading one file.
   anything put there while Finder waits for the Automation prompt
   ([clean.md](clean.md#the-desktops-checked-removal)). After a success, nothing re-measures the
   Trash: a locked item Finder skips still counts as freed.
-- **A partial deletion is `Failed` and counts nothing.** `remove_tree` ignores child errors, so the
-  reason often says only "Directory not empty"; re-check the path rather than trusting the count.
+- **A partial deletion is `Failed` and counts nothing.** The descriptor-relative
+  [walker](../../crates/tiny-core/src/clean/fs_safe/remove_tree.rs) propagates child errors;
+  earlier entries may already be gone. Re-check the path rather than trusting the count.
+- **Permanent deletion rejects symlinked ancestors.** The
+  [walker](../../crates/tiny-core/src/clean/fs_safe/remove_tree.rs) opens one component at a time;
+  a path through `/var` on a Mac where it aliases `/private/var` is refused. Tests must canonicalize
+  their own temporary fixture roots, never production cleanup targets. Pinned descriptors prevent
+  symlink redirection, not concurrent renames or an atomic compare-and-unlink
+  ([limits](clean.md#the-desktops-checked-removal)).
 - **A prune walks the cache twice** (measured before and after), and a failed prune may have
   pruned part of the cache while counting nothing. A folder the walk after cannot read makes the
   freed bytes an upper bound (`Pruned.upper_bound`), since the size after is then too low; one the
