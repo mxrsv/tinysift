@@ -126,7 +126,7 @@ fn runner_errors_map_to_typed_failures() {
             bin: "brew".into(),
             timeout_ms: 1
         }),
-        CaskFailure::TimedOut
+        CaskFailure::TimedOut { running: true }
     );
     assert!(matches!(
         CaskFailure::from(CommandError::Spawn {
@@ -156,7 +156,8 @@ fn every_failure_has_a_problem_and_a_recovery() {
         CaskFailure::AlreadyInstalled { token: "t".into() },
         CaskFailure::Network { detail: "d".into() },
         CaskFailure::CaskNotFound { token: "t".into() },
-        CaskFailure::TimedOut,
+        CaskFailure::TimedOut { running: true },
+        CaskFailure::TimedOut { running: false },
         CaskFailure::BrewFailed {
             exit_code: Some(1),
             detail: "d".into(),
@@ -167,4 +168,43 @@ fn every_failure_has_a_problem_and_a_recovery() {
         assert!(failure.recovery().ends_with('.'), "{failure:?}");
         assert_eq!(failure.to_string(), failure.problem());
     }
+}
+
+#[test]
+fn something_else_in_the_way_is_not_called_an_app() {
+    for text in [
+        "Error: It seems there is already a Binary at '/opt/homebrew/bin/code'.",
+        "Error: It seems there is already a Manpage at '/opt/homebrew/share/man/man1/x.1'.",
+        "Error: It seems there is already an App Suite at '/Applications/Suite'.",
+    ] {
+        let failure = classify_exit("x", &outcome(1, text));
+        assert!(
+            matches!(&failure, CaskFailure::BrewFailed { detail, .. } if detail.contains("there is already")),
+            "{text}: {failure:?}"
+        );
+        assert!(!failure.problem().contains("app already sits"), "{text}");
+    }
+}
+
+#[test]
+fn a_timeout_is_told_as_a_download_or_as_a_local_call() {
+    let download = CaskFailure::TimedOut { running: true };
+    let local = CaskFailure::TimedOut { running: false };
+    assert!(download.recovery().contains("faster connection"));
+    assert!(
+        !local.recovery().contains("connection"),
+        "info and outdated read local files"
+    );
+    assert!(local.recovery().contains("brew doctor"));
+    assert_ne!(download.problem(), local.problem());
+}
+
+#[test]
+fn a_cask_homebrew_still_records_tells_how_to_clear_the_record_in_terminal() {
+    let recovery = CaskFailure::AlreadyInstalled {
+        token: "ghostty".into(),
+    }
+    .recovery();
+    assert!(recovery.contains("`brew uninstall --cask ghostty`"));
+    assert!(recovery.contains("Terminal"));
 }

@@ -1,8 +1,10 @@
 use std::ffi::OsString;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
+use super::{Isolation, PASS_THROUGH};
 use crate::runner::{CommandError, CommandRunner, StreamEnd, ToolLookup, ToolRunner};
 
 const GENEROUS: Duration = Duration::from_secs(10);
@@ -33,6 +35,12 @@ fn the_tool_gets_home_a_fixed_path_and_the_lookups_variables_and_nothing_else() 
         .iter()
         .map(String::as_str)
         .filter(|line| !line.starts_with("_="))
+        // A proxy in the shell that runs the tests is passed on, by design.
+        .filter(|line| {
+            !PASS_THROUGH
+                .iter()
+                .any(|name| line.starts_with(&format!("{name}=")))
+        })
         .collect();
     assert_eq!(
         named,
@@ -148,4 +156,37 @@ fn a_timeout_ends_an_isolated_tool_and_what_it_started() {
         "{result:?}"
     );
     assert!(started.elapsed() < Duration::from_secs(3));
+}
+
+#[test]
+fn only_proxy_variables_are_handed_on_and_only_when_they_have_a_value() {
+    let isolation = Isolation::new(Some(PathBuf::from("/Users/someone")), "/usr/bin:/bin");
+    let process: std::collections::HashMap<&str, &str> = [
+        ("https_proxy", "http://proxy.example:3128"),
+        ("NO_PROXY", "localhost,.internal"),
+        ("ALL_PROXY", ""),
+        ("SSH_AUTH_SOCK", "/tmp/agent"),
+        ("HOMEBREW_GITHUB_API_TOKEN", "secret"),
+        ("DYLD_INSERT_LIBRARIES", "/tmp/evil.dylib"),
+    ]
+    .into();
+    let mut command = Command::new("/bin/echo");
+    isolation
+        .apply_from(&mut command, |name| process.get(name).map(OsString::from))
+        .expect("a home is given");
+    let mut set: Vec<(String, String)> = command
+        .get_envs()
+        .filter_map(|(k, v)| Some((k.to_str()?.to_string(), v?.to_str()?.to_string())))
+        .collect();
+    set.sort();
+    assert_eq!(
+        set,
+        [
+            ("HOME", "/Users/someone"),
+            ("NO_PROXY", "localhost,.internal"),
+            ("PATH", "/usr/bin:/bin"),
+            ("https_proxy", "http://proxy.example:3128"),
+        ]
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+    );
 }

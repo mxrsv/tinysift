@@ -86,8 +86,12 @@ pub enum CaskFailure {
     CaskNotFound {
         token: String,
     },
-    /// `brew` was stopped after the longest time a run may take.
-    TimedOut,
+    /// `brew` was stopped for taking too long: `running` is true for an
+    /// install or upgrade (its downloads are the slow part) and false for a
+    /// read-only call such as `info` or `outdated`, which is local.
+    TimedOut {
+        running: bool,
+    },
     /// Any other `brew` failure; `detail` is its own text, shortened.
     BrewFailed {
         exit_code: Option<i32>,
@@ -123,7 +127,8 @@ impl CaskFailure {
                  the checksum it holds."
                 .into(),
             Self::CaskNotFound { token } => format!("Homebrew has no app called {token}."),
-            Self::TimedOut => "Homebrew took too long and was stopped.".into(),
+            Self::TimedOut { running: true } => "Homebrew took too long and was stopped.".into(),
+            Self::TimedOut { running: false } => "Homebrew did not answer in time.".into(),
             Self::BrewFailed { .. } => "Homebrew reported an error.".into(),
         }
     }
@@ -145,9 +150,12 @@ impl CaskFailure {
             Self::AppExists { .. } => {
                 "Open the app that is there, or move it away and try again.".into()
             }
+            // Homebrew keeps a record of a cask whose app was moved to the Trash
+            // by hand or by Uninstall; then only Homebrew can clear it.
             Self::AlreadyInstalled { token } => format!(
-                "Open it from Applications, or remove it with `brew uninstall --cask {token}` \
-                 and try again."
+                "If the app is gone, run `brew uninstall --cask {token}` in Terminal to clear \
+                 Homebrew's record, then install it again. If it is there, open it from \
+                 Applications."
             ),
             Self::Network { .. } => "Check your connection, then try again.".into(),
             Self::StaleData => {
@@ -156,7 +164,10 @@ impl CaskFailure {
             Self::CaskNotFound { .. } => {
                 "Update Homebrew's list with `brew update` in Terminal, then try again.".into()
             }
-            Self::TimedOut => "Try again on a faster connection.".into(),
+            Self::TimedOut { running: true } => "Try again on a faster connection.".into(),
+            Self::TimedOut { running: false } => {
+                "Try again. If it keeps happening, run `brew doctor` in Terminal.".into()
+            }
             Self::BrewFailed { .. } => {
                 "Read Homebrew's message, fix the cause, then try again.".into()
             }
@@ -185,7 +196,7 @@ impl From<CommandError> for CaskFailure {
     fn from(error: CommandError) -> Self {
         match error {
             CommandError::NotFound(_) => Self::HomebrewMissing,
-            CommandError::Timeout { .. } => Self::TimedOut,
+            CommandError::Timeout { .. } => Self::TimedOut { running: true },
             CommandError::Spawn { detail, .. } => Self::BrewFailed {
                 exit_code: None,
                 detail: brief(&detail),
@@ -215,7 +226,7 @@ pub(super) fn classify_exit(token: &str, outcome: &CommandOutcome) -> CaskFailur
         }
     } else if says(CHECKSUM) {
         CaskFailure::StaleData
-    } else if let Some(path) = quoted_after(&text, "there is already ") {
+    } else if let Some(path) = existing_app(&text) {
         CaskFailure::AppExists { path }
     } else if says(NETWORK) {
         CaskFailure::Network {
@@ -227,6 +238,21 @@ pub(super) fn classify_exit(token: &str, outcome: &CommandOutcome) -> CaskFailur
             detail: brief(&text),
         }
     }
+}
+
+/// The path in `It seems there is already an App at '<path>'.`, and only for
+/// an App: `brew` says the same of a Binary, a Manpage or a Suite already in
+/// the way, and "an app already sits there" would be false for those.
+fn existing_app(text: &str) -> Option<String> {
+    let marker = "there is already ";
+    let start = text.to_ascii_lowercase().find(marker)? + marker.len();
+    let rest = &text[start..];
+    let (kind, _) = rest.split_once(" at ")?;
+    let kind = kind.trim().to_ascii_lowercase();
+    let kind = kind
+        .strip_prefix("an ")
+        .or_else(|| kind.strip_prefix("a "))?;
+    (kind == "app").then(|| quoted_after(text, marker))?
 }
 
 /// The text of the first pair of single quotes after `marker`, which is

@@ -244,12 +244,11 @@ fn a_failed_cask_does_not_stop_the_next() {
 }
 
 #[test]
-fn cancelling_stops_the_run_and_leaves_the_rest_unattempted() {
+fn a_flag_raised_before_the_run_starts_nothing_at_all() {
     let dir = tempfile::tempdir().unwrap();
     let items = [item(dir.path(), "a"), item(dir.path(), "b")];
     let runner = runner_for(&["a", "b"]);
-    let cancel = AtomicBool::new(false);
-    cancel.store(true, Ordering::Release);
+    let cancel = AtomicBool::new(true);
     let results = run_updates(
         &brew(&runner),
         &items,
@@ -258,9 +257,38 @@ fn cancelling_stops_the_run_and_leaves_the_rest_unattempted() {
         Some(&cancel),
         None,
     );
+    assert_eq!(results[0].1, RunOutcome::NotAttempted);
+    assert_eq!(results[1].1, RunOutcome::NotAttempted);
+    assert!(calls(&runner).is_empty(), "not even a read");
+}
+
+#[test]
+fn a_cancel_while_one_cask_runs_cancels_it_and_leaves_the_rest_not_attempted() {
+    let dir = tempfile::tempdir().unwrap();
+    let items = [item(dir.path(), "a"), item(dir.path(), "b")];
+    let runner = runner_for(&["a", "b"]);
+    let cancel = AtomicBool::new(false);
+    // Raised by the first step of the first cask, as a click would be.
+    let report = |_: CaskProgress| cancel.store(true, Ordering::Release);
+    let results = run_updates(
+        &brew(&runner),
+        &items,
+        &MockChecker::none(),
+        &executable,
+        Some(&cancel),
+        Some(&report),
+    );
     assert_eq!(results[0].1, RunOutcome::Cancelled);
     assert_eq!(results[1].1, RunOutcome::NotAttempted);
     assert!(!calls(&runner).iter().any(|call| call.contains("upgrade")));
+    assert_eq!(
+        calls(&runner)
+            .iter()
+            .filter(|c| c.contains("outdated"))
+            .count(),
+        1,
+        "the second cask caused no read after the cancel"
+    );
 }
 
 // ---- before a run is accepted

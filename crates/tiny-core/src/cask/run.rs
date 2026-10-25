@@ -12,8 +12,11 @@ use crate::runner::StreamEnd;
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 /// How far a run is, read from `brew`'s `==> ` headings. Never a percentage:
-/// `brew` does not print one when it has no terminal.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// `brew` does not print one when it has no terminal. A run only moves
+/// forward (the order below): lines from the two pipes can arrive out of
+/// order, and a download heading after an install one must not take the
+/// label back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Stage {
     /// Before any heading `brew` prints is recognised.
     Working,
@@ -76,21 +79,49 @@ pub type ProgressSink<'a> = Option<&'a dyn Fn(CaskProgress)>;
 
 /// What `brew` says on a line that changes how a run ended although it exits
 /// 0. Read while the lines stream, so the tail the runner keeps does not
-/// matter.
-#[derive(Default)]
-struct Said {
+/// matter. A line counts only when it is about this run's cask (and, for the
+/// two warnings, starts with `Warning:` as `brew`'s do), so a caveat or a
+/// line about another cask that happens to say the same words does not turn a
+/// run that worked into a failure.
+struct Said<'a> {
+    token: &'a str,
     already_installed: bool,
     not_upgrading: bool,
     manual_installer: bool,
 }
 
-impl Said {
+impl<'a> Said<'a> {
+    fn new(token: &'a str) -> Self {
+        Self {
+            token,
+            already_installed: false,
+            not_upgrading: false,
+            manual_installer: false,
+        }
+    }
+
     fn note(&mut self, line: &str) {
-        let line = line.to_lowercase();
-        self.already_installed |= line.contains("is already installed");
-        self.not_upgrading |= line.contains("not upgrading");
+        let line = line.trim().to_lowercase();
+        if !names(&line, self.token) {
+            return;
+        }
+        let warning = line.starts_with("warning:");
+        self.already_installed |= warning && line.contains("is already installed");
+        self.not_upgrading |= warning && line.contains("not upgrading");
         self.manual_installer |= line.contains("only provides a manual installer");
     }
+}
+
+/// Whether `line` (lower case) names `token` as a whole word: the characters
+/// a token is made of do not continue it on either side.
+fn names(line: &str, token: &str) -> bool {
+    let token = token.to_lowercase();
+    let part = |c: char| c.is_ascii_alphanumeric() || "-_.@+".contains(c);
+    line.match_indices(&token).any(|(start, found)| {
+        let before = line[..start].chars().next_back();
+        let after = line[start + found.len()..].chars().next();
+        !before.is_some_and(part) && !after.is_some_and(part)
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -117,10 +148,10 @@ pub fn run_item(
     }
     let mut stage = Stage::Working;
     on_stage(stage);
-    let mut said = Said::default();
+    let mut said = Said::new(&item.token);
     let mut on_line = |line: &str| {
         said.note(line);
-        if let Some(next) = stage_of(line).filter(|next| *next != stage) {
+        if let Some(next) = stage_of(line).filter(|next| *next > stage) {
             stage = next;
             on_stage(next);
         }

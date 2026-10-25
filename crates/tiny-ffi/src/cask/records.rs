@@ -90,8 +90,10 @@ pub struct FfiCaskFailure {
     pub kind: FfiCaskFailureKind,
     pub problem: String,
     pub recovery: String,
-    /// What the failure is about: the app that is open or in the way (a
-    /// path), or the cask token.
+    /// What the failure is about: the name of the app that is open
+    /// (`AppRunning`, `AppCheckFailed`), the path of the app that is in the
+    /// way (`AppExists`), or the cask token (`NotInCatalogue`, `NotOutdated`,
+    /// `ManualInstaller`, `AlreadyInstalled`, `CaskNotFound`).
     pub subject: Option<String>,
     /// `brew`'s own words or the underlying error, shortened.
     pub detail: Option<String>,
@@ -196,6 +198,8 @@ pub struct FfiCaskReport {
     pub results: Vec<FfiCaskItemResult>,
     pub done_count: u64,
     pub failed_count: u64,
+    /// A cancel stopped the run: a cask was `Cancelled` or never started
+    /// (`NotAttempted`).
     pub cancelled: bool,
 }
 
@@ -299,7 +303,7 @@ impl From<&CaskFailure> for FfiCaskFailure {
             CaskFailure::Network { .. } => (Kind::Network, None),
             CaskFailure::StaleData => (Kind::StaleData, None),
             CaskFailure::CaskNotFound { token } => (Kind::CaskNotFound, Some(token)),
-            CaskFailure::TimedOut => (Kind::TimedOut, None),
+            CaskFailure::TimedOut { .. } => (Kind::TimedOut, None),
             CaskFailure::BrewFailed { .. } => (Kind::BrewFailed, None),
         };
         Self {

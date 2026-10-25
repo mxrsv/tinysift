@@ -58,7 +58,12 @@ pub fn display_version(version: &str) -> &str {
 
 /// A bare cask token: lower-case letters, digits and `-_.@+`, starting with a
 /// letter or digit. It cannot be a flag (`-x`), a path or a tap-qualified
-/// name (`user/tap/cask`), so `brew` can only read it as a core cask.
+/// name (`user/tap/cask`), so no call can add an option or make `brew` trust
+/// or clone a tap. It does not say which cask the token means: `brew`
+/// resolves a bare token itself, to a core cask or to an installed cask from a
+/// third-party tap (`brew outdated` lists such a cask by its bare token, as it
+/// does `tinycast`). When two taps carry the same bare token `brew` picks one
+/// or refuses; a refusal fails that `brew info` call with `brew`'s own words.
 pub fn valid_token(token: &str) -> bool {
     let mut chars = token.chars();
     token.len() <= MAX_TOKEN_LEN
@@ -86,6 +91,37 @@ pub fn read_cask_info(brew: &Brew<'_>, tokens: &[&str]) -> Result<Vec<CaskInfo>,
         return Err(classify_exit(tokens[0], &outcome));
     }
     parse_cask_info(&outcome.stdout)
+}
+
+/// [`read_cask_info`] for a list the user did not choose, such as the casks
+/// `brew outdated` names. If `brew` refuses the batch (a token two taps share,
+/// a cask from an untrusted tap), each token is asked on its own and the ones
+/// `brew` refuses are left out, so one odd cask does not hide every update.
+/// Any other failure (no `brew`, a timeout) still fails the whole call.
+pub(super) fn read_cask_info_lenient(
+    brew: &Brew<'_>,
+    tokens: &[&str],
+) -> Result<Vec<CaskInfo>, CaskFailure> {
+    let refused = |failure: &CaskFailure| {
+        matches!(
+            failure,
+            CaskFailure::BrewFailed { .. } | CaskFailure::CaskNotFound { .. }
+        )
+    };
+    match read_cask_info(brew, tokens) {
+        Err(failure) if tokens.len() > 1 && refused(&failure) => {
+            let mut found = Vec::new();
+            for token in tokens {
+                match read_cask_info(brew, &[token]) {
+                    Ok(infos) => found.extend(infos),
+                    Err(failure) if refused(&failure) => {}
+                    Err(failure) => return Err(failure),
+                }
+            }
+            Ok(found)
+        }
+        result => result,
+    }
 }
 
 #[derive(Deserialize)]

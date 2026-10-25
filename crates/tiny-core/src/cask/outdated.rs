@@ -7,7 +7,7 @@ use serde::Deserialize;
 
 use super::brew::Brew;
 use super::failure::{classify_exit, CaskFailure};
-use super::info::{display_version, read_cask_info, valid_token};
+use super::info::{display_version, read_cask_info_lenient, valid_token};
 use super::plan::{blocked_by, CaskAction};
 use super::version::offers_update;
 
@@ -50,8 +50,10 @@ struct RawOutdated {
 /// Homebrew 7 decides it (`Cask#auto_updates_bundle_outdated?`). That is the
 /// whole point: `brew upgrade --cask <token>` always acts greedily and would
 /// reinstall an app that already updated itself, so the default list is the
-/// only place that says an update is needed. Pinned casks and tokens that are
-/// not bare core tokens (a third-party tap's are qualified) are left out.
+/// only place that says an update is needed. Pinned casks and names that are
+/// not bare tokens are left out. A cask from a third-party tap is listed by its
+/// bare name when it has no core namesake (`tinycast` is), and is kept: `brew`
+/// resolves the installed cask.
 fn read_outdated(brew: &Brew<'_>) -> Result<Vec<RawOutdated>, CaskFailure> {
     let outcome = brew.output(&["outdated", "--cask", "--json=v2"], OUTDATED_TIMEOUT)?;
     if !outcome.success() {
@@ -77,12 +79,12 @@ pub fn still_outdated(brew: &Brew<'_>, token: &str) -> Result<bool, CaskFailure>
 /// The default `brew outdated` and then one `brew info` for the tokens it
 /// names. Left out besides what [`read_outdated`] drops: casks with no `app`
 /// artifact, such as command-line tools and package-only installers, because
-/// this is the Apps screen, and casks whose app already is the listed version
-/// or newer than it.
+/// this is the Apps screen, casks whose app already is the listed version or
+/// newer than it, and casks `brew info` refuses (see [`read_cask_info_lenient`]).
 pub fn list_outdated(brew: &Brew<'_>) -> Result<Vec<OutdatedCask>, CaskFailure> {
     let listed = read_outdated(brew)?;
     let tokens: Vec<&str> = listed.iter().map(|cask| cask.name.as_str()).collect();
-    let infos = read_cask_info(brew, &tokens)?;
+    let infos = read_cask_info_lenient(brew, &tokens)?;
     Ok(listed
         .iter()
         .filter_map(|cask| {

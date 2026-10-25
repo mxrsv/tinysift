@@ -12,8 +12,11 @@
 //! - **Token allow-list.** A token must be in the bundled [`CATALOGUE`] to be
 //!   installed, or in the last `brew outdated` listing to be updated, and it
 //!   must look like a bare cask token ([`valid_token`]) so it can neither add
-//!   a flag nor name a third-party tap. Anything else is rejected before a
-//!   process spawns.
+//!   a flag nor name a tap, which `brew` would then trust or clone. Anything
+//!   else is rejected before a process spawns. `brew` itself decides which
+//!   cask a bare token means, so an installed cask from a third-party tap is
+//!   handled as `brew` resolves it, and one `brew info` refuses leaves that
+//!   cask out of the update list.
 //! - **Nothing to answer.** `brew` runs with [`BREW_ENV`] and [`BREW_PATH`] in
 //!   an otherwise empty environment, a closed stdin and no terminal. A cask
 //!   whose installer needs `sudo` is refused ([`Elevation`]), and

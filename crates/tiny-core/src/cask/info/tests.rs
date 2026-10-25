@@ -201,7 +201,7 @@ fn info_failures_are_typed() {
             bin: BREW_PATH.into(),
             timeout_ms: 60_000
         })),
-        Err(CaskFailure::TimedOut)
+        Err(CaskFailure::TimedOut { running: false })
     );
     let garbled = failed(Ok(CommandOutcome {
         status: Some(0),

@@ -287,3 +287,66 @@ fn a_version_that_cannot_be_ordered_stays_listed() {
         ("1.9.3", "1.9.3b")
     );
 }
+
+#[test]
+fn one_cask_brew_refuses_does_not_hide_the_other_updates() {
+    // `brew info a b` fails as a whole when one token is refused (here, one
+    // that two taps share); asked one at a time, only that one is left out.
+    let mut b = simple_cask("b", "2.0", "B.app");
+    b["installed"] = json!("1.0");
+    b["outdated"] = json!(true);
+    let ambiguous = "Error: Cask b exists in multiple taps: one/b, two/b";
+    let runner = MockRunner::new()
+        .with_exit(
+            BREW_PATH,
+            &OUTDATED_ARGS,
+            0,
+            &outdated_json(&[("a", "1.0", "2.0", false), ("b", "1.0", "2.0", false)]),
+        )
+        .with_exit(BREW_PATH, &["info", "--cask", "--json=v2", "a", "b"], 1, "")
+        .with_exit(
+            BREW_PATH,
+            &["info", "--cask", "--json=v2", "a"],
+            1,
+            ambiguous,
+        )
+        .with_exit(
+            BREW_PATH,
+            &["info", "--cask", "--json=v2", "b"],
+            0,
+            &info_json(&[b]),
+        );
+    let listed = list(&runner).unwrap();
+    let tokens: Vec<_> = listed.iter().map(|c| c.token.as_str()).collect();
+    assert_eq!(tokens, ["b"]);
+}
+
+#[test]
+fn a_missing_brew_or_a_timeout_still_fails_the_whole_listing() {
+    let timed_out = |error| {
+        let runner = MockRunner::new()
+            .with_exit(
+                BREW_PATH,
+                &OUTDATED_ARGS,
+                0,
+                &outdated_json(&[("a", "1.0", "2.0", false), ("b", "1.0", "2.0", false)]),
+            )
+            .with_output(
+                BREW_PATH,
+                &["info", "--cask", "--json=v2", "a", "b"],
+                Err(error),
+            );
+        list(&runner)
+    };
+    assert_eq!(
+        timed_out(CommandError::Timeout {
+            bin: BREW_PATH.into(),
+            timeout_ms: 60_000
+        }),
+        Err(CaskFailure::TimedOut { running: false })
+    );
+    assert_eq!(
+        timed_out(CommandError::NotFound(BREW_PATH.into())),
+        Err(CaskFailure::HomebrewMissing)
+    );
+}

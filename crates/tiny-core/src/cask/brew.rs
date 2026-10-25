@@ -107,7 +107,11 @@ impl<'a> Brew<'a> {
         let bin = self.path.to_str().ok_or(CaskFailure::HomebrewMissing)?;
         self.runner
             .output(bin, args, timeout)
-            .map_err(CaskFailure::from)
+            .map_err(|error| match CaskFailure::from(error) {
+                // A read-only call is local: its timeout is not a download's.
+                CaskFailure::TimedOut { .. } => CaskFailure::TimedOut { running: false },
+                other => other,
+            })
     }
 
     /// Runs `brew args...` handing each line it prints to `on_line`, until it
@@ -218,11 +222,13 @@ mod tests {
         let mut seen: Vec<&str> = outcome
             .stdout
             .lines()
-            // The shell that runs the fake `brew` adds these itself.
+            // The shell that runs the fake `brew` adds these itself, and a
+            // proxy in the shell that runs the tests is passed on by design.
             .filter(|line| {
                 !["_=", "PWD=", "SHLVL=", "OLDPWD="]
                     .iter()
                     .any(|v| line.starts_with(v))
+                    && !line.to_lowercase().contains("_proxy=")
             })
             .collect();
         seen.sort_unstable();

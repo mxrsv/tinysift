@@ -24,6 +24,11 @@ use crate::TinySession;
 /// The `brew` to run, or the failure that says there is none.
 fn brew_path(seams: &Seams<'_>) -> Result<PathBuf, FfiCaskError> {
     match seams.brew.status() {
+        // Without the account's home `brew` cannot run, which is not the same
+        // as there being no Homebrew.
+        HomebrewStatus::Present(_) if seams.brew.home().is_none() => Err(FfiCaskError::Operation {
+            detail: "this account's home folder could not be read, and Homebrew needs it".into(),
+        }),
         HomebrewStatus::Present(path) => Ok(path),
         HomebrewStatus::Missing => Err(failed(CaskFailure::HomebrewMissing)),
     }
@@ -286,9 +291,9 @@ fn report(
         action: action.into(),
         done_count: count(|o| matches!(o, RunOutcome::Done)),
         failed_count: count(|o| matches!(o, RunOutcome::Failed(_))),
-        cancelled: results
-            .iter()
-            .any(|(_, outcome)| *outcome == RunOutcome::Cancelled),
+        cancelled: results.iter().any(|(_, outcome)| {
+            matches!(outcome, RunOutcome::Cancelled | RunOutcome::NotAttempted)
+        }),
         results: results
             .iter()
             .map(|(token, outcome)| {

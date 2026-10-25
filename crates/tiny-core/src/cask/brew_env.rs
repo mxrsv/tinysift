@@ -7,6 +7,11 @@
 //! updated themselves, and one who set `HOMEBREW_NO_SUDO` or
 //! `HOMEBREW_NO_AUTO_UPDATE` could change what this module's callers rely on.
 //! Core cannot stop that, so a preview carries the file and the variable.
+//!
+//! The same files can also set `http_proxy`, `https_proxy`, `all_proxy` and
+//! `no_proxy`, which `bin/brew` loads with the rest. Those are harmless here and
+//! are not reported: a proxy the process itself has is passed on to `brew`
+//! (`ToolLookup::isolated`), and one in a file is applied by `brew` over it.
 
 use std::fs::File;
 use std::io::Read;

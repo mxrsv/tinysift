@@ -356,3 +356,20 @@ fn a_cancel_raised_as_the_run_begins_stops_it_before_brew_and_is_reported() {
         "it was spent"
     );
 }
+
+#[test]
+fn a_missing_home_is_not_reported_as_a_missing_homebrew() {
+    let mut world = installable();
+    world.brew.home = None;
+    let error = world
+        .session
+        .install_preview("ghostty", &world.seams())
+        .unwrap_err();
+    assert!(
+        matches!(&error, FfiCaskError::Operation { detail } if detail.contains("home folder")),
+        "{error:?}"
+    );
+    let listing = world.session.outdated(&world.seams()).unwrap_err();
+    assert!(matches!(listing, FfiCaskError::Operation { .. }));
+    assert!(world.brew.calls().is_empty());
+}

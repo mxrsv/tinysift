@@ -23,7 +23,7 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::brew::Brew;
 use super::failure::CaskFailure;
@@ -176,8 +176,9 @@ pub fn check_apps_closed(
 /// Right before each, it is refused without spawning an upgrade when it is
 /// blocked, when its apps are open or cannot be checked, or when it has left
 /// `brew outdated`; the run goes on with the next. A failure never stops the
-/// others; cancelling does, and what was not started is
-/// [`RunOutcome::NotAttempted`]. Each stage is reported with the token and the
+/// others; cancelling does: the cask that was running is
+/// [`RunOutcome::Cancelled`] and every cask whose turn had not come is
+/// [`RunOutcome::NotAttempted`], with nothing spawned for it. Each stage is reported with the token and the
 /// cask's position in the run.
 pub fn run_updates(
     brew: &Brew<'_>,
@@ -193,7 +194,9 @@ pub fn run_updates(
         .iter()
         .enumerate()
         .map(|(index, item)| {
-            let outcome = if cancelled {
+            // Checked before each cask, so a cancel between two casks starts
+            // nothing: not even the `brew outdated` read.
+            let outcome = if cancelled || raised(cancel) {
                 RunOutcome::NotAttempted
             } else {
                 run_one(brew, item, probe, executable, cancel, &mut |stage| {
@@ -211,6 +214,10 @@ pub fn run_updates(
             (item.token.clone(), outcome)
         })
         .collect()
+}
+
+fn raised(cancel: Option<&AtomicBool>) -> bool {
+    cancel.is_some_and(|flag| flag.load(Ordering::Acquire))
 }
 
 fn run_one(

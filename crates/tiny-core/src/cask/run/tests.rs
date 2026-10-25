@@ -172,7 +172,7 @@ fn runner_errors_end_the_run_with_a_typed_failure() {
             bin: BREW_PATH.into(),
             timeout_ms: 1_800_000
         }),
-        RunOutcome::Failed(CaskFailure::TimedOut)
+        RunOutcome::Failed(CaskFailure::TimedOut { running: true })
     );
 }
 
@@ -290,4 +290,55 @@ fn unsupported_no_quit_fails_without_retrying_an_unsafe_command() {
         calls,
         [format!("{BREW_PATH} upgrade --cask --no-quit ghostty")]
     );
+}
+
+#[test]
+fn a_stage_never_goes_back_when_the_two_pipes_deliver_out_of_order() {
+    // The install headings are on stdout and the download one on stderr; the
+    // fake replays stderr first, so put the download heading on stdout, after.
+    let (outcome, stages, _) = run(
+        &item(CaskAction::Install),
+        Ok(outcome(
+            0,
+            "==> Installing Cask ghostty\n==> Fetching downloads for: ghostty\n==> Moving App 'x'\n",
+            "",
+        )),
+    );
+    assert_eq!(outcome, RunOutcome::Done);
+    assert_eq!(stages, [Stage::Working, Stage::Installing]);
+}
+
+#[test]
+fn only_a_line_about_this_cask_can_turn_a_success_into_a_failure() {
+    let ran = |stdout: &str, stderr: &str| {
+        run(&item(CaskAction::Install), Ok(outcome(0, stdout, stderr))).0
+    };
+    for harmless in [
+        // A caveat, not one of brew's warnings.
+        "==> Caveats\nThe helper is already installed by your IT department.\n",
+        // A warning about another cask.
+        "Warning: Cask 'rectangle' is already installed.\n",
+        // The token inside a longer one.
+        "Warning: Cask 'ghostty-nightly' is already installed.\n",
+        "Warning: Cask 'my-ghostty' is already installed.\n",
+        // Not a warning line.
+        "Cask 'ghostty' is already installed on the server.\n",
+    ] {
+        assert_eq!(ran(harmless, ""), RunOutcome::Done, "{harmless:?}");
+        assert_eq!(ran("", harmless), RunOutcome::Done, "{harmless:?}");
+    }
+    assert!(matches!(
+        ran("", "Warning: Cask 'ghostty' is already installed.\n"),
+        RunOutcome::Failed(CaskFailure::AlreadyInstalled { .. })
+    ));
+    let update = run(
+        &item(CaskAction::Update),
+        Ok(outcome(
+            0,
+            "",
+            "Warning: Not upgrading rectangle, the latest version is already installed\n",
+        )),
+    )
+    .0;
+    assert_eq!(update, RunOutcome::Done, "about another cask");
 }
