@@ -7,6 +7,9 @@
 //! New code uses `output`, which is bounded by a timeout and reports failures
 //! as typed errors instead of empty results.
 //!
+//! `stream` is `output` for a long-running tool whose lines the caller wants
+//! as they appear and whose run it may cancel ([`stream`]).
+//!
 //! A bare tool name is resolved once to an absolute path, which is then
 //! spawned. `ToolLookup` decides where to look: the CLI searches `PATH`
 //! only; the app also searches the Homebrew prefixes and, for the tools it
@@ -16,11 +19,20 @@
 use std::ffi::OsString;
 use std::io::{self, Read};
 use std::os::unix::fs::PermissionsExt;
-use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Command;
+use std::sync::atomic::AtomicBool;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
+
+mod child_lifecycle;
+mod isolation;
+mod stream;
+
+use child_lifecycle::ChildLifecycle;
+use isolation::Isolation;
+
+pub use stream::StreamEnd;
 
 pub struct CommandOutput {
     pub success: bool,
@@ -83,6 +95,8 @@ pub struct ToolLookup {
     /// (`user_tool_dirs`) are searched after `PATH`.
     user_home: Option<PathBuf>,
     env: Vec<(&'static str, &'static str)>,
+    /// Set for a tool that must not see the app's environment.
+    isolation: Option<Isolation>,
 }
 
 impl ToolLookup {
@@ -122,6 +136,18 @@ impl ToolLookup {
         let mut env = self.env.clone();
         env.extend_from_slice(extra);
         Self { env, ..self }
+    }
+
+    /// Runs every tool alone: the environment is cleared down to `HOME` (the
+    /// account's, from `home`) and `path`, plus what `with_env` adds, and the
+    /// tool starts in a session of its own with no controlling terminal. The
+    /// search for the tool is unchanged; `path` is only what it runs with.
+    /// Without a `home` the tool does not run, as if it were not found.
+    pub fn isolated(self, home: Option<PathBuf>, path: &str) -> Self {
+        Self {
+            isolation: Some(Isolation::new(home, path)),
+            ..self
+        }
     }
 
     fn search_path(&self) -> Option<OsString> {
@@ -171,7 +197,9 @@ impl ToolLookup {
     fn command(&self, bin: &str) -> Option<Command> {
         let resolved = self.resolve(bin)?;
         let mut command = Command::new(&resolved);
-        if let Some(path) = self.child_path(resolved.parent()) {
+        if let Some(isolation) = &self.isolation {
+            isolation.apply(&mut command)?;
+        } else if let Some(path) = self.child_path(resolved.parent()) {
             command.env("PATH", path);
         }
         command.envs(self.env.iter().copied());
@@ -259,6 +287,28 @@ pub trait CommandRunner: Send + Sync {
         args: &[&str],
         timeout: Duration,
     ) -> Result<CommandOutcome, CommandError>;
+
+    /// Like `output`, but hands each line the command prints (stdout and
+    /// stderr, as they arrive) to `on_line` and stops the command when
+    /// `cancel` is raised. The default has no process to watch: it runs
+    /// `output` and replays the lines afterwards, so fakes need not implement it.
+    fn stream(
+        &self,
+        bin: &str,
+        args: &[&str],
+        timeout: Duration,
+        cancel: Option<&AtomicBool>,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<StreamEnd, CommandError> {
+        if stream::is_cancelled(cancel) {
+            return Ok(StreamEnd::Cancelled);
+        }
+        let outcome = self.output(bin, args, timeout)?;
+        for line in outcome.stderr.lines().chain(outcome.stdout.lines()) {
+            on_line(line);
+        }
+        Ok(StreamEnd::Finished(outcome))
+    }
 }
 
 /// Runs tools found through `PATH` only (the CLI's behaviour).
@@ -281,6 +331,17 @@ impl CommandRunner for RealRunner {
     ) -> Result<CommandOutcome, CommandError> {
         ToolRunner::default().output(bin, args, timeout)
     }
+
+    fn stream(
+        &self,
+        bin: &str,
+        args: &[&str],
+        timeout: Duration,
+        cancel: Option<&AtomicBool>,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<StreamEnd, CommandError> {
+        ToolRunner::default().stream(bin, args, timeout, cancel, on_line)
+    }
 }
 
 /// Runs tools resolved through a `ToolLookup`.
@@ -301,6 +362,17 @@ impl ToolRunner {
         Self {
             lookup,
             own_process_group: true,
+        }
+    }
+
+    /// Starts `command`: in a session of its own when the lookup isolates
+    /// the tool (which makes it a group leader too), else in its own process
+    /// group when this runner owns one.
+    fn spawn(&self, command: Command, args: &[&str]) -> io::Result<ChildLifecycle> {
+        if self.lookup.isolation.is_some() {
+            ChildLifecycle::spawn_session(command, args)
+        } else {
+            ChildLifecycle::spawn(command, args, self.own_process_group)
         }
     }
 }
@@ -335,66 +407,35 @@ impl CommandRunner for ToolRunner {
         args: &[&str],
         timeout: Duration,
     ) -> Result<CommandOutcome, CommandError> {
-        let spawn_error = |error: io::Error| match error.kind() {
-            io::ErrorKind::NotFound => CommandError::NotFound(bin.to_string()),
-            _ => CommandError::Spawn {
-                bin: bin.to_string(),
-                detail: error.to_string(),
-            },
-        };
-        let mut command = self
+        let spawn_error = |error: io::Error| spawn_failure(bin, error);
+        let command = self
             .lookup
             .command(bin)
             .ok_or_else(|| CommandError::NotFound(bin.to_string()))?;
-        if self.own_process_group {
-            command.process_group(0);
-        }
-        let mut child = command
-            .args(args)
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(spawn_error)?;
+        let mut child = self.spawn(command, args).map_err(spawn_error)?;
         // Drain both pipes before waiting so a chatty child cannot block on a
-        // full pipe buffer.
-        let stdout = drain(child.stdout.take(), u64::MAX);
-        let stderr = drain(child.stderr.take(), STDERR_LIMIT);
+        // full pipe buffer. Keep the leader unreaped while descendants hold them.
+        let stdout = drain(child.stdout(), u64::MAX);
+        let stderr = drain(child.stderr(), STDERR_LIMIT);
         let deadline = Instant::now() + timeout;
         let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) if Instant::now() >= deadline => {
-                    if self.own_process_group {
-                        // The group id is the child's pid, and the child has
-                        // not been reaped, so it cannot belong to anyone else.
-                        // SAFETY: kill(2) with a negated pid, no memory involved.
-                        unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
-                    }
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    // ponytail: drain threads are detached here; a grandchild
-                    // that inherited the pipes keeps them alive until it exits.
-                    return Err(CommandError::Timeout {
-                        bin: bin.to_string(),
-                        timeout_ms: timeout.as_millis() as u64,
-                    });
-                }
-                Ok(None) => thread::sleep(POLL_INTERVAL),
-                Err(error) => return Err(spawn_error(error)),
+            if stdout.is_finished()
+                && stderr.is_finished()
+                && child.exited().map_err(spawn_error)?
+            {
+                break child.wait().map_err(spawn_error)?;
             }
-        };
-        // An exited child may leave its stdout/stderr open in a grandchild.
-        // Joining is safe only once both drains finish, within the same deadline.
-        while !stdout.is_finished() || !stderr.is_finished() {
             if Instant::now() >= deadline {
+                child.kill().map_err(spawn_error)?;
+                // A descendant that deliberately left our group can still hold
+                // pipes; detach drains rather than signal processes we do not own.
                 return Err(CommandError::Timeout {
                     bin: bin.to_string(),
                     timeout_ms: timeout.as_millis() as u64,
                 });
             }
             thread::sleep(POLL_INTERVAL);
-        }
+        };
         let stdout =
             String::from_utf8(join(stdout)).map_err(|_| CommandError::NonUtf8(bin.to_string()))?;
         let stderr = String::from_utf8_lossy(&join(stderr)).into_owned();
@@ -403,6 +444,27 @@ impl CommandRunner for ToolRunner {
             stdout,
             stderr,
         })
+    }
+
+    fn stream(
+        &self,
+        bin: &str,
+        args: &[&str],
+        timeout: Duration,
+        cancel: Option<&AtomicBool>,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<StreamEnd, CommandError> {
+        self.run_stream(bin, args, timeout, cancel, stream::INTERRUPT_GRACE, on_line)
+    }
+}
+
+fn spawn_failure(bin: &str, error: io::Error) -> CommandError {
+    match error.kind() {
+        io::ErrorKind::NotFound => CommandError::NotFound(bin.to_string()),
+        _ => CommandError::Spawn {
+            bin: bin.to_string(),
+            detail: error.to_string(),
+        },
     }
 }
 
@@ -529,315 +591,4 @@ pub mod test_support {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    const SH: &str = "/bin/sh";
-    const GENEROUS: Duration = Duration::from_secs(5);
-
-    #[test]
-    fn output_reports_exit_code_stdout_and_stderr() {
-        let outcome = RealRunner
-            .output(SH, &["-c", "echo out; echo err >&2; exit 3"], GENEROUS)
-            .expect("sh runs");
-        assert_eq!(outcome.status, Some(3));
-        assert!(!outcome.success());
-        assert_eq!(outcome.stdout, "out\n");
-        assert_eq!(outcome.stderr, "err\n");
-    }
-
-    #[test]
-    fn output_times_out_and_kills_the_child() {
-        let started = Instant::now();
-        let result = RealRunner.output(SH, &["-c", "sleep 5"], Duration::from_millis(100));
-        assert!(matches!(
-            result,
-            Err(CommandError::Timeout {
-                timeout_ms: 100,
-                ..
-            })
-        ));
-        assert!(started.elapsed() < Duration::from_secs(3));
-    }
-
-    /// Whether `pid` is gone, giving the kernel a moment to reap it.
-    fn gone(pid: libc::pid_t) -> bool {
-        (0..40).any(|_| {
-            // SAFETY: signal 0 only asks whether the process exists.
-            let alive = unsafe { libc::kill(pid, 0) } == 0;
-            if alive {
-                thread::sleep(Duration::from_millis(50));
-            }
-            !alive
-        })
-    }
-
-    #[test]
-    fn a_timeout_in_the_app_kills_what_the_tool_started_and_in_a_terminal_only_the_tool() {
-        let dir = tempfile::tempdir().unwrap();
-        let script = |pidfile: &Path| format!("sleep 20 & echo $! > '{}'; wait", pidfile.display());
-        let started = |pidfile: &Path| -> libc::pid_t {
-            std::fs::read_to_string(pidfile)
-                .unwrap()
-                .trim()
-                .parse()
-                .unwrap()
-        };
-
-        // The app's runner: its own process group, killed whole.
-        let app_pid = dir.path().join("app.pid");
-        let result = ToolRunner::new(ToolLookup::default()).output(
-            SH,
-            &["-c", &script(&app_pid)],
-            Duration::from_secs(1),
-        );
-        assert!(matches!(result, Err(CommandError::Timeout { .. })));
-        let grandchild = started(&app_pid);
-        let killed = gone(grandchild);
-        if !killed {
-            unsafe { libc::kill(grandchild, libc::SIGKILL) };
-        }
-        assert!(killed, "the tool's child outlived the timeout");
-
-        // The CLI's runner shares the terminal's group so Ctrl-C reaches the
-        // tool; a timeout kills the tool only.
-        let cli_pid = dir.path().join("cli.pid");
-        let result = RealRunner.output(SH, &["-c", &script(&cli_pid)], Duration::from_secs(1));
-        assert!(matches!(result, Err(CommandError::Timeout { .. })));
-        let grandchild = started(&cli_pid);
-        // SAFETY: signal 0 only asks whether the process exists.
-        let survives = unsafe { libc::kill(grandchild, 0) } == 0;
-        unsafe { libc::kill(grandchild, libc::SIGKILL) };
-        assert!(survives, "the CLI runner must not change process groups");
-    }
-
-    #[test]
-    fn output_deadline_includes_pipes_inherited_by_a_grandchild() {
-        let started = Instant::now();
-        let result = RealRunner.output(SH, &["-c", "sleep 1 & exit 0"], Duration::from_millis(100));
-        assert!(matches!(
-            result,
-            Err(CommandError::Timeout {
-                timeout_ms: 100,
-                ..
-            })
-        ));
-        assert!(started.elapsed() < Duration::from_millis(800));
-    }
-
-    #[test]
-    fn output_reports_missing_binary() {
-        let result = RealRunner.output("/nonexistent/tiny-test-binary", &[], GENEROUS);
-        assert!(matches!(result, Err(CommandError::NotFound(_))));
-    }
-
-    #[test]
-    fn output_rejects_non_utf8_stdout() {
-        let result = RealRunner.output(SH, &["-c", "printf '\\377'"], GENEROUS);
-        assert!(matches!(result, Err(CommandError::NonUtf8(_))));
-    }
-
-    fn fixture_dir(label: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!(
-            "tiny-runner-{label}-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        dir
-    }
-
-    fn write_tool(dir: &std::path::Path, name: &str, body: &str) {
-        let path = dir.join(name);
-        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-    }
-
-    #[test]
-    fn path_only_lookup_misses_a_tool_outside_path() {
-        let prefix = fixture_dir("prefix");
-        write_tool(&prefix, "tiny-fake-tool", "echo hi");
-        let empty = fixture_dir("empty-path");
-        let cli = ToolLookup::new(Some(empty.clone().into_os_string()), Vec::new());
-        assert_eq!(cli.resolve("tiny-fake-tool"), None);
-        let runner = ToolRunner::new(cli);
-        assert!(!runner.which("tiny-fake-tool"));
-        assert!(matches!(
-            runner.output("tiny-fake-tool", &[], GENEROUS),
-            Err(CommandError::NotFound(_))
-        ));
-        let _ = std::fs::remove_dir_all(&prefix);
-        let _ = std::fs::remove_dir_all(&empty);
-    }
-
-    #[test]
-    fn app_lookup_finds_a_tool_in_a_fallback_prefix_and_extends_child_path() {
-        let prefix = fixture_dir("prefix");
-        write_tool(&prefix, "tiny-fake-tool", "echo \"$PATH\"");
-        let path = OsString::from("/usr/bin:/bin");
-        let app = ToolLookup::new(Some(path), vec![prefix.clone()]);
-        assert_eq!(
-            app.resolve("tiny-fake-tool"),
-            Some(prefix.join("tiny-fake-tool"))
-        );
-        let outcome = ToolRunner::new(app)
-            .output("tiny-fake-tool", &[], GENEROUS)
-            .expect("fixture tool runs");
-        assert!(outcome.success());
-        assert!(
-            outcome.stdout.trim().ends_with(prefix.to_str().unwrap()),
-            "child PATH includes the fallback dir: {}",
-            outcome.stdout
-        );
-        let _ = std::fs::remove_dir_all(&prefix);
-    }
-
-    /// A fake tool at `dir/name` that prints its `PATH` and Corepack flags.
-    fn write_probe(dir: &std::path::Path, name: &str) {
-        std::fs::create_dir_all(dir).unwrap();
-        let body = "echo \"$PATH|$COREPACK_ENABLE_NETWORK|$COREPACK_ENABLE_DOWNLOAD_PROMPT\"";
-        write_tool(dir, name, body);
-    }
-
-    fn nvm_bin(home: &std::path::Path, version: &str) -> PathBuf {
-        home.join(".nvm/versions/node").join(version).join("bin")
-    }
-
-    #[test]
-    fn the_app_finds_uv_and_pnpm_in_per_user_folders_only_after_path() {
-        let home = fixture_dir("user-tools");
-        let empty = fixture_dir("user-tools-path");
-        let lookup = |path: &std::path::Path| {
-            ToolLookup::new(Some(path.as_os_str().to_owned()), Vec::new())
-                .with_user_tools(Some(home.clone()))
-        };
-        write_probe(&home.join(".local/bin"), "uv");
-        write_probe(&home.join(".local/bin"), "npm");
-        write_probe(&home.join("Library/pnpm"), "pnpm");
-        assert_eq!(
-            lookup(&empty).resolve("uv"),
-            Some(home.join(".local/bin/uv"))
-        );
-        assert_eq!(
-            lookup(&empty).resolve("pnpm"),
-            Some(home.join("Library/pnpm/pnpm"))
-        );
-        assert_eq!(lookup(&empty).resolve("npm"), None, "only uv and pnpm");
-        write_probe(&empty, "uv");
-        assert_eq!(
-            lookup(&empty).resolve("uv"),
-            Some(empty.join("uv")),
-            "PATH first"
-        );
-        let cli = ToolLookup::new(Some(OsString::new()), Vec::new());
-        assert_eq!(cli.resolve("pnpm"), None, "the CLI never looks there");
-        let _ = std::fs::remove_dir_all(&home);
-        let _ = std::fs::remove_dir_all(&empty);
-    }
-
-    #[test]
-    fn nvm_pnpm_comes_from_the_default_alias_or_the_highest_version() {
-        let home = fixture_dir("nvm");
-        let empty = fixture_dir("nvm-path");
-        let lookup = ToolLookup::new(Some(empty.as_os_str().to_owned()), Vec::new())
-            .with_user_tools(Some(home.clone()));
-        for version in ["v9.1.0", "v10.0.0"] {
-            write_probe(&nvm_bin(&home, version), "pnpm");
-        }
-        std::fs::create_dir_all(nvm_bin(&home, "v24.16.0")).unwrap();
-        let pnpm = |version: &str| Some(nvm_bin(&home, version).join("pnpm"));
-        assert_eq!(lookup.resolve("pnpm"), pnpm("v10.0.0"), "numeric, not text");
-        std::fs::create_dir_all(home.join(".nvm/alias")).unwrap();
-        std::fs::write(home.join(".nvm/alias/default"), "9\n").unwrap();
-        assert_eq!(lookup.resolve("pnpm"), pnpm("v9.1.0"), "the default alias");
-        std::fs::write(home.join(".nvm/alias/default"), "24").unwrap();
-        assert_eq!(
-            lookup.resolve("pnpm"),
-            pnpm("v10.0.0"),
-            "the default has no pnpm"
-        );
-        let _ = std::fs::remove_dir_all(&home);
-        let _ = std::fs::remove_dir_all(&empty);
-    }
-
-    #[test]
-    fn nvm_pnpm_wins_over_homebrew_but_not_over_path() {
-        let home = fixture_dir("nvm-first");
-        let homebrew = fixture_dir("nvm-first-homebrew");
-        let path = fixture_dir("nvm-first-path");
-        let lookup = || {
-            ToolLookup::new(Some(path.as_os_str().to_owned()), vec![homebrew.clone()])
-                .with_user_tools(Some(home.clone()))
-        };
-        for dir in [&homebrew, &home.join("Library/pnpm")] {
-            write_probe(dir, "pnpm");
-        }
-        write_probe(&nvm_bin(&home, "v24.16.0"), "pnpm");
-        assert_eq!(
-            lookup().resolve("pnpm"),
-            Some(nvm_bin(&home, "v24.16.0").join("pnpm")),
-            "the user's nvm pnpm, not a stale Homebrew one"
-        );
-        write_probe(&homebrew, "uv");
-        write_probe(&home.join(".local/bin"), "uv");
-        assert_eq!(
-            lookup().resolve("uv"),
-            Some(homebrew.join("uv")),
-            "uv keeps Homebrew first"
-        );
-        write_probe(&path, "pnpm");
-        assert_eq!(
-            lookup().resolve("pnpm"),
-            Some(path.join("pnpm")),
-            "PATH first"
-        );
-        for dir in [&home, &homebrew, &path] {
-            let _ = std::fs::remove_dir_all(dir);
-        }
-    }
-
-    #[test]
-    fn a_per_user_tool_finds_its_node_and_never_downloads_through_corepack() {
-        let home = fixture_dir("corepack");
-        let bin = nvm_bin(&home, "v24.16.0");
-        write_probe(&bin, "pnpm");
-        let lookup = ToolLookup::new(Some(OsString::from("/usr/bin:/bin")), Vec::new())
-            .with_user_tools(Some(home.clone()));
-        let outcome = ToolRunner::new(lookup)
-            .output("pnpm", &[], GENEROUS)
-            .expect("fixture tool runs");
-        let printed = outcome.stdout.trim().to_string();
-        let (path, flags) = printed.split_once('|').unwrap();
-        assert!(
-            std::env::split_paths(path).any(|dir| dir == bin),
-            "its own folder is on PATH for `node`: {path}"
-        );
-        assert_eq!(flags, "0|0");
-        let _ = std::fs::remove_dir_all(&home);
-    }
-
-    #[test]
-    fn lookup_skips_non_executable_files() {
-        let prefix = fixture_dir("noexec");
-        std::fs::write(prefix.join("tiny-fake-tool"), "#!/bin/sh\n").unwrap();
-        let lookup = ToolLookup::new(Some(OsString::new()), vec![prefix.clone()]);
-        assert_eq!(lookup.resolve("tiny-fake-tool"), None);
-        let _ = std::fs::remove_dir_all(&prefix);
-    }
-
-    #[test]
-    fn output_caps_stderr_without_blocking() {
-        let outcome = RealRunner
-            .output(
-                SH,
-                &["-c", "head -c 200000 /dev/zero | tr '\\0' x >&2"],
-                GENEROUS,
-            )
-            .expect("sh runs");
-        assert!(outcome.success());
-        assert_eq!(outcome.stderr.len() as u64, STDERR_LIMIT);
-    }
-}
+mod tests;

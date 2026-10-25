@@ -39,7 +39,7 @@ fn an_installed_cask_reports_its_versions_host_and_app() {
         Some("update.code.visualstudio.com")
     );
     assert!(info.outdated);
-    assert!(!info.needs_admin);
+    assert_eq!(info.elevation, Elevation::default());
     assert_eq!(
         info.apps,
         [PathBuf::from("/Applications/Visual Studio Code.app")]
@@ -63,41 +63,21 @@ fn an_app_without_a_target_lands_in_applications() {
 }
 
 #[test]
-fn needs_admin_follows_the_artifacts_homebrew_runs_with_sudo() {
-    let needs = |artifacts| infos(&info_json(&[cask("x", "1", artifacts)]))[0].needs_admin;
-    // Cloudflare WARP's shape: a package installer and its pkgutil uninstall.
-    assert!(needs(json!([
-        {"uninstall": [{"launchctl": "com.cloudflare.1dot1dot1dot1.macos.warp.daemon",
-                        "pkgutil": "com.cloudflare.1dot1dot1dot1.macos"}]},
-        {"pkg": ["Cloudflare_WARP_2026.8.2115.0.pkg"]},
-    ])));
-    assert!(needs(json!([{"keyboard_layout": ["Layout.bundle"]}])));
-    assert!(needs(
-        json!([{"installer": [{"script": {"executable": "setup", "sudo": true}}]}])
-    ));
-    assert!(needs(json!([{"postflight_steps": [{"steps": [
-        {"type": "run", "command": {"path": "/bin/ln"}, "sudo": true}]}]}])));
-    assert!(needs(json!([{"preflight_steps": [{"steps": [
-        {"type": "delete_keychain_certificate", "name": "Old CA"}]}]}])));
-    assert!(needs(
-        json!([{"uninstall": [{"kext": "com.example.driver"}]}])
-    ));
-    assert!(needs(
-        json!([{"uninstall": [{"script": {"executable": "rm.sh", "sudo": true}}]}])
-    ));
+fn the_elevation_is_read_from_the_artifacts() {
+    let json = info_json(&[cask("x", "1", json!([{"pkg": ["X.pkg"]}]))]);
+    assert!(infos(&json)[0].elevation.install);
+}
 
-    assert!(!needs(json!([
-        {"uninstall": [{"quit": "com.example.app"}]},
-        {"app": ["App.app"], "target": "/Applications/App.app"},
-        {"binary": ["/Applications/App.app/Contents/MacOS/app"], "target": "/opt/homebrew/bin/app"},
-        {"zsh_completion": ["/Applications/App.app/_app"], "target": "/opt/homebrew/share/zsh/_app"},
-        {"zap": [{"trash": ["~/Library/Caches/com.example.app"], "rmdir": "~/.app"}]},
-    ])));
-    // Steps that do not elevate, as Tinycast and ngrok ship them.
-    assert!(!needs(json!([{"postflight_steps": [{"steps": [
-        {"type": "set_permissions", "permissions": "0755", "paths": [{"base": "staged_path", "path": "ngrok"}]},
-        {"type": "run", "command": {"path": "/usr/bin/xattr"}, "args": ["-dr", "com.apple.quarantine"]}]}]}])));
-    assert!(!needs(json!([{"installer": [{"manual": "Setup.app"}]}])));
+#[test]
+fn a_build_number_after_a_comma_is_not_shown() {
+    for (version, shown) in [
+        ("0.4.26,4", "0.4.26"),
+        ("4.2.1,20260531.1", "4.2.1"),
+        ("1.142.0", "1.142.0"),
+        ("", ""),
+    ] {
+        assert_eq!(display_version(version), shown, "{version:?}");
+    }
 }
 
 #[test]

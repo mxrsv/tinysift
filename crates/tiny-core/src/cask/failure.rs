@@ -21,6 +21,9 @@ const NEEDS_ADMIN: &[&str] = &[
     "no tty present",
 ];
 
+/// `brew` says one of these when what it downloaded is not what its data names.
+const CHECKSUM: &[&str] = &["reports different checksum", "checksum mismatch"];
+
 /// Curl and resolver messages that mean the network, not the app, failed.
 const NETWORK: &[&str] = &[
     "could not resolve host",
@@ -52,6 +55,11 @@ pub enum CaskFailure {
     },
     /// The cask's installer needs an administrator password.
     NeedsAdministrator,
+    /// The cask only offers an installer to open by hand, which installs
+    /// nothing through `brew`.
+    ManualInstaller {
+        token: String,
+    },
     /// The app is open, so replacing it is refused.
     AppRunning {
         app: String,
@@ -72,6 +80,9 @@ pub enum CaskFailure {
     Network {
         detail: String,
     },
+    /// The download does not match the checksum Homebrew's data holds, which
+    /// is what an index older than the app's newest release looks like.
+    StaleData,
     CaskNotFound {
         token: String,
     },
@@ -96,6 +107,9 @@ impl CaskFailure {
             Self::NeedsAdministrator => "This app's installer asks for an administrator password, \
                  which TinySift cannot give Homebrew."
                 .into(),
+            Self::ManualInstaller { token } => {
+                format!("{token} only comes with an installer to open by hand.")
+            }
             Self::AppRunning { app } => format!("{app} is open."),
             Self::AppCheckFailed { app, .. } => {
                 format!("TinySift could not tell whether {app} is open.")
@@ -105,6 +119,9 @@ impl CaskFailure {
                 format!("Homebrew already lists {token} as installed.")
             }
             Self::Network { .. } => "Homebrew could not reach the network.".into(),
+            Self::StaleData => "Homebrew's data may be out of date: the download does not match \
+                 the checksum it holds."
+                .into(),
             Self::CaskNotFound { token } => format!("Homebrew has no app called {token}."),
             Self::TimedOut => "Homebrew took too long and was stopped.".into(),
             Self::BrewFailed { .. } => "Homebrew reported an error.".into(),
@@ -120,6 +137,9 @@ impl CaskFailure {
             Self::NeedsAdministrator => {
                 "Run the command in Terminal, where Homebrew can ask for the password.".into()
             }
+            Self::ManualInstaller { .. } => {
+                "Run the command in Terminal to see where Homebrew keeps the installer.".into()
+            }
             Self::AppRunning { app } => format!("Quit {app}, then try again."),
             Self::AppCheckFailed { app, .. } => format!("Quit {app} yourself, then try again."),
             Self::AppExists { .. } => {
@@ -130,6 +150,9 @@ impl CaskFailure {
                  and try again."
             ),
             Self::Network { .. } => "Check your connection, then try again.".into(),
+            Self::StaleData => {
+                "Refresh Homebrew's data with `brew update` in Terminal, then try again.".into()
+            }
             Self::CaskNotFound { .. } => {
                 "Update Homebrew's list with `brew update` in Terminal, then try again.".into()
             }
@@ -190,6 +213,8 @@ pub(super) fn classify_exit(token: &str, outcome: &CommandOutcome) -> CaskFailur
         CaskFailure::CaskNotFound {
             token: quoted_after(&text, "Cask ").unwrap_or_else(|| token.to_string()),
         }
+    } else if says(CHECKSUM) {
+        CaskFailure::StaleData
     } else if let Some(path) = quoted_after(&text, "there is already ") {
         CaskFailure::AppExists { path }
     } else if says(NETWORK) {
@@ -242,166 +267,4 @@ fn brief(text: &str) -> String {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn outcome(status: i32, stderr: &str) -> CommandOutcome {
-        CommandOutcome {
-            status: Some(status),
-            stdout: String::new(),
-            stderr: stderr.into(),
-        }
-    }
-
-    #[test]
-    fn a_missing_cask_names_the_token_brew_printed() {
-        let failure = classify_exit(
-            "wanted",
-            &outcome(
-                1,
-                "Error: Cask 'definitely-not-a-cask' is unavailable: No Cask with this name exists.\n",
-            ),
-        );
-        assert_eq!(
-            failure,
-            CaskFailure::CaskNotFound {
-                token: "definitely-not-a-cask".into()
-            }
-        );
-    }
-
-    #[test]
-    fn a_sudo_refusal_is_needs_administrator_whichever_way_brew_says_it() {
-        for text in [
-            "Error: ghost: The pkg artifact requires sudo, but HOMEBREW_NO_SUDO is set.",
-            "sudo: a terminal is required to read the password; either use -S",
-            "Error: sudo is disabled by HOMEBREW_NO_SUDO.",
-            "sudo: a password is required",
-        ] {
-            assert_eq!(
-                classify_exit("ghost", &outcome(1, text)),
-                CaskFailure::NeedsAdministrator,
-                "{text}"
-            );
-        }
-    }
-
-    #[test]
-    fn network_failures_are_told_from_other_download_errors() {
-        let offline = "Error: Download failed on Cask 'x' with message: \
-                       curl: (6) Could not resolve host: example.com";
-        assert!(matches!(
-            classify_exit("x", &outcome(1, offline)),
-            CaskFailure::Network { .. }
-        ));
-        let missing = "Error: Download failed on Cask 'x' with message: \
-                       curl: (22) The requested URL returned error: 404";
-        assert!(matches!(
-            classify_exit("x", &outcome(1, missing)),
-            CaskFailure::BrewFailed { .. }
-        ));
-    }
-
-    #[test]
-    fn an_app_in_the_way_is_named_by_its_path() {
-        let failure = classify_exit(
-            "chatgpt",
-            &outcome(
-                1,
-                "Error: It seems there is already an App at '/Applications/ChatGPT.app'.",
-            ),
-        );
-        assert_eq!(
-            failure,
-            CaskFailure::AppExists {
-                path: "/Applications/ChatGPT.app".into()
-            }
-        );
-    }
-
-    #[test]
-    fn other_failures_keep_brews_error_lines_and_the_exit_code() {
-        let noisy = format!(
-            "{}\nError: Failure while executing; `/usr/bin/xattr` exited with 1.\nError: second",
-            "progress ".repeat(50)
-        );
-        assert_eq!(
-            classify_exit("x", &outcome(3, &noisy)),
-            CaskFailure::BrewFailed {
-                exit_code: Some(3),
-                detail: "Error: Failure while executing; `/usr/bin/xattr` exited with 1.\n\
-                         Error: second"
-                    .into()
-            }
-        );
-    }
-
-    #[test]
-    fn text_without_an_error_line_keeps_its_tail_cut_at_a_character() {
-        let text = (0..20).map(|n| format!("line {n}\n")).collect::<String>();
-        let detail = brief(&text);
-        assert_eq!(detail, "line 15\nline 16\nline 17\nline 18\nline 19");
-        let long = "é".repeat(DETAIL_LIMIT + 10);
-        let cut = brief(&long);
-        assert_eq!(
-            cut.chars().count(),
-            DETAIL_LIMIT + 1,
-            "text plus an ellipsis"
-        );
-        assert!(cut.ends_with('…'));
-    }
-
-    #[test]
-    fn runner_errors_map_to_typed_failures() {
-        assert_eq!(
-            CaskFailure::from(CommandError::NotFound("brew".into())),
-            CaskFailure::HomebrewMissing
-        );
-        assert_eq!(
-            CaskFailure::from(CommandError::Timeout {
-                bin: "brew".into(),
-                timeout_ms: 1
-            }),
-            CaskFailure::TimedOut
-        );
-        assert!(matches!(
-            CaskFailure::from(CommandError::Spawn {
-                bin: "brew".into(),
-                detail: "denied".into()
-            }),
-            CaskFailure::BrewFailed {
-                exit_code: None,
-                ..
-            }
-        ));
-    }
-
-    #[test]
-    fn every_failure_has_a_problem_and_a_recovery() {
-        let all = [
-            CaskFailure::HomebrewMissing,
-            CaskFailure::NotInCatalogue { token: "t".into() },
-            CaskFailure::NotOutdated { token: "t".into() },
-            CaskFailure::NeedsAdministrator,
-            CaskFailure::AppRunning { app: "A".into() },
-            CaskFailure::AppCheckFailed {
-                app: "A".into(),
-                error: "e".into(),
-            },
-            CaskFailure::AppExists { path: "/p".into() },
-            CaskFailure::AlreadyInstalled { token: "t".into() },
-            CaskFailure::Network { detail: "d".into() },
-            CaskFailure::CaskNotFound { token: "t".into() },
-            CaskFailure::TimedOut,
-            CaskFailure::BrewFailed {
-                exit_code: Some(1),
-                detail: "d".into(),
-            },
-        ];
-        for failure in all {
-            assert!(failure.problem().ends_with('.'), "{failure:?}");
-            assert!(failure.recovery().ends_with('.'), "{failure:?}");
-            assert_eq!(failure.to_string(), failure.problem());
-        }
-    }
-}
+mod tests;

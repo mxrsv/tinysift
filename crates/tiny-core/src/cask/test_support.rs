@@ -1,7 +1,12 @@
 //! Fixtures for the cask tests: `brew info` JSON built to the shape Homebrew
 //! 7 prints, and a fake `brew` path. No test runs a real `brew`.
 
+use std::path::PathBuf;
+
 use serde_json::{json, Value};
+
+use super::plan::{CaskAction, CaskPlanItem};
+use crate::runner::CommandOutcome;
 
 pub(super) const BREW_PATH: &str = "/opt/homebrew/bin/brew";
 
@@ -40,4 +45,26 @@ pub(super) fn simple_cask(token: &str, version: &str, app: &str) -> Value {
 
 pub(super) fn info_json(casks: &[Value]) -> String {
     json!({"formulae": [], "casks": casks}).to_string()
+}
+
+/// A plan item for `token` whose app would be placed at `app`.
+pub(super) fn plan_item(action: CaskAction, token: &str, app: PathBuf) -> CaskPlanItem {
+    CaskPlanItem {
+        action,
+        token: token.into(),
+        name: token.into(),
+        from_version: (action == CaskAction::Update).then(|| "1.0".to_string()),
+        version: "2.0".into(),
+        download_host: Some("downloads.example.com".into()),
+        blocked: None,
+        apps: vec![app],
+    }
+}
+
+pub(super) fn outcome(status: i32, stdout: &str, stderr: &str) -> CommandOutcome {
+    CommandOutcome {
+        status: Some(status),
+        stdout: stdout.into(),
+        stderr: stderr.into(),
+    }
 }

@@ -7,6 +7,7 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use super::brew::Brew;
+use super::elevation::Elevation;
 use super::failure::{classify_exit, CaskFailure};
 
 /// `brew info` reads the local index, so it returns in about a second; this
@@ -32,8 +33,8 @@ pub struct CaskInfo {
     pub bundle_version: Option<String>,
     /// Host of the cask's download URL (`brew` may follow a redirect).
     pub download_host: Option<String>,
-    /// An artifact needs `sudo`, which `brew` cannot ask for here.
-    pub needs_admin: bool,
+    /// What the cask asks of `sudo`, which `brew` cannot be given here.
+    pub elevation: Elevation,
     /// `brew outdated` (without `--greedy`) would list the cask.
     pub outdated: bool,
     /// Where each `app` artifact is placed.
@@ -46,6 +47,13 @@ impl CaskInfo {
     pub fn from_version(&self) -> Option<&str> {
         self.bundle_version.as_deref().or(self.installed.as_deref())
     }
+}
+
+/// The version as people write it: Homebrew keeps a build number after a
+/// comma (`0.4.26,4`), and so does its own display. For showing only, never
+/// for matching or for what `brew` is given.
+pub fn display_version(version: &str) -> &str {
+    version.split(',').next().unwrap_or(version)
 }
 
 /// A bare cask token: lower-case letters, digits and `-_.@+`, starting with a
@@ -122,7 +130,7 @@ pub(super) fn parse_cask_info(json: &str) -> Result<Vec<CaskInfo>, CaskFailure> 
                     .next()
                     .unwrap_or_else(|| raw.token.clone()),
                 download_host: raw.url.as_deref().and_then(host_of),
-                needs_admin: requires_admin(&raw.artifacts),
+                elevation: Elevation::of(&raw.artifacts),
                 apps: app_targets(&raw.artifacts),
                 token: raw.token,
                 version,
@@ -143,40 +151,6 @@ fn host_of(url: &str) -> Option<String> {
     let host = authority.rsplit('@').next()?;
     let host = host.split(':').next()?;
     (!host.is_empty()).then(|| host.to_ascii_lowercase())
-}
-
-/// Whether Homebrew itself would need `sudo` for these artifacts. The set is
-/// `requires_sudo?` in Homebrew's `cask/artifact/*.rb`: `pkg` and
-/// `keyboard_layout` always, `installer` and the `*_steps` blocks when a step
-/// says `sudo: true` (or deletes a keychain certificate). An upgrade also runs
-/// the old version's `uninstall`, whose `pkgutil` and `kext` directives use
-/// `sudo`. `preflight`/`postflight` Ruby blocks are not in the JSON; the
-/// `HOMEBREW_NO_SUDO` backstop covers them.
-fn requires_admin(artifacts: &[Value]) -> bool {
-    artifacts
-        .iter()
-        .filter_map(Value::as_object)
-        .flatten()
-        .any(|(key, value)| match key.as_str() {
-            "pkg" | "keyboard_layout" => true,
-            "installer" | "uninstall" => asks_for_root(value),
-            key => key.ends_with("_steps") && asks_for_root(value),
-        })
-}
-
-fn asks_for_root(value: &Value) -> bool {
-    match value {
-        Value::Object(map) => map.iter().any(|(key, value)| {
-            let direct = match (key.as_str(), value) {
-                ("sudo", Value::Bool(true)) | ("pkgutil" | "kext", _) => true,
-                ("type", Value::String(kind)) => kind == "delete_keychain_certificate",
-                _ => false,
-            };
-            direct || asks_for_root(value)
-        }),
-        Value::Array(items) => items.iter().any(asks_for_root),
-        _ => false,
-    }
 }
 
 /// The path of every `app` artifact: its `target` when the JSON has one.

@@ -14,10 +14,12 @@
 //!   must look like a bare cask token ([`valid_token`]) so it can neither add
 //!   a flag nor name a third-party tap. Anything else is rejected before a
 //!   process spawns.
-//! - **No prompts, no administrator.** `brew` runs with [`BREW_ENV`] and a
-//!   closed stdin. A cask whose installer needs `sudo` is refused
-//!   ([`CaskInfo::needs_admin`]), and `HOMEBREW_NO_SUDO` stops `brew` itself
-//!   if that check missed one.
+//! - **Nothing to answer.** `brew` runs with [`BREW_ENV`] and [`BREW_PATH`] in
+//!   an otherwise empty environment, a closed stdin and no terminal. A cask
+//!   whose installer needs `sudo` is refused ([`Elevation`]), and
+//!   `HOMEBREW_NO_SUDO` stops `brew` itself if that check missed one.
+//!   `brew.env` files can still override the environment: [`brew_env_warnings`]
+//!   names them.
 //! - **Previews are single-use.** Core builds and runs plan items; the FFI
 //!   session owns the preview's id, expiry, single use and the busy gate.
 //!
@@ -25,16 +27,29 @@
 //! runs a real `brew`.
 
 mod brew;
+mod brew_env;
 mod catalogue;
+mod elevation;
 mod failure;
 mod info;
+mod install;
+mod plan;
+mod run;
+mod tracked;
 
-pub use brew::{brew_lookup, locate_brew, Brew, HomebrewStatus, BREW_ENV};
+pub use brew::{brew_lookup, locate_brew, Brew, HomebrewStatus, BREW_ENV, BREW_PATH};
+pub use brew_env::{brew_env_warnings, BrewEnvWarning};
 pub use catalogue::{
-    catalogue_entry, catalogue_with_presence, CatalogueApp, CatalogueEntry, Group, CATALOGUE,
+    catalogue_entry, catalogue_with_presence, installed_copy, CatalogueApp, CatalogueEntry, Group,
+    CATALOGUE,
 };
+pub use elevation::Elevation;
 pub use failure::CaskFailure;
-pub use info::{read_cask_info, valid_token, CaskInfo};
+pub use info::{display_version, read_cask_info, valid_token, CaskInfo};
+pub use install::{plan_install, run_install};
+pub use plan::{CaskAction, CaskPlanItem};
+pub use run::{run_item, CaskProgress, ProgressSink, RunOutcome, Stage, RUN_TIMEOUT};
+pub use tracked::{list_tracked, TrackedCask};
 
 #[cfg(test)]
 mod test_support;

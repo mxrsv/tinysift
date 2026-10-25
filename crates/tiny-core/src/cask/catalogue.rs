@@ -121,13 +121,22 @@ pub fn catalogue_with_presence(installed: &[AppEntry]) -> Vec<CatalogueApp> {
         .iter()
         .map(|entry| CatalogueApp {
             entry,
-            on_this_mac: installed.iter().any(|app| {
-                app.bundle_id
-                    .as_deref()
-                    .is_some_and(|id| id.eq_ignore_ascii_case(entry.bundle_id))
-            }),
+            on_this_mac: installed_copy(entry, installed).is_some(),
         })
         .collect()
+}
+
+/// The installed app that has `entry`'s bundle identifier, wherever it sits
+/// and whatever it is called.
+pub fn installed_copy<'a>(
+    entry: &CatalogueEntry,
+    installed: &'a [AppEntry],
+) -> Option<&'a AppEntry> {
+    installed.iter().find(|app| {
+        app.bundle_id
+            .as_deref()
+            .is_some_and(|id| id.eq_ignore_ascii_case(entry.bundle_id))
+    })
 }
 
 #[cfg(test)]
