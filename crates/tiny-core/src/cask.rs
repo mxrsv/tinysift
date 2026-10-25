@@ -9,7 +9,7 @@
 //!   and the exact command in a preview.
 //! - **Argument lists only.** `brew` is spawned from an absolute path with
 //!   fixed arguments (`install --cask <token>`), never through a shell.
-//! - **Token allow-list.** A token must be in the bundled catalogue to be
+//! - **Token allow-list.** A token must be in the bundled [`CATALOGUE`] to be
 //!   installed, or in the last `brew outdated` listing to be updated, and it
 //!   must look like a bare cask token ([`valid_token`]) so it can neither add
 //!   a flag nor name a third-party tap. Anything else is rejected before a
@@ -25,10 +25,14 @@
 //! runs a real `brew`.
 
 mod brew;
+mod catalogue;
 mod failure;
 mod info;
 
 pub use brew::{brew_lookup, locate_brew, Brew, HomebrewStatus, BREW_ENV};
+pub use catalogue::{
+    catalogue_entry, catalogue_with_presence, CatalogueApp, CatalogueEntry, Group, CATALOGUE,
+};
 pub use failure::CaskFailure;
 pub use info::{read_cask_info, valid_token, CaskInfo};
 
