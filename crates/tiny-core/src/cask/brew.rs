@@ -241,4 +241,15 @@ mod tests {
             "the search path the app has is not passed on"
         );
     }
+
+    #[test]
+    fn the_apps_brew_lookup_is_the_isolated_one_with_the_homebrew_prefixes() {
+        let fallbacks = APP_FALLBACK_DIRS.iter().map(PathBuf::from).collect();
+        let expected = isolated_brew(ToolLookup::new(None, fallbacks), account_home());
+        assert_eq!(brew_lookup(), expected);
+        assert!(
+            account_home().is_some(),
+            "the test account has a home, or brew would not run"
+        );
+    }
 }

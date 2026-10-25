@@ -28,6 +28,9 @@
 //!   already at or past the cask's version; the rule that orders versions is
 //!   in `version.rs`. Updates are run with `--no-quit`: an open app is
 //!   refused, never closed for the user.
+//! - **Cancel.** A cancel interrupts a cask that is still downloading. Once
+//!   `brew` reports it is installing (`run_item`), the cask is let finish, and
+//!   nothing after it starts. [`RUN_TIMEOUT`] is the only hard stop then.
 //! - **Previews are single-use.** Core builds and runs plan items; the FFI
 //!   session owns the preview's id, expiry, single use and the busy gate.
 //!
@@ -46,6 +49,7 @@ mod plan;
 mod run;
 mod tracked;
 mod update;
+mod user_apps;
 mod version;
 
 pub use brew::{brew_lookup, locate_brew, Brew, HomebrewStatus, BREW_ENV, BREW_PATH};
@@ -66,6 +70,7 @@ pub use update::{
     check_apps_closed, plan_updates, run_state, run_updates, ExecutableOf, RunState,
     UpdateRequestError,
 };
+pub use user_apps::list_apps_in;
 
 #[cfg(test)]
 mod test_support;

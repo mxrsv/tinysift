@@ -4,10 +4,12 @@
 
 use std::path::Path;
 
+use tiny_core::cask::list_apps_in;
 use tiny_core::uninstall::{
     list_app_identities, list_applications, read_bundle_executable, AppEntry, APPLICATIONS_DIR,
 };
 
+use crate::clean::app_runner;
 use crate::FfiError;
 
 pub(crate) trait AppCatalog {
@@ -20,6 +22,13 @@ pub(crate) trait AppCatalog {
     fn identities(&self) -> Result<Vec<AppEntry>, FfiError>;
     /// The app's process name (`CFBundleExecutable`), if it can be read.
     fn executable(&self, app: &Path) -> Option<String>;
+    /// The apps directly inside `~/Applications`, for the cask code, which asks
+    /// whether an app is on the Mac wherever the user keeps it. Uninstall never
+    /// calls it and keeps listing `/Applications` alone, so a fake inventory
+    /// need not have any.
+    fn user_identities(&self, _home: &Path) -> Vec<AppEntry> {
+        Vec::new()
+    }
 }
 
 /// The real inventory.
@@ -40,5 +49,9 @@ impl AppCatalog for SystemCatalog {
 
     fn executable(&self, app: &Path) -> Option<String> {
         read_bundle_executable(app)
+    }
+
+    fn user_identities(&self, home: &Path) -> Vec<AppEntry> {
+        list_apps_in(&home.join("Applications"), app_runner().as_ref())
     }
 }

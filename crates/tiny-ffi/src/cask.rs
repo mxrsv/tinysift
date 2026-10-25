@@ -16,6 +16,11 @@
 //!   `ManualInstaller`, `AppExists`) leaves the preview unspent: nothing ran,
 //!   so quitting the app and pressing the button again is safe. A bad
 //!   selection is `InvalidInput` and leaves it usable too.
+//! - **Cancel.** A raised token stops a cask that is still downloading. Once
+//!   `brew` reports it is installing, the cancel waits for that cask to finish
+//!   (an interrupt there can leave an app half replaced) and nothing after it
+//!   starts: those casks are `NotAttempted`. The 30-minute run limit is the
+//!   only hard stop after that point.
 //! - **Open apps.** An open app is never quit for the user. `cask_execute`
 //!   returns `Failed { AppRunning }` naming it before `brew` starts; core
 //!   checks again right before each upgrade.
@@ -149,7 +154,8 @@ impl TinySession {
     /// Runs the selected casks of a preview, in the preview's order, one at a
     /// time. See the module docs for what is refused before the preview is
     /// spent. Every outcome after it is spent is in the returned report: a
-    /// failure of one cask never stops the next, a cancel does.
+    /// failure of one cask never stops the next, a cancel does (but a cask
+    /// that has begun installing is let finish first).
     pub fn cask_execute(
         &self,
         preview_id: String,

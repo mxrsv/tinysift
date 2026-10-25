@@ -85,3 +85,64 @@ pub(super) fn outdated_json(casks: &[(&str, &str, &str, bool)]) -> String {
         .collect();
     json!({"formulae": [], "casks": casks}).to_string()
 }
+
+/// A scripted `brew` on disk, for tests that run the cask code through a real
+/// `ToolRunner` (real pipes, real signals) instead of a fake runner. The
+/// script answers `outdated` and `info` from files and runs
+/// `run-<token>.sh` for `install` and `upgrade`; any other command exits 99.
+/// Each call's arguments are appended to `calls.txt`.
+pub(super) struct ScriptedBrew {
+    dir: tempfile::TempDir,
+}
+
+impl ScriptedBrew {
+    pub(super) fn new() -> Self {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let script = "#!/bin/sh\n\
+            DIR=\"$(dirname \"$0\")\"\n\
+            echo \"$*\" >> \"$DIR/calls.txt\"\n\
+            case \"$1\" in\n\
+              outdated) cat \"$DIR/outdated.json\" ;;\n\
+              info) cat \"$DIR/info-$4.json\" ;;\n\
+              install) exec sh \"$DIR/run-$3.sh\" ;;\n\
+              upgrade) exec sh \"$DIR/run-$4.sh\" ;;\n\
+              *) echo \"unexpected: $*\" >&2; exit 99 ;;\n\
+            esac\n";
+        let path = dir.path().join("brew");
+        std::fs::write(&path, script).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        Self { dir }
+    }
+
+    pub(super) fn path(&self) -> PathBuf {
+        self.dir.path().join("brew")
+    }
+
+    /// Writes `name` in the script's folder (`outdated.json`, `info-<token>.json`).
+    pub(super) fn file(&self, name: &str, content: &str) {
+        std::fs::write(self.dir.path().join(name), content).unwrap();
+    }
+
+    /// What `install`/`upgrade` of `token` does, as shell. `$DIR` is the folder.
+    pub(super) fn run_script(&self, token: &str, body: &str) {
+        let dir = self.dir.path().display();
+        self.file(
+            &format!("run-{token}.sh"),
+            &format!("DIR='{dir}'\n{body}\n"),
+        );
+    }
+
+    pub(super) fn marker(&self, name: &str) -> PathBuf {
+        self.dir.path().join(name)
+    }
+
+    /// The arguments of every call so far, one string per call.
+    pub(super) fn calls(&self) -> Vec<String> {
+        std::fs::read_to_string(self.marker("calls.txt"))
+            .unwrap_or_default()
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+}

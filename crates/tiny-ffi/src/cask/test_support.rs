@@ -6,11 +6,12 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tiny_core::cask::HomebrewStatus;
-use tiny_core::runner::{CommandError, CommandOutcome, CommandOutput, CommandRunner};
+use tiny_core::runner::{CommandError, CommandOutcome, CommandOutput, CommandRunner, StreamEnd};
 use tiny_core::uninstall::AppEntry;
 
 use super::*;
@@ -23,6 +24,18 @@ pub(super) struct FakeBrew {
     pub(super) home: Option<PathBuf>,
     replies: Mutex<HashMap<String, CommandOutcome>>,
     pub(super) calls: Mutex<Vec<String>>,
+    /// Time between the lines of a streamed run, so a cancel raised by one
+    /// line is seen before the next.
+    pub(super) pace: Mutex<Duration>,
+    /// Holds the call with these arguments open: says so on the sender, then
+    /// waits on the receiver.
+    pub(super) hold: Mutex<Option<Hold>>,
+}
+
+pub(super) struct Hold {
+    pub(super) args: String,
+    pub(super) entered: Sender<()>,
+    pub(super) release: Receiver<()>,
 }
 
 impl FakeBrew {
@@ -74,6 +87,16 @@ impl CommandRunner for FakeBrew {
     fn run(&self, _bin: &str, _args: &[&str]) -> CommandOutput {
         panic!("the cask code never uses the collapsing runner");
     }
+    fn stream(
+        &self,
+        _bin: &str,
+        args: &[&str],
+        _timeout: Duration,
+        cancel: Option<&AtomicBool>,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<StreamEnd, CommandError> {
+        self.stream_reply(args, cancel, on_line)
+    }
     fn output(
         &self,
         _bin: &str,
@@ -82,10 +105,49 @@ impl CommandRunner for FakeBrew {
     ) -> Result<CommandOutcome, CommandError> {
         let call = args.join(" ");
         self.calls.lock().unwrap().push(call.clone());
+        if let Some(hold) = self
+            .hold
+            .lock()
+            .unwrap()
+            .as_ref()
+            .filter(|h| h.args == call)
+        {
+            hold.entered.send(()).unwrap();
+            hold.release.recv().unwrap();
+        }
         match self.replies.lock().unwrap().get(&call) {
             Some(outcome) => Ok(outcome.clone()),
             None => panic!("the fake brew was asked something unexpected: brew {call}"),
         }
+    }
+}
+
+impl FakeBrew {
+    /// `output`, then the lines of the reply handed out one by one, as the real
+    /// runner does: a raised cancel flag ends the run between lines.
+    fn stream_reply(
+        &self,
+        args: &[&str],
+        cancel: Option<&AtomicBool>,
+        on_line: &mut dyn FnMut(&str),
+    ) -> Result<StreamEnd, CommandError> {
+        let raised = || cancel.is_some_and(|flag| flag.load(Ordering::Acquire));
+        let outcome = self.output("brew", args, Duration::from_secs(1))?;
+        for line in outcome.stderr.lines().chain(outcome.stdout.lines()) {
+            if raised() {
+                return Ok(StreamEnd::Cancelled);
+            }
+            on_line(line);
+            let pace = *self.pace.lock().unwrap();
+            if !pace.is_zero() {
+                std::thread::sleep(pace);
+            }
+        }
+        Ok(if raised() {
+            StreamEnd::Cancelled
+        } else {
+            StreamEnd::Finished(outcome)
+        })
     }
 }
 
@@ -96,9 +158,14 @@ pub(super) struct FakeCatalog {
     pub(super) unreadable: AtomicBool,
     /// `None` makes the process name unknown.
     pub(super) executable: Mutex<Option<String>>,
+    /// What `~/Applications` holds.
+    pub(super) user_apps: Mutex<Vec<AppEntry>>,
 }
 
 impl AppCatalog for FakeCatalog {
+    fn user_identities(&self, _home: &Path) -> Vec<AppEntry> {
+        self.user_apps.lock().unwrap().clone()
+    }
     fn applications_root(&self) -> &Path {
         &self.root
     }
@@ -138,13 +205,25 @@ pub(super) struct Listener {
     pub(super) steps: Mutex<Vec<FfiCaskProgress>>,
     /// Raised by the first step, to cancel a run that has just begun.
     pub(super) cancel_on_first_step: Mutex<Option<Arc<CancellationToken>>>,
+    /// Raised by the first step that reaches this stage.
+    pub(super) cancel_at_stage: Mutex<Option<(FfiCaskStage, Arc<CancellationToken>)>>,
 }
 
 impl CaskProgressListener for Listener {
     fn on_progress(&self, progress: FfiCaskProgress) {
+        let progress_stage = progress.stage;
         self.steps.lock().unwrap().push(progress);
         if let Some(token) = self.cancel_on_first_step.lock().unwrap().take() {
             token.cancel();
+        }
+        let mut at_stage = self.cancel_at_stage.lock().unwrap();
+        if at_stage
+            .as_ref()
+            .is_some_and(|(stage, _)| *stage == progress_stage)
+        {
+            if let Some((_, token)) = at_stage.take() {
+                token.cancel();
+            }
         }
     }
 }
@@ -186,12 +265,15 @@ impl World {
                 home: Some(root.join("home")),
                 replies: Mutex::default(),
                 calls: Mutex::default(),
+                pace: Mutex::default(),
+                hold: Mutex::default(),
             },
             catalog: FakeCatalog {
                 root: apps.clone(),
                 apps: Mutex::default(),
                 unreadable: AtomicBool::new(false),
                 executable: Mutex::new(Some(PROCESS.into())),
+                user_apps: Mutex::default(),
             },
             probe: FakeProbe {
                 running: Mutex::default(),
@@ -221,6 +303,20 @@ impl World {
         self.catalog.apps.lock().unwrap().push(AppEntry {
             name: name.into(),
             path: self.app(name),
+            bundle_id: Some(bundle_id.into()),
+            size: 0,
+            last_used_days: None,
+        });
+    }
+
+    /// An app kept in `~/Applications` rather than `/Applications`.
+    pub(super) fn keep_in_user_applications(&self, name: &str, bundle_id: &str) {
+        self.catalog.user_apps.lock().unwrap().push(AppEntry {
+            name: name.into(),
+            path: self
+                .root
+                .join("home/Applications")
+                .join(format!("{name}.app")),
             bundle_id: Some(bundle_id.into()),
             size: 0,
             last_used_days: None,

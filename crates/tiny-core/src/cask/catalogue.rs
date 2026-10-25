@@ -126,8 +126,10 @@ pub fn catalogue_with_presence(installed: &[AppEntry]) -> Vec<CatalogueApp> {
         .collect()
 }
 
-/// The installed app that has `entry`'s bundle identifier, wherever it sits
-/// and whatever it is called.
+/// The app among `installed` that has `entry`'s bundle identifier, whatever
+/// it is called. Where it sits is up to the caller's list: the Uninstall
+/// listing is the top level of `/Applications` only, and the FFI adds the top
+/// level of `~/Applications` ([`list_apps_in`](super::user_apps::list_apps_in)).
 pub fn installed_copy<'a>(
     entry: &CatalogueEntry,
     installed: &'a [AppEntry],

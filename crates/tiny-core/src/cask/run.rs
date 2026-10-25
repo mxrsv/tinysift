@@ -1,6 +1,7 @@
 //! Running one planned cask action and telling how far it got.
 
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::thread;
 use std::time::Duration;
 
 use super::brew::Brew;
@@ -8,8 +9,14 @@ use super::failure::{classify_exit, CaskFailure};
 use super::plan::{CaskAction, CaskPlanItem};
 use crate::runner::StreamEnd;
 
-/// The longest one install or upgrade may run, downloads included.
+/// The longest one install or upgrade may run, downloads included. This is the
+/// only hard stop once a cask has begun to install: the runner interrupts
+/// `brew` (SIGINT, then SIGKILL after a grace period), as it does for a cancel
+/// during a download.
 pub const RUN_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+
+/// How often a raised cancel flag is looked at while `brew` runs.
+const WATCH_INTERVAL: Duration = Duration::from_millis(20);
 
 /// How far a run is, read from `brew`'s `==> ` headings. Never a percentage:
 /// `brew` does not print one when it has no terminal. A run only moves
@@ -77,6 +84,15 @@ pub struct CaskProgress {
 /// Receives each change of [`CaskProgress`] on the thread that runs `brew`.
 pub type ProgressSink<'a> = Option<&'a dyn Fn(CaskProgress)>;
 
+/// Raises its flag when dropped, whether the run ended or unwound.
+struct Finished<'a>(&'a AtomicBool);
+
+impl Drop for Finished<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Release);
+    }
+}
+
 /// What `brew` says on a line that changes how a run ended although it exits
 /// 0. Read while the lines stream, so the tail the runner keeps does not
 /// matter. A line counts only when it is about this run's cask (and, for the
@@ -135,8 +151,15 @@ pub enum RunOutcome {
 
 /// Runs `item` through `brew`, reporting each change of stage (the first is
 /// [`Stage::Working`], before `brew` starts). Nothing is spawned for an item
-/// that must be refused, or once `cancel` is raised. Raising `cancel` while
-/// `brew` runs interrupts it so it can undo what it began.
+/// that must be refused, or once `cancel` is raised.
+///
+/// **Cancel.** Raising `cancel` while the cask downloads interrupts `brew`,
+/// which has changed nothing yet. Once `brew` reports that it is installing
+/// (moving, backing up, removing, linking...) the cancel is deferred for this
+/// cask: an interrupt there can leave the old app backed up or removed and the
+/// new one half in place, so the cask is let finish and the result is its own
+/// ([`RunOutcome::Done`] or a failure). The caller's flag stays raised, so
+/// nothing after this cask starts. The only hard stop then is [`RUN_TIMEOUT`].
 pub fn run_item(
     brew: &Brew<'_>,
     item: &CaskPlanItem,
@@ -148,15 +171,45 @@ pub fn run_item(
     }
     let mut stage = Stage::Working;
     on_stage(stage);
+    if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+        return RunOutcome::Cancelled;
+    }
     let mut said = Said::new(&item.token);
+    // What the runner is told: the caller's flag, but only until installing.
+    let installing = AtomicBool::new(false);
+    let stop = AtomicBool::new(false);
+    let finished = AtomicBool::new(false);
     let mut on_line = |line: &str| {
         said.note(line);
         if let Some(next) = stage_of(line).filter(|next| *next > stage) {
             stage = next;
+            installing.store(next >= Stage::Installing, Ordering::Release);
             on_stage(next);
         }
     };
-    match brew.stream(&item.args(), RUN_TIMEOUT, cancel, &mut on_line) {
+    let ended = thread::scope(|scope| {
+        // Ends the watcher even if a callback panics: the scope would
+        // otherwise wait for it for ever while the panic unwinds.
+        let _watch_over = Finished(&finished);
+        if let Some(cancel) = cancel {
+            scope.spawn(|| {
+                while !finished.load(Ordering::Acquire) {
+                    if cancel.load(Ordering::Acquire) && !installing.load(Ordering::Acquire) {
+                        stop.store(true, Ordering::Release);
+                    }
+                    thread::sleep(WATCH_INTERVAL);
+                }
+            });
+        }
+        let ended = brew.stream(
+            &item.args(),
+            RUN_TIMEOUT,
+            cancel.map(|_| &stop),
+            &mut on_line,
+        );
+        ended
+    });
+    match ended {
         Err(failure) => RunOutcome::Failed(failure),
         Ok(StreamEnd::Cancelled) => RunOutcome::Cancelled,
         Ok(StreamEnd::Finished(outcome)) if !outcome.success() => {
@@ -181,5 +234,7 @@ pub fn run_item(
     }
 }
 
+#[cfg(test)]
+mod process_tests;
 #[cfg(test)]
 mod tests;

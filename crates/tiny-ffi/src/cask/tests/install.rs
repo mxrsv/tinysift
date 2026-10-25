@@ -131,7 +131,7 @@ fn a_brew_env_setting_that_undoes_ours_is_carried_in_the_preview() {
 
 // ---- install execute
 
-fn install_ok(world: &World) {
+pub(super) fn install_ok(world: &World) {
     world.brew.reply(
         INSTALL,
         0,
@@ -371,5 +371,25 @@ fn a_missing_home_is_not_reported_as_a_missing_homebrew() {
     );
     let listing = world.session.outdated(&world.seams()).unwrap_err();
     assert!(matches!(listing, FfiCaskError::Operation { .. }));
+    assert!(world.brew.calls().is_empty());
+}
+
+#[test]
+fn an_app_kept_in_the_users_applications_folder_stops_the_install_too() {
+    let world = installable();
+    world.keep_in_user_applications("Terminal I Like", GHOSTTY_ID);
+    let error = world
+        .session
+        .install_preview("ghostty", &world.seams())
+        .unwrap_err();
+    let FfiCaskError::Failed { failure } = error else {
+        panic!("a typed failure");
+    };
+    assert_eq!(failure.kind, FfiCaskFailureKind::AppExists);
+    assert!(failure
+        .subject
+        .as_deref()
+        .unwrap()
+        .ends_with("home/Applications/Terminal I Like.app"));
     assert!(world.brew.calls().is_empty());
 }

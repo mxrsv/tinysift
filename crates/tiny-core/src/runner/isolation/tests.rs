@@ -67,6 +67,24 @@ fn the_home_is_the_one_given_and_without_one_the_tool_does_not_run() {
         .is_err());
 }
 
+/// Whether `pid` is gone, giving the kernel a moment to reap it; a process
+/// that is still there is killed so the test leaves nothing behind.
+fn gone(pid: libc::pid_t) -> bool {
+    let gone = (0..40).any(|_| {
+        // SAFETY: signal 0 only asks whether the process exists.
+        let alive = unsafe { libc::kill(pid, 0) } == 0;
+        if alive {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        !alive
+    });
+    if !gone {
+        // SAFETY: cleanup of the stray process this test started.
+        unsafe { libc::kill(pid, libc::SIGKILL) };
+    }
+    gone
+}
+
 /// The session of the process whose id a script prints first.
 fn session_of_streamed_script(runner: &ToolRunner, script: &str) -> (libc::pid_t, libc::pid_t) {
     let mut seen = None;
@@ -128,27 +146,19 @@ fn cancelling_an_isolated_tool_stops_what_it_started_with_the_kill_after_the_gra
         .trim()
         .parse()
         .unwrap();
-    let gone = (0..40).any(|_| {
-        // SAFETY: signal 0 only asks whether the process exists.
-        let alive = unsafe { libc::kill(child, 0) } == 0;
-        if alive {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        !alive
-    });
-    if !gone {
-        // SAFETY: cleanup of the stray process this test started.
-        unsafe { libc::kill(child, libc::SIGKILL) };
-    }
+    let gone = gone(child);
     assert!(gone, "what the tool started outlived the cancel");
 }
 
 #[test]
 fn a_timeout_ends_an_isolated_tool_and_what_it_started() {
+    let dir = tempfile::tempdir().unwrap();
+    let pidfile = dir.path().join("child.pid");
+    let script = format!("sleep 30 & echo $! > '{}'; wait", pidfile.display());
     let started = Instant::now();
-    let result = ToolRunner::new(lookup(Some(Path::new("/tmp")))).output(
+    let result = ToolRunner::new(lookup(Some(dir.path()))).output(
         "/bin/sh",
-        &["-c", "sleep 30 & wait"],
+        &["-c", &script],
         Duration::from_millis(300),
     );
     assert!(
@@ -156,6 +166,12 @@ fn a_timeout_ends_an_isolated_tool_and_what_it_started() {
         "{result:?}"
     );
     assert!(started.elapsed() < Duration::from_secs(3));
+    let child: libc::pid_t = std::fs::read_to_string(&pidfile)
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(gone(child), "what the tool started outlived the timeout");
 }
 
 #[test]

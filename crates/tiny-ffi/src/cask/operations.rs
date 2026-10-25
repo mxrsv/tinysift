@@ -10,6 +10,7 @@ use tiny_core::cask::{
     plan_install, plan_updates, run_install, run_state, run_updates, Brew, BrewEnvWarning,
     CaskAction, CaskFailure, CaskPlanItem, CaskProgress, HomebrewStatus, RunOutcome,
 };
+use tiny_core::uninstall::AppEntry;
 
 use super::error::failed;
 use super::records;
@@ -32,6 +33,16 @@ fn brew_path(seams: &Seams<'_>) -> Result<PathBuf, FfiCaskError> {
         HomebrewStatus::Present(path) => Ok(path),
         HomebrewStatus::Missing => Err(failed(CaskFailure::HomebrewMissing)),
     }
+}
+
+/// Every app known to be on the Mac: the Uninstall inventory and the top level
+/// of `~/Applications`, so an app kept there is not installed a second time.
+fn installed_apps(seams: &Seams<'_>) -> Result<Vec<AppEntry>, FfiCaskError> {
+    let mut apps = seams.catalog.identities()?;
+    if let Some(home) = seams.brew.home() {
+        apps.extend(seams.catalog.user_identities(&home));
+    }
+    Ok(apps)
 }
 
 fn run_state_of(apps: &[PathBuf], seams: &Seams<'_>) -> FfiAppRunState {
@@ -63,7 +74,7 @@ impl TinySession {
         seams: &Seams<'_>,
     ) -> Result<Vec<FfiCaskCatalogueApp>, FfiCaskError> {
         let _gate = self.begin()?;
-        let installed = seams.catalog.identities()?;
+        let installed = installed_apps(seams)?;
         // Best effort: without Homebrew's list the row is just not marked.
         let tracked: Vec<String> = match seams.brew.status() {
             HomebrewStatus::Present(path) => list_tracked(&Brew::new(&path, seams.brew.runner()))
@@ -104,7 +115,7 @@ impl TinySession {
         let _gate = self.begin()?;
         let path = brew_path(seams)?;
         // Read again for this preview: the Mac may have changed since the list.
-        let installed = seams.catalog.identities()?;
+        let installed = installed_apps(seams)?;
         let item = plan_install(&Brew::new(&path, seams.brew.runner()), token, &installed)
             .map_err(failed)?;
         Ok(self.store_preview(CaskAction::Install, vec![item], &path, seams))

@@ -138,3 +138,22 @@ fn listing_updates_needs_brew_and_reports_its_errors_typed() {
     ));
     drop(held);
 }
+
+#[test]
+fn the_catalogue_counts_an_app_kept_in_the_users_applications_folder() {
+    let world = World::new();
+    world.brew.reply(
+        "list --cask --versions --json",
+        0,
+        r#"{"formulae":[],"casks":[]}"#,
+        "",
+    );
+    world.keep_in_user_applications("Rect", "com.knollsoft.Rectangle");
+    let apps = world.session.catalogue(&world.seams()).unwrap();
+    let on_mac: Vec<_> = apps
+        .iter()
+        .filter(|a| a.on_this_mac)
+        .map(|a| a.token.as_str())
+        .collect();
+    assert_eq!(on_mac, ["rectangle"]);
+}
