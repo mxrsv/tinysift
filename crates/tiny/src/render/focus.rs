@@ -9,8 +9,7 @@ use crate::cli::FocusOpts;
 
 pub fn run(opts: FocusOpts) -> Result<()> {
     if opts.minutes == 0 {
-        println!("minutes must be > 0");
-        return Ok(());
+        anyhow::bail!("minutes must be > 0");
     }
 
     let started_at = SystemTime::now();

@@ -1,6 +1,8 @@
 //! Filesystem walker. Collects every file once, with size + age metadata.
 //! Threshold filtering is the caller's responsibility.
 
+use crate::error::{Context, Result};
+use std::collections::HashSet;
 use std::fs;
 use std::path::Path;
 use std::time::SystemTime;
@@ -41,18 +43,16 @@ fn builtin_skip(name: &str) -> bool {
     BUILTIN_SKIP_DIR_NAMES.contains(&name)
 }
 
-pub fn walk(roots: &[std::path::PathBuf], ignore: &IgnoreRules) -> Vec<FileEntry> {
+pub fn walk(roots: &[std::path::PathBuf], ignore: &IgnoreRules) -> Result<Vec<FileEntry>> {
     let now = SystemTime::now();
     let mut out = Vec::new();
     for root in roots {
-        if crate::space_lens::validate_path(root).is_err()
-            || !crate::clean::fs_safe::is_dir_safe(root)
-        {
-            continue;
-        }
-        scan_dir(root, ignore, &now, 0, &mut out);
+        crate::space_lens::validate_path(root)?;
+        scan_dir(root, ignore, &now, 0, &mut out)?;
     }
-    out
+    let mut seen = HashSet::new();
+    out.retain(|entry| seen.insert(entry.path.clone()));
+    Ok(out)
 }
 
 fn scan_dir(
@@ -61,21 +61,18 @@ fn scan_dir(
     now: &SystemTime,
     depth: usize,
     out: &mut Vec<FileEntry>,
-) {
+) -> Result<()> {
     if depth >= MAX_DEPTH {
-        return;
+        return Ok(());
     }
-    let entries = match fs::read_dir(dir) {
-        Ok(it) => it,
-        Err(_) => return,
-    };
+    let entries = fs::read_dir(dir)
+        .with_context(|| format!("cannot read scan directory {}", dir.display()))?;
 
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry.with_context(|| format!("cannot read entry in {}", dir.display()))?;
         let path = entry.path();
-        let metadata = match fs::symlink_metadata(&path) {
-            Ok(m) => m,
-            Err(_) => continue,
-        };
+        let metadata = fs::symlink_metadata(&path)
+            .with_context(|| format!("cannot inspect scanned path {}", path.display()))?;
 
         if metadata.is_dir() {
             let name = entry.file_name();
@@ -83,7 +80,7 @@ fn scan_dir(
             if builtin_skip(&name_str) || ignore.skip_dir(&name_str) {
                 continue;
             }
-            scan_dir(&path, ignore, now, depth + 1, out);
+            scan_dir(&path, ignore, now, depth + 1, out)?;
             continue;
         }
         if !metadata.is_file() {
@@ -97,11 +94,12 @@ fn scan_dir(
         }
 
         let size = metadata.len();
-        let age_secs = metadata
+        let modified = metadata
             .modified()
-            .ok()
-            .and_then(|t| now.duration_since(t).ok())
-            .map(|d| d.as_secs())
+            .with_context(|| format!("cannot read modification time of {}", path.display()))?;
+        let age_secs = now
+            .duration_since(modified)
+            .map(|duration| duration.as_secs())
             .unwrap_or(0);
 
         out.push(FileEntry {
@@ -110,4 +108,5 @@ fn scan_dir(
             age_secs,
         });
     }
+    Ok(())
 }

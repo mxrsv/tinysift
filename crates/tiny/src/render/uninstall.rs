@@ -173,7 +173,7 @@ fn pick_interactive(opts: &UninstallOpts, listed: Option<Vec<AppEntry>>) -> Resu
             let last_used = match a.last_used_days {
                 Some(0) => "today".to_string(),
                 Some(d) => format!("{}d ago", d),
-                None => "never".to_string(),
+                None => "unknown".to_string(),
             };
             format!(
                 "{:<32} {:>10}    last used {}",
