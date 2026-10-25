@@ -195,6 +195,20 @@ fn an_update_needing_a_password_is_planned_blocked_and_a_launchctl_one_is_not() 
     assert_eq!(hard[0].blocked, Some(CaskFailure::NeedsAdministrator));
 }
 
+#[test]
+fn a_cask_whose_app_already_is_the_new_version_is_not_planned() {
+    let mut info = outdated_info("a", true);
+    info["bundle_short_version"] = serde_json::json!("2.0");
+    let runner = MockRunner::new().with_exit(
+        BREW_PATH,
+        &["info", "--cask", "--json=v2", "a"],
+        0,
+        &info_json(&[info]),
+    );
+    let refused = plan_updates(&brew(&runner), &[listed("a")], &["a".into()]);
+    assert_eq!(refused, Err(CaskFailure::NotOutdated { token: "a".into() }));
+}
+
 // ---- running
 
 fn item(dir: &Path, token: &str) -> CaskPlanItem {

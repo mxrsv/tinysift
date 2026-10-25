@@ -104,6 +104,10 @@ pub fn plan_updates(
             let info = infos
                 .iter()
                 .find(|info| &info.token == token && info.outdated)
+                .filter(|info| {
+                    // The app on disk already is that version: see `list_outdated`.
+                    info.from_version().map(display_version) != Some(display_version(&info.version))
+                })
                 .ok_or_else(|| not_outdated(token))?;
             Ok(CaskPlanItem {
                 action: CaskAction::Update,

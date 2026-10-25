@@ -181,3 +181,26 @@ fn a_token_is_still_outdated_only_while_the_default_list_names_it() {
         );
     }
 }
+
+#[test]
+fn an_app_that_already_is_the_listed_version_is_not_offered_an_update() {
+    // Tinycast as the real Mac showed it: Homebrew's record says 0.10.23, the
+    // app updated itself to 0.12.1, and the cask is at 0.12.1.
+    let mut tinycast = simple_cask("tinycast", "0.12.1", "Tinycast.app");
+    tinycast["installed"] = json!("0.10.23");
+    tinycast["bundle_short_version"] = json!("0.12.1");
+    let runner = MockRunner::new()
+        .with_exit(
+            BREW_PATH,
+            &OUTDATED_ARGS,
+            0,
+            &outdated_json(&[("tinycast", "0.10.23", "0.12.1", false)]),
+        )
+        .with_exit(
+            BREW_PATH,
+            &["info", "--cask", "--json=v2", "tinycast"],
+            0,
+            &info_json(&[tinycast]),
+        );
+    assert_eq!(list(&runner), Ok(Vec::new()));
+}
