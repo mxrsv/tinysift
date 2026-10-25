@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tiny_core::processes::Sampler;
 
+use crate::cask::CaskState;
 use crate::clean::CleanState;
 use crate::uninstall::UninstallState;
 use crate::FfiError;
@@ -18,6 +19,7 @@ pub struct TinySession {
     sampler: Mutex<Sampler>,
     pub(crate) clean: Mutex<CleanState>,
     pub(crate) uninstall: Mutex<UninstallState>,
+    pub(crate) cask: Mutex<CaskState>,
 }
 
 #[uniffi::export]

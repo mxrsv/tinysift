@@ -10,6 +10,7 @@ compile_error!("tiny-ffi must be built with panic = \"unwind\"");
 
 uniffi::setup_scaffolding!();
 
+pub mod cask;
 pub mod clean;
 pub mod processes;
 pub mod session;

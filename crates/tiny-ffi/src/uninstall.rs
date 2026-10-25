@@ -28,7 +28,7 @@ use crate::clean::{app_runner, guards, protection_error, FfiProtectionGuard, PRE
 use crate::session::CancellationToken;
 use crate::{FfiError, ProgressListener, TinySession};
 
-mod catalog;
+pub(crate) mod catalog;
 mod records;
 #[cfg(test)]
 mod test_support;
