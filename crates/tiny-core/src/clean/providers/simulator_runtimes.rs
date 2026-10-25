@@ -142,6 +142,10 @@ impl SimulatorRuntimes {
 }
 
 impl CleanProvider for SimulatorRuntimes {
+    fn owns_tool_id(&self, path: &std::path::Path) -> bool {
+        placeholder_uuid(path).is_some()
+    }
+
     fn id(&self) -> &'static str {
         ID
     }

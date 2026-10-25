@@ -6,18 +6,26 @@ use assert_cmd::Command;
 use predicates::prelude::*;
 
 #[test]
-fn dry_run_with_all_includes_succeeds() {
+fn dry_run_with_includes_preserves_an_isolated_fixture() {
+    let home = tempfile::tempdir().unwrap();
+    let log = home.path().join("Library/Logs/fixture.log");
+    std::fs::create_dir_all(log.parent().unwrap()).unwrap();
+    std::fs::write(&log, b"kept").unwrap();
     Command::cargo_bin("tiny")
         .unwrap()
+        .env("HOME", home.path())
         .args([
             "clean",
             "--dry-run",
+            "--category",
+            "user-logs",
             "--include-review",
             "--include-destructive",
         ])
         .assert()
         .success()
         .stdout(predicate::str::contains("Cleanup candidates"));
+    assert_eq!(std::fs::read(log).unwrap(), b"kept");
 }
 
 #[test]
@@ -114,4 +122,16 @@ fn simulator_categories_list_read_only() {
             predicate::str::contains("dry-run")
                 .or(predicate::str::contains("no cleanup candidates")),
         );
+}
+
+#[test]
+fn explicitly_requested_missing_tool_is_not_reported_as_an_empty_success() {
+    Command::cargo_bin("tiny")
+        .unwrap()
+        .env("PATH", "/nonexistent-tiny-test-path")
+        .args(["clean", "--dry-run", "--category", "docker"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("docker: unavailable"))
+        .stdout(predicate::str::is_empty());
 }

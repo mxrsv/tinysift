@@ -1,10 +1,11 @@
-//! The desktop's checked uninstall: the app bundle and its reviewed leftovers
-//! move to Trash only after each one is revalidated right before its move.
+//! Checked uninstall: the app bundle and its reviewed leftovers are
+//! revalidated immediately before each removal.
 //!
 //! Counterpart of [`execute_checked`](crate::clean::checked_execute::execute_checked)
 //! for uninstall. Execution never takes a path from the caller: it takes the
 //! [`CheckedPlan`] built at discovery plus a set of item indexes. There is no
-//! hard-delete path, no retry and no replay.
+//! retry or replay. The desktop wrapper only moves to Trash; the CLI may
+//! supply a permanent-deletion sink under the same guards.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -19,7 +20,7 @@ use crate::clean::checked_execute::{
     SkipReason, StopReason as CleanStop,
 };
 use crate::clean::finder_trash::{Trash, TrashError};
-use crate::clean::fs_safe::PathFingerprint;
+use crate::clean::fs_safe::{Delete, PathFingerprint};
 use crate::clean::process::AppProbe;
 use crate::clean::protection_store::StoreLease;
 use crate::clean::trash_plan::protected_reason;
@@ -65,6 +66,7 @@ pub struct CheckedPlan {
     /// The app's process name (`CFBundleExecutable`), read at discovery.
     /// `None` makes every run refuse: the running-app check cannot be named.
     executable: Option<String>,
+    target: CheckedItem,
     items: Vec<CheckedItem>,
 }
 
@@ -148,7 +150,21 @@ pub fn build_checked_plan(
     let executable = executable
         .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty() && !name.contains(['/', '\0']));
-    Ok(CheckedPlan { executable, items })
+    let target = CheckedItem {
+        path: plan.app.path.clone(),
+        size: plan.app.size,
+        kind: ItemKind::AppBundle,
+        ownership: Ownership::AppBundle,
+        container: applications_root.to_path_buf(),
+        fingerprint: fs::symlink_metadata(&plan.app.path)
+            .map(|meta| PathFingerprint::of(&meta))
+            .map_err(|error| SkipReason::SafetyCheckFailed(error.to_string())),
+    };
+    Ok(CheckedPlan {
+        executable,
+        target,
+        items,
+    })
 }
 
 /// One bundle at most, and `AppBundle` ownership exactly on bundle items.
@@ -263,7 +279,50 @@ pub fn execute_checked_uninstall(
     selection: &BTreeSet<usize>,
     ctx: &UninstallContext<'_>,
 ) -> Result<UninstallReport, UninstallRefusal> {
+    execute_checked_uninstall_action(plan, selection, ctx, None)
+}
+
+/// Chooses Trash or a supplied permanent sink under the common guards.
+/// The sink runs only after consent and validation; no fallback is tried.
+pub fn execute_checked_uninstall_action(
+    plan: &CheckedPlan,
+    selection: &BTreeSet<usize>,
+    ctx: &UninstallContext<'_>,
+    delete: Option<&dyn Delete>,
+) -> Result<UninstallReport, UninstallRefusal> {
+    execute_selected(plan, selection, ctx, delete, false)
+}
+
+/// Preserve the CLI's stop-on-first-failure contract without changing the
+/// desktop's per-item continuation behavior.
+pub(super) fn execute_cli_uninstall(
+    plan: &CheckedPlan,
+    selection: &BTreeSet<usize>,
+    ctx: &UninstallContext<'_>,
+    delete: Option<&dyn Delete>,
+) -> Result<UninstallReport, UninstallRefusal> {
+    execute_selected(plan, selection, ctx, delete, true)
+}
+
+fn execute_selected(
+    plan: &CheckedPlan,
+    selection: &BTreeSet<usize>,
+    ctx: &UninstallContext<'_>,
+    delete: Option<&dyn Delete>,
+    stop_on_failure: bool,
+) -> Result<UninstallReport, UninstallRefusal> {
     let order = execution_order(plan, selection)?;
+    let target = (!order
+        .iter()
+        .any(|&index| plan.items[index].kind == ItemKind::AppBundle))
+    .then_some(&plan.target);
+    if target.is_some() {
+        check_path(&plan.target, ctx).map_err(|reason| {
+            UninstallRefusal::InconsistentPlan(format!(
+                "the app changed or cannot be validated: {reason:?}"
+            ))
+        })?;
+    }
     let app = plan
         .executable
         .as_deref()
@@ -280,10 +339,10 @@ pub fn execute_checked_uninstall(
     }
     let total = order.len() as u64;
     let mut report = UninstallReport::default();
-    let mut bundle_blocked = false;
+    let mut blocked = false;
     for (position, &index) in order.iter().enumerate() {
         let item = &plan.items[index];
-        let outcome = if report.stopped.is_some() || bundle_blocked {
+        let outcome = if report.stopped.is_some() || blocked {
             ItemOutcome::NotAttempted
         } else {
             let shown = item.path.to_string_lossy();
@@ -294,10 +353,12 @@ pub fn execute_checked_uninstall(
                 Some(total),
                 &shown,
             );
-            act_on(item, app, ctx, &mut report.stopped)
+            act_on(item, app, ctx, &mut report.stopped, delete, target)
         };
-        // A bundle that did not move must not let its data go first.
-        bundle_blocked |= item.kind == ItemKind::AppBundle && outcome != ItemOutcome::MovedToTrash;
+        // The CLI stops at any failure/refusal. Both routes keep leftovers
+        // when their bundle could not be removed.
+        blocked |= (stop_on_failure || item.kind == ItemKind::AppBundle)
+            && !matches!(outcome, ItemOutcome::MovedToTrash | ItemOutcome::Deleted);
         report.results.push(ItemResult {
             index,
             path: item.path.clone(),
@@ -358,14 +419,25 @@ fn act_on(
     app: &str,
     ctx: &UninstallContext<'_>,
     stopped: &mut Option<StopReason>,
+    delete: Option<&dyn Delete>,
+    target: Option<&CheckedItem>,
 ) -> ItemOutcome {
-    match check_item(item, app, ctx) {
+    match check_item(item, app, ctx, target) {
         Ok(()) => {}
         Err(Halt::Skip(reason)) => return ItemOutcome::Skipped(reason),
         Err(Halt::Stop(reason)) => {
             *stopped = Some(reason);
             return ItemOutcome::NotAttempted;
         }
+    }
+    if let Some(delete) = delete {
+        return match delete.delete(&item.path) {
+            Ok(()) => ItemOutcome::Deleted,
+            Err(error) => ItemOutcome::DeleteFailed {
+                detail: error.to_string(),
+                source_present: fs::symlink_metadata(&item.path).is_ok(),
+            },
+        };
     }
     match ctx.trash.move_to_trash(&item.path) {
         Ok(()) => ItemOutcome::MovedToTrash,
@@ -382,7 +454,12 @@ fn act_on(
 }
 
 /// Everything that must hold immediately before `item` moves.
-fn check_item(item: &CheckedItem, app: &str, ctx: &UninstallContext<'_>) -> Result<(), Halt> {
+fn check_item(
+    item: &CheckedItem,
+    app: &str,
+    ctx: &UninstallContext<'_>,
+    target: Option<&CheckedItem>,
+) -> Result<(), Halt> {
     if ctx.is_cancelled() {
         return Err(Halt::Stop(StopReason::Cancelled));
     }
@@ -392,6 +469,9 @@ fn check_item(item: &CheckedItem, app: &str, ctx: &UninstallContext<'_>) -> Resu
         Ok(false) => {}
         Ok(true) => return Err(Halt::Stop(StopReason::AppRunning(app.into()))),
         Err(error) => return Err(Halt::Stop(StopReason::AppCheckFailed(error))),
+    }
+    if let Some(target) = target {
+        check_path(target, ctx)?;
     }
     check_path(item, ctx)?;
     policy_unchanged(ctx.policy).map_err(|stop| Halt::Stop(stop.into()))?;

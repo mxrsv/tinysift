@@ -22,7 +22,14 @@ use types::CleanAction;
 pub fn run(opts: crate::cli::CleanOpts) -> Result<()> {
     cli_validate::validate(&opts)?;
 
-    let discovery = discover::discover(&opts)?;
+    let found = discover::discover(&opts)?;
+    for diagnostic in &found.diagnostics {
+        eprintln!("{diagnostic}");
+    }
+    let discovery = found.report;
+    if found.failed {
+        anyhow::bail!("cleanup discovery incomplete; no cleanup was started");
+    }
 
     println!("Cleanup candidates");
     println!();
@@ -97,7 +104,7 @@ pub fn run(opts: crate::cli::CleanOpts) -> Result<()> {
             }
             let report = execute::execute(&selected, action, &excluded_paths, &opts)?;
             print_exec_report(&report);
-            Ok(())
+            require_complete(&report)
         }
     }
 }
@@ -179,4 +186,30 @@ fn print_exec_report(report: &types::ExecReport) {
         );
     }
     let _ = format_bytes; // keep import warning quiet for now
+}
+
+fn require_complete(report: &types::ExecReport) -> Result<()> {
+    if !report.failed.is_empty() || report.skipped_running_app.is_some() {
+        anyhow::bail!("cleanup incomplete; see the per-item report above");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    use super::*;
+    #[test]
+    fn partial_and_refused_cleanup_are_command_failures() {
+        let failed = types::ExecReport {
+            failed: vec![(PathBuf::from("/fixture"), "refused".into())],
+            ..Default::default()
+        };
+        assert!(require_complete(&failed).is_err());
+        let running = types::ExecReport {
+            skipped_running_app: Some("Fixture".into()),
+            ..Default::default()
+        };
+        assert!(require_complete(&running).is_err());
+        assert!(require_complete(&types::ExecReport::default()).is_ok());
+    }
 }

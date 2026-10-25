@@ -255,7 +255,6 @@ fn swap_for_symlink(dir: &Path) {
     fs::rename(dir, &real).unwrap();
     symlink(&real, dir).unwrap();
 }
-
 #[test]
 fn explicit_selection_moves_bundle_first_then_leftovers() {
     let world = World::new();
@@ -272,7 +271,6 @@ fn explicit_selection_moves_bundle_first_then_leftovers() {
         (3, 12)
     );
 }
-
 #[test]
 fn unselected_items_are_never_moved() {
     let world = World::new();
@@ -285,7 +283,6 @@ fn unselected_items_are_never_moved() {
     world.run(&[DATA], &trash);
     assert_eq!(trash.moved(), [world.path(DATA)]);
 }
-
 #[test]
 fn unselectable_or_unknown_selections_refuse_the_whole_run() {
     let world = World::new();
@@ -314,7 +311,6 @@ fn unselectable_or_unknown_selections_refuse_the_whole_run() {
         assert!(trash.moved().is_empty());
     }
 }
-
 #[test]
 fn a_running_or_unknowable_app_moves_nothing() {
     let world = World::new();
@@ -341,7 +337,6 @@ fn a_running_or_unknowable_app_moves_nothing() {
     }
     assert!(trash.moved().is_empty());
 }
-
 #[test]
 fn an_app_that_starts_mid_run_stops_the_run() {
     let world = World::new();
@@ -359,7 +354,6 @@ fn an_app_that_starts_mid_run_stops_the_run() {
         ]
     );
 }
-
 #[test]
 fn a_leftover_that_changed_is_skipped_and_the_rest_proceed() {
     let world = World::new();
@@ -378,7 +372,6 @@ fn a_leftover_that_changed_is_skipped_and_the_rest_proceed() {
     );
     assert_eq!(trash.moved(), [world.path(BUNDLE), world.path(DATA)]);
 }
-
 #[test]
 fn symlinked_missing_and_symlinked_parent_items_are_skipped() {
     let world = World::new();
@@ -401,7 +394,6 @@ fn symlinked_missing_and_symlinked_parent_items_are_skipped() {
     );
     assert_eq!(trash.moved(), [world.path(DATA)]);
 }
-
 #[test]
 fn an_item_outside_its_container_is_skipped_and_a_skipped_bundle_blocks_leftovers() {
     let mut world = World::new();
@@ -420,7 +412,6 @@ fn an_item_outside_its_container_is_skipped_and_a_skipped_bundle_blocks_leftover
     assert_eq!(outcomes(&report), [skipped(SkipReason::OutsideRoots)]);
     assert!(trash.moved().is_empty());
 }
-
 #[test]
 fn a_protected_path_is_refused() {
     let mut world = World::new();
@@ -437,7 +428,6 @@ fn a_protected_path_is_refused() {
     );
     assert!(trash.moved().is_empty());
 }
-
 #[test]
 fn always_keep_rules_skip_only_what_they_hold() {
     let world = World::new();
@@ -458,7 +448,6 @@ fn always_keep_rules_skip_only_what_they_hold() {
     );
     assert_eq!(trash.moved(), [world.path(BUNDLE)]);
 }
-
 #[test]
 fn rules_changed_mid_run_stop_the_rest() {
     let world = World::new();
@@ -487,7 +476,6 @@ fn rules_changed_mid_run_stop_the_rest() {
     );
     assert_eq!(trash.moved(), [world.path(BUNDLE)]);
 }
-
 #[test]
 fn cancellation_stops_before_the_first_item_and_mid_run() {
     let world = World::new();
@@ -521,7 +509,6 @@ fn cancellation_stops_before_the_first_item_and_mid_run() {
         ]
     );
 }
-
 #[test]
 fn automation_denial_stops_and_a_failed_bundle_protects_the_leftovers() {
     let denied = TrashError::AutomationDenied("no".into());
@@ -558,7 +545,6 @@ fn automation_denial_stops_and_a_failed_bundle_protects_the_leftovers() {
     );
     assert!(trash.moved().is_empty());
 }
-
 #[test]
 fn a_swap_during_the_app_check_is_caught() {
     let world = World::new();
@@ -601,7 +587,6 @@ fn residual_race_a_swap_inside_the_mover_is_still_handed_over() {
         .file_type()
         .is_symlink());
 }
-
 #[test]
 fn build_refuses_blocked_inconsistent_and_unreadable_plans() {
     let world = World::new();
@@ -653,7 +638,6 @@ fn build_refuses_blocked_inconsistent_and_unreadable_plans() {
         Err(UninstallRefusal::Unreadable { .. })
     ));
 }
-
 #[test]
 fn a_vanished_leftover_keeps_every_index_in_place() {
     let world = World::build(Some(EXE), &[CACHE]);
@@ -666,7 +650,6 @@ fn a_vanished_leftover_keeps_every_index_in_place() {
     );
     assert_eq!(trash.moved(), [world.path(DATA)]);
 }
-
 #[test]
 fn a_kept_bundle_leaves_every_leftover_untouched() {
     let world = World::new();
@@ -686,7 +669,6 @@ fn a_kept_bundle_leaves_every_leftover_untouched() {
     assert_eq!(report.stopped, None);
     assert!(trash.moved().is_empty());
 }
-
 #[test]
 fn an_unreadable_store_mid_run_stops_the_rest() {
     use std::os::unix::fs::PermissionsExt;
@@ -708,7 +690,6 @@ fn an_unreadable_store_mid_run_stops_the_rest() {
         [ItemOutcome::MovedToTrash, ItemOutcome::NotAttempted]
     );
 }
-
 #[test]
 fn symlinked_library_and_applications_root_are_refused() {
     let world = World::new();
@@ -729,7 +710,6 @@ fn symlinked_library_and_applications_root_are_refused() {
     );
     assert!(trash.moved().is_empty());
 }
-
 #[test]
 fn containment_rejects_the_container_itself_and_parent_components() {
     let inside = |p: &str, c: &str| strictly_inside(Path::new(p), Path::new(c));
@@ -738,3 +718,4 @@ fn containment_rejects_the_container_itself_and_parent_components() {
     assert!(!inside("/Applications/../Users/x", "/Applications"));
     assert!(!inside("/ApplicationsX/A.app", "/Applications"));
 }
+mod cli;

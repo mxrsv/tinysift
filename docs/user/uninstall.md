@@ -77,3 +77,16 @@ If any selected app is refused, `tiny` stops after the report and removes nothin
 
 If one app fails partway, the others still run and `tiny` lists the failure at the end; the
 failed app may be partly removed.
+
+## Execution checks
+
+The CLI [freezes the plan](../../crates/tiny/src/render/uninstall.rs) before the consent prompt.
+Both Trash and permanent deletion use the [checked executor](../../crates/tiny-core/src/uninstall/checked.rs):
+it rechecks the app's running state, each item's identity and real parent directories, and the
+saved Always keep rules immediately before acting. Unknown running state, changed identity
+or uncertain protection refuses the action. The saved-rule lease stays held through each
+app's run; changed or unreadable rules stop the remaining items.
+
+A bundle that could not be removed leaves its leftovers untouched. An app replacement also
+invalidates a leftovers-only plan. These guards do not change which data `-y` consents to remove;
+see [consent and execution](../../crates/tiny-core/src/uninstall.rs).

@@ -48,6 +48,14 @@ impl Default for Docker {
 }
 
 impl CleanProvider for Docker {
+    fn owns_tool_id(&self, path: &std::path::Path) -> bool {
+        DfKind::from_placeholder(path).is_some_and(|kind| match self.id() {
+            ID => CACHE_KINDS.contains(&kind),
+            VOLUMES_ID => VOLUME_KINDS.contains(&kind),
+            _ => false,
+        })
+    }
+
     fn id(&self) -> &'static str {
         ID
     }
@@ -97,6 +105,14 @@ impl DockerVolumes {
 }
 
 impl CleanProvider for DockerVolumes {
+    fn owns_tool_id(&self, path: &std::path::Path) -> bool {
+        DfKind::from_placeholder(path).is_some_and(|kind| match self.id() {
+            ID => CACHE_KINDS.contains(&kind),
+            VOLUMES_ID => VOLUME_KINDS.contains(&kind),
+            _ => false,
+        })
+    }
+
     fn id(&self) -> &'static str {
         VOLUMES_ID
     }

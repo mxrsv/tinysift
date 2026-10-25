@@ -377,32 +377,91 @@ fn is_brew_cask(name: &str) -> bool {
 
 // ---------- Execution ----------
 
-/// Removes the items `consent` allows; report-only and uncertain items are
-/// never touched.
+/// Freezes the app identity and every candidate before the CLI's consent prompt.
+pub fn prepare_plan(plan: &Plan) -> Result<CheckedPlan> {
+    let home = crate::clean::trash_plan::account_home()
+        .ok_or_else(|| engine_error!("home folder unknown"))?;
+    build_checked_plan(
+        plan,
+        &home,
+        Path::new(APPLICATIONS_DIR),
+        read_bundle_executable(&plan.app.path),
+    )
+    .map_err(|error| engine_error!("{error}"))
+}
+
+/// Runs only the selected consent class under the saved-protection lease.
+pub fn execute_prepared_plan(plan: &CheckedPlan, hard: bool, consent: Consent) -> Result<()> {
+    use crate::clean::finder_trash::FinderTrash;
+    use crate::clean::fs_safe::SafeDelete;
+    use crate::clean::process::RunnerProbe;
+    use crate::clean::protection_store::ProtectionStore;
+    use crate::runner::RealRunner;
+    let home = crate::clean::trash_plan::account_home()
+        .ok_or_else(|| engine_error!("home folder unknown"))?;
+    let store = ProtectionStore::for_account()
+        .map_err(|error| engine_error!("cannot read kept paths: {error}"))?;
+    let lease = store
+        .lease()
+        .map_err(|error| engine_error!("cannot lock kept paths: {error}"))?;
+    let ctx = UninstallContext {
+        home: &home,
+        probe: &RunnerProbe(&RealRunner),
+        trash: &FinderTrash,
+        cancel: None,
+        progress: None,
+        policy: &lease,
+    };
+    let report = execute_prepared_with(
+        plan,
+        consent,
+        &ctx,
+        hard.then_some(&SafeDelete as &dyn crate::clean::fs_safe::Delete),
+    )?;
+    let failures: Vec<_> = report
+        .results
+        .iter()
+        .filter(|item| {
+            !matches!(
+                item.outcome,
+                crate::clean::checked_execute::ItemOutcome::MovedToTrash
+                    | crate::clean::checked_execute::ItemOutcome::Deleted
+            )
+        })
+        .map(|item| format!("{}: {:?}", item.path.display(), item.outcome))
+        .collect();
+    if failures.is_empty() && report.stopped.is_none() {
+        Ok(())
+    } else {
+        Err(engine_error!(
+            "uninstall incomplete: {}; stopped: {:?}",
+            failures.join("; "),
+            report.stopped
+        ))
+    }
+}
+
+// The production wrapper and fixture checks share consent selection and the
+// checked executor; tests replace only the execution environment and sinks.
+fn execute_prepared_with(
+    plan: &CheckedPlan,
+    consent: Consent,
+    ctx: &UninstallContext<'_>,
+    delete: Option<&dyn crate::clean::fs_safe::Delete>,
+) -> Result<UninstallReport> {
+    let selection = plan
+        .items()
+        .iter()
+        .enumerate()
+        .filter(|(_, item)| item.ownership().allows(consent))
+        .map(|(index, _)| index)
+        .collect();
+    checked::execute_cli_uninstall(plan, &selection, ctx, delete)
+        .map_err(|error| engine_error!("{error}"))
+}
+
 pub fn execute_plan(plan: &Plan, hard: bool, consent: Consent) -> Result<()> {
-    if let Some(reason) = &plan.blocked {
-        return Err(engine_error!("{}", reason));
-    }
-    for item in plan.items_for(consent) {
-        if hard {
-            hard_remove(&item.path)?;
-        } else {
-            move_to_trash(&item.path)?;
-        }
-    }
-    Ok(())
-}
-
-fn move_to_trash(path: &Path) -> Result<()> {
-    use crate::clean::finder_trash::{FinderTrash, Trash};
-    FinderTrash
-        .move_to_trash(path)
-        .map_err(|e| engine_error!("{}: {e}", path.display()))
-}
-
-fn hard_remove(path: &Path) -> Result<()> {
-    crate::clean::fs_safe::remove_recursive_safe(path)
-        .with_context(|| format!("remove failed: {}", path.display()))
+    execute_prepared_plan(&prepare_plan(plan)?, hard, consent)
 }
 
 #[cfg(test)]

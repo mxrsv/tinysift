@@ -43,6 +43,15 @@ pub fn run(opts: crate::cli::UninstallOpts) -> Result<()> {
         );
     }
 
+    // Freeze paths and fingerprints before the user spends time reviewing.
+    let prepared = if opts.dry_run {
+        Vec::new()
+    } else {
+        plans
+            .iter()
+            .map(prepare_plan)
+            .collect::<tiny_core::error::Result<Vec<_>>>()?
+    };
     let action = decide_action(&opts)?;
     match action {
         Action::DryRun => {
@@ -66,7 +75,7 @@ pub fn run(opts: crate::cli::UninstallOpts) -> Result<()> {
                 return Ok(());
             }
             print_kept(&plans, consent);
-            run_removal(&plans, hard, consent)
+            run_removal(&plans, &prepared, hard, consent)
         }
     }
 }
@@ -139,10 +148,15 @@ fn plural(n: usize, label: &str) -> String {
     }
 }
 
-fn run_removal(plans: &[Plan], hard: bool, consent: Consent) -> Result<()> {
+fn run_removal(
+    plans: &[Plan],
+    prepared: &[CheckedPlan],
+    hard: bool,
+    consent: Consent,
+) -> Result<()> {
     let mut failures: Vec<String> = Vec::new();
-    for plan in plans {
-        match execute_plan(plan, hard, consent) {
+    for (plan, checked) in plans.iter().zip(prepared) {
+        match execute_prepared_plan(checked, hard, consent) {
             Ok(()) => println!("✓ removed {}", plan.app.name),
             Err(e) => {
                 println!("✗ {}: {}", plan.app.name, e);

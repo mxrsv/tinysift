@@ -47,6 +47,12 @@ impl Default for TimeMachineLocal {
 }
 
 impl CleanProvider for TimeMachineLocal {
+    fn owns_tool_id(&self, path: &std::path::Path) -> bool {
+        parse_placeholder(path)
+            .and_then(|id| snapshot_to_date(&id))
+            .is_some()
+    }
+
     fn id(&self) -> &'static str {
         ID
     }
@@ -68,7 +74,10 @@ impl CleanProvider for TimeMachineLocal {
     fn discover(&self, _ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
         let out = run_tool(self.runner.as_ref(), "tmutil", &["listlocalsnapshots", "/"])?;
         if !out.success() {
-            return Ok(Vec::new());
+            return Err(engine_error!(
+                "tmutil listing failed: {}",
+                out.stderr.trim()
+            ));
         }
         let mut items = Vec::new();
         for snapshot in parse_snapshots(&out.stdout) {
@@ -156,7 +165,15 @@ pub fn parse_placeholder(path: &std::path::Path) -> Option<String> {
 pub fn snapshot_to_date(snapshot: &str) -> Option<String> {
     let inner = snapshot.strip_prefix(SNAPSHOT_PREFIX)?;
     let inner = inner.strip_suffix(SNAPSHOT_SUFFIX)?;
-    if inner.is_empty() {
+    if inner.len() != 17
+        || !inner.bytes().enumerate().all(|(index, byte)| {
+            if [4, 7, 10].contains(&index) {
+                byte == b'-'
+            } else {
+                byte.is_ascii_digit()
+            }
+        })
+    {
         return None;
     }
     Some(inner.to_string())
@@ -216,11 +233,11 @@ mod tests {
     }
 
     #[test]
-    fn discover_returns_empty_when_tmutil_fails() {
+    fn discover_reports_error_when_tmutil_fails() {
         let runner =
             Arc::new(MockRunner::new().with_exit("tmutil", &["listlocalsnapshots", "/"], 1, ""));
         let p = TimeMachineLocal::with_runner(runner);
-        assert!(p.discover(&ScanContext::unchecked()).unwrap().is_empty());
+        assert!(p.discover(&ScanContext::unchecked()).is_err());
     }
 
     #[test]

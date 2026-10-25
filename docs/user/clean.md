@@ -135,3 +135,14 @@ private-looking downloads and never ticks them for you.
 
 > Move to Trash is still deletion if macOS empties the Trash automatically
 > (System Settings → General → Storage). Turn that off or use `--dry-run` first.
+
+A failed category scan or unreadable candidate size is reported on stderr and stops the CLI
+before cleanup; a missing optional tool is reported as unavailable. Naming an unavailable
+category explicitly also fails. A cleanup with failed or refused items exits nonzero after
+printing the per-item report. See [discovery](../../crates/tiny-core/src/clean/discover.rs)
+and [CLI results](../../crates/tiny/src/render/clean/mod.rs).
+
+The [executor](../../crates/tiny-core/src/clean/execute.rs) holds the kept-path store's lease
+throughout the run and checks it again before each mutation. A changed or unreadable policy
+stops further mutations. Tool resource IDs are accepted only by their owning provider;
+arbitrary relative filesystem paths are refused.
