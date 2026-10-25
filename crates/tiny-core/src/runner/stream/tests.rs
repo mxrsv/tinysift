@@ -35,18 +35,6 @@ fn texts(seen: &[(Duration, String)]) -> Vec<&str> {
     seen.iter().map(|(_, line)| line.as_str()).collect()
 }
 
-/// Whether `pid` is gone, giving the kernel a moment to reap it.
-fn gone(pid: libc::pid_t) -> bool {
-    (0..40).any(|_| {
-        // SAFETY: signal 0 only asks whether the process exists.
-        let alive = unsafe { libc::kill(pid, 0) } == 0;
-        if alive {
-            thread::sleep(Duration::from_millis(50));
-        }
-        !alive
-    })
-}
-
 #[test]
 fn lines_reach_the_callback_while_the_command_still_runs() {
     let (result, seen) = stream(
@@ -135,12 +123,9 @@ fn cancelling_interrupts_the_command_without_waiting_out_the_grace() {
 
 #[test]
 fn a_command_that_ignores_the_interrupt_is_killed_with_what_it_started() {
-    let dir = tempfile::tempdir().unwrap();
-    let pidfile = dir.path().join("child.pid");
-    let script = format!(
-        "trap '' INT; sleep 30 & echo $! > '{}'; echo started; wait",
-        pidfile.display()
-    );
+    let fixture = crate::runner::tests::InheritedPipeFixture::new();
+    let args = fixture.ignoring_interrupt_args();
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
     let cancel = AtomicBool::new(false);
     let started = Instant::now();
     let grace = Duration::from_millis(400);
@@ -149,31 +134,17 @@ fn a_command_that_ignores_the_interrupt_is_killed_with_what_it_started() {
             cancel.store(true, Ordering::Release);
         }
     };
-    let result = runner().run_stream(
-        SH,
-        &["-c", &script],
-        GENEROUS,
-        Some(&cancel),
-        grace,
-        &mut on_line,
-    );
+    let result = runner().run_stream(SH, &args, GENEROUS, Some(&cancel), grace, &mut on_line);
     assert_eq!(result, Ok(StreamEnd::Cancelled));
     let elapsed = started.elapsed();
     assert!(
         elapsed >= grace && elapsed < Duration::from_secs(3),
         "{elapsed:?}"
     );
-    let child: libc::pid_t = std::fs::read_to_string(&pidfile)
-        .unwrap()
-        .trim()
-        .parse()
-        .unwrap();
-    let killed = gone(child);
-    if !killed {
-        // SAFETY: cleanup of the stray process this test started.
-        unsafe { libc::kill(child, libc::SIGKILL) };
-    }
-    assert!(killed, "what the command started outlived the kill");
+    assert!(
+        !fixture.survived(),
+        "what the command started outlived the kill"
+    );
 }
 
 #[test]

@@ -42,41 +42,25 @@ fn gone(pid: libc::pid_t) -> bool {
 
 #[test]
 fn a_timeout_in_the_app_kills_what_the_tool_started_and_in_a_terminal_only_the_tool() {
-    let dir = tempfile::tempdir().unwrap();
-    let script = |pidfile: &Path| format!("sleep 20 & echo $! > '{}'; wait", pidfile.display());
-    let started = |pidfile: &Path| -> libc::pid_t {
-        std::fs::read_to_string(pidfile)
-            .unwrap()
-            .trim()
-            .parse()
-            .unwrap()
-    };
+    // The app's runner owns the group, including the disposable descendant.
+    let app = InheritedPipeFixture::new();
+    let args = app.args(true, false);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let result = ToolRunner::new(ToolLookup::default()).output(SH, &args, Duration::from_secs(1));
+    assert!(matches!(result, Err(CommandError::Timeout { .. })));
+    assert!(!app.survived(), "the tool's child outlived the timeout");
 
-    // The app's runner: its own process group, killed whole.
-    let app_pid = dir.path().join("app.pid");
-    let result = ToolRunner::new(ToolLookup::default()).output(
-        SH,
-        &["-c", &script(&app_pid)],
-        Duration::from_secs(1),
+    // The CLI shares the terminal group and stops only its direct child.
+    // survived() releases the descendant through its stop file, never its PID.
+    let cli = InheritedPipeFixture::new();
+    let args = cli.args(true, false);
+    let args: Vec<&str> = args.iter().map(String::as_str).collect();
+    let result = RealRunner.output(SH, &args, Duration::from_secs(1));
+    assert!(matches!(result, Err(CommandError::Timeout { .. })));
+    assert!(
+        cli.survived(),
+        "the CLI runner must not change process groups"
     );
-    assert!(matches!(result, Err(CommandError::Timeout { .. })));
-    let grandchild = started(&app_pid);
-    let killed = gone(grandchild);
-    if !killed {
-        unsafe { libc::kill(grandchild, libc::SIGKILL) };
-    }
-    assert!(killed, "the tool's child outlived the timeout");
-
-    // The CLI's runner shares the terminal's group so Ctrl-C reaches the
-    // tool; a timeout kills the tool only.
-    let cli_pid = dir.path().join("cli.pid");
-    let result = RealRunner.output(SH, &["-c", &script(&cli_pid)], Duration::from_secs(1));
-    assert!(matches!(result, Err(CommandError::Timeout { .. })));
-    let grandchild = started(&cli_pid);
-    // SAFETY: signal 0 only asks whether the process exists.
-    let survives = unsafe { libc::kill(grandchild, 0) } == 0;
-    unsafe { libc::kill(grandchild, libc::SIGKILL) };
-    assert!(survives, "the CLI runner must not change process groups");
 }
 
 #[test]
@@ -323,6 +307,14 @@ impl InheritedPipeFixture {
     }
 
     pub(super) fn args(&self, leader_waits: bool, noisy: bool) -> Vec<String> {
+        self.script_args(if leader_waits { "wait" } else { "exit" }, noisy)
+    }
+
+    pub(super) fn ignoring_interrupt_args(&self) -> Vec<String> {
+        self.script_args("ignore", false)
+    }
+
+    fn script_args(&self, leader: &str, noisy: bool) -> Vec<String> {
         let script = r#"
 /bin/sh -c '
     trap "" INT
@@ -333,8 +325,8 @@ impl InheritedPipeFixture {
     done
 ' descendant "$1" "$2" "$3" "$4" &
 while [ ! -e "$2" ]; do /bin/sleep 0.01; done
-if [ "$5" = wait ]; then
-    trap 'exit 0' INT
+if [ "$5" != exit ]; then
+    if [ "$5" = ignore ]; then trap "" INT; else trap 'exit 0' INT; fi
     echo started
     wait
 fi
@@ -347,7 +339,7 @@ fi
             self.path("ready"),
             self.path("stop"),
             if noisy { "noisy" } else { "quiet" }.into(),
-            if leader_waits { "wait" } else { "exit" }.into(),
+            leader.into(),
         ]
     }
 
