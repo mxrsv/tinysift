@@ -1,6 +1,6 @@
 //! The error every cask call can end with.
 
-use tiny_core::cask::CaskFailure;
+use tiny_core::cask::{CaskFailure, UpdateRequestError};
 
 use super::records::FfiCaskFailure;
 use crate::FfiError;
@@ -54,5 +54,14 @@ impl From<FfiError> for FfiCaskError {
 pub(super) fn failed(failure: CaskFailure) -> FfiCaskError {
     FfiCaskError::Failed {
         failure: (&failure).into(),
+    }
+}
+
+impl From<UpdateRequestError> for FfiCaskError {
+    fn from(error: UpdateRequestError) -> Self {
+        match error {
+            UpdateRequestError::Invalid(detail) => Self::InvalidInput { detail },
+            UpdateRequestError::Failed(failure) => failed(failure),
+        }
     }
 }

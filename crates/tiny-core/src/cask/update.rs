@@ -1,18 +1,25 @@
 //! Updating the apps `brew` tracks, one cask at a time.
 //!
-//! An app that is open is never replaced, and TinySift never quits it:
-//! `brew upgrade` quits a running app itself, so the run must not reach
-//! `brew` while one is open. The check is the one Uninstall makes: the app's
-//! process name (`CFBundleExecutable`) matched with `pgrep -x` through an
-//! [`AppProbe`]. A name that cannot be read or a probe that fails counts as
-//! "cannot tell" and refuses the update, never as "not running". It is made
-//! twice: [`check_apps_closed`] before a run is accepted, so the client can
-//! tell the user to quit the app, and again right before each `brew` starts,
-//! because an app can be opened during a long batch.
+//! **Open apps.** TinySift never quits an app, and an open one is not
+//! replaced. `brew upgrade` quits a running app itself, so every upgrade is
+//! given `--no-quit` as a backstop, and the app is probed three times: before
+//! a run is accepted ([`check_apps_closed`], so the client can tell the user to
+//! quit it), when a cask's turn comes, and once more after the two `brew`
+//! reads that follow (each takes about half a second) and right before the
+//! upgrade spawns. The probe is `pgrep -x` on the app's process name
+//! (`CFBundleExecutable`) through an [`AppProbe`]; a name that cannot be read
+//! or a probe that fails counts as "cannot tell" and refuses the update, never
+//! as "not running". An app opened after the last probe cannot be seen;
+//! `--no-quit` keeps `brew` from closing it.
 //!
-//! A named `brew upgrade --cask <token>` always acts greedily. So before each
-//! one the default `brew outdated` is read again and a token that has dropped
-//! out of it (the app updated itself since the preview) is not upgraded.
+//! **Only real updates.** A named `brew upgrade --cask <token>` always acts
+//! greedily, so before each one the default `brew outdated` is read again and
+//! a token that has dropped out of it (the app updated itself since the
+//! preview) is not upgraded. That list is not enough either: for a cask that
+//! does not declare `auto_updates`, `brew` compares its own record with the
+//! cask, so an app that updated itself past the cask is still listed. The
+//! app's version is therefore read again too and an update towards a version
+//! the app is already at or past is refused ([`version`](super::version)).
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -24,6 +31,7 @@ use super::info::{display_version, read_cask_info, valid_token};
 use super::outdated::{still_outdated, OutdatedCask};
 use super::plan::{blocked_by, CaskAction, CaskPlanItem};
 use super::run::{run_item, CaskProgress, ProgressSink, RunOutcome};
+use super::version::offers_update;
 use crate::clean::process::AppProbe;
 
 /// Whether the apps of a cask are open.
@@ -75,25 +83,46 @@ pub fn run_state(apps: &[PathBuf], probe: &dyn AppProbe, executable: ExecutableO
     unknown.unwrap_or(RunState::NotRunning)
 }
 
+/// Why an update request could not be planned.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UpdateRequestError {
+    /// The request is wrong: a token that is not a bare cask token (a flag,
+    /// a path), that is not in the update list, or that is repeated.
+    Invalid(String),
+    /// A token from the list that cannot be updated (`NotOutdated`: it has
+    /// left `brew outdated` or the app already is its version), or `brew`
+    /// itself failed.
+    Failed(CaskFailure),
+}
+
+impl From<CaskFailure> for UpdateRequestError {
+    fn from(failure: CaskFailure) -> Self {
+        Self::Failed(failure)
+    }
+}
+
 /// What updating `tokens` would do, read again from `brew` so a listing that
 /// has gone stale cannot be acted on. Every token must be in `listing` (the
-/// casks the last `brew outdated` named) and still outdated; none may repeat.
-/// A cask that needs an administrator password is planned with `blocked`
-/// set, and the run refuses it.
+/// casks the last `brew outdated` named) and none may repeat, else the request
+/// is [`UpdateRequestError::Invalid`] and nothing is asked of `brew`. A token
+/// that is no longer outdated, or whose app is already at or past the cask's
+/// version, is `Failed(NotOutdated)`. A cask that needs an administrator
+/// password is planned with `blocked` set, and the run refuses it.
 pub fn plan_updates(
     brew: &Brew<'_>,
     listing: &[OutdatedCask],
     tokens: &[String],
-) -> Result<Vec<CaskPlanItem>, CaskFailure> {
-    let not_outdated = |token: &str| CaskFailure::NotOutdated {
-        token: token.to_string(),
-    };
-    if let Some(bad) = tokens.iter().find(|token| !valid_token(token)) {
-        return Err(not_outdated(bad));
-    }
+) -> Result<Vec<CaskPlanItem>, UpdateRequestError> {
+    let invalid = |token: &str, why: &str| UpdateRequestError::Invalid(format!("{token:?} {why}"));
     for (index, token) in tokens.iter().enumerate() {
-        if tokens[..index].contains(token) || !listing.iter().any(|cask| &cask.token == token) {
-            return Err(not_outdated(token));
+        if !valid_token(token) {
+            return Err(invalid(token, "is not a cask token"));
+        }
+        if tokens[..index].contains(token) {
+            return Err(invalid(token, "is listed twice"));
+        }
+        if !listing.iter().any(|cask| &cask.token == token) {
+            return Err(invalid(token, "is not in the update list"));
         }
     }
     let wanted: Vec<&str> = tokens.iter().map(String::as_str).collect();
@@ -101,14 +130,21 @@ pub fn plan_updates(
     tokens
         .iter()
         .map(|token| {
+            let not_outdated = || {
+                UpdateRequestError::Failed(CaskFailure::NotOutdated {
+                    token: token.clone(),
+                })
+            };
             let info = infos
                 .iter()
                 .find(|info| &info.token == token && info.outdated)
                 .filter(|info| {
-                    // The app on disk already is that version: see `list_outdated`.
-                    info.from_version().map(display_version) != Some(display_version(&info.version))
+                    // Not an update when the app already is that version, or
+                    // newer: see `version`.
+                    info.from_version()
+                        .is_none_or(|current| offers_update(current, &info.version))
                 })
-                .ok_or_else(|| not_outdated(token))?;
+                .ok_or_else(not_outdated)?;
             Ok(CaskPlanItem {
                 action: CaskAction::Update,
                 token: info.token.clone(),
@@ -132,11 +168,7 @@ pub fn check_apps_closed(
 ) -> Result<(), CaskFailure> {
     items
         .iter()
-        .find_map(|item| match run_state(&item.apps, probe, executable) {
-            RunState::NotRunning => None,
-            RunState::Running { app } => Some(CaskFailure::AppRunning { app }),
-            RunState::Unknown { app, error } => Some(CaskFailure::AppCheckFailed { app, error }),
-        })
+        .find_map(|item| open_app(item, probe, executable))
         .map_or(Ok(()), Err)
 }
 
@@ -189,22 +221,62 @@ fn run_one(
     cancel: Option<&AtomicBool>,
     on_stage: &mut dyn FnMut(super::run::Stage),
 ) -> RunOutcome {
-    if let Some(failure) = item.refusal() {
-        return RunOutcome::Failed(failure);
-    }
-    match run_state(&item.apps, probe, executable) {
-        RunState::Running { app } => return RunOutcome::Failed(CaskFailure::AppRunning { app }),
-        RunState::Unknown { app, error } => {
-            return RunOutcome::Failed(CaskFailure::AppCheckFailed { app, error })
-        }
-        RunState::NotRunning => {}
-    }
-    match still_outdated(brew, &item.token) {
-        Err(failure) => RunOutcome::Failed(failure),
-        Ok(false) => RunOutcome::Failed(CaskFailure::NotOutdated {
+    let fail = RunOutcome::Failed;
+    let not_outdated = || {
+        fail(CaskFailure::NotOutdated {
             token: item.token.clone(),
-        }),
-        Ok(true) => run_item(brew, item, cancel, on_stage),
+        })
+    };
+    if let Some(failure) = item.refusal() {
+        return fail(failure);
+    }
+    if let Some(failure) = open_app(item, probe, executable) {
+        return fail(failure);
+    }
+    // The default list: a named `upgrade` is greedy, so a cask that has left
+    // it must not reach `brew upgrade`.
+    match still_outdated(brew, &item.token) {
+        Err(failure) => return fail(failure),
+        Ok(false) => return not_outdated(),
+        Ok(true) => {}
+    }
+    // Fresh versions: the list stays true for a cask that does not declare
+    // `auto_updates` even once the app has gone past it, and then an upgrade
+    // would be a downgrade.
+    match read_cask_info(brew, &[&item.token]) {
+        Err(failure) => return fail(failure),
+        Ok(infos) => {
+            let past = infos
+                .iter()
+                .find(|info| info.token == item.token)
+                .is_some_and(|info| {
+                    info.from_version()
+                        .is_some_and(|current| !offers_update(current, &info.version))
+                });
+            if past {
+                return not_outdated();
+            }
+        }
+    }
+    // Last, because both reads above took time: an app opened since the first
+    // probe would be quit by `brew` (it is also told `--no-quit`).
+    match open_app(item, probe, executable) {
+        Some(failure) => fail(failure),
+        None => run_item(brew, item, cancel, on_stage),
+    }
+}
+
+/// Why `item` must not be upgraded because of its apps: open, or not
+/// possible to tell.
+fn open_app(
+    item: &CaskPlanItem,
+    probe: &dyn AppProbe,
+    executable: ExecutableOf<'_>,
+) -> Option<CaskFailure> {
+    match run_state(&item.apps, probe, executable) {
+        RunState::NotRunning => None,
+        RunState::Running { app } => Some(CaskFailure::AppRunning { app }),
+        RunState::Unknown { app, error } => Some(CaskFailure::AppCheckFailed { app, error }),
     }
 }
 

@@ -125,8 +125,7 @@ impl TinySession {
                 detail: "nothing to update".into(),
             });
         }
-        let items = plan_updates(&Brew::new(&path, seams.brew.runner()), &listing, tokens)
-            .map_err(failed)?;
+        let items = plan_updates(&Brew::new(&path, seams.brew.runner()), &listing, tokens)?;
         Ok(self.store_preview(CaskAction::Update, items, &path, seams))
     }
 

@@ -20,6 +20,11 @@
 //!   `HOMEBREW_NO_SUDO` stops `brew` itself if that check missed one.
 //!   `brew.env` files can still override the environment: [`brew_env_warnings`]
 //!   names them.
+//! - **Only real updates.** An update is offered, planned and run only for a
+//!   cask in the default `brew outdated` (never `--greedy`) whose app is not
+//!   already at or past the cask's version; the rule that orders versions is
+//!   in `version.rs`. Updates are run with `--no-quit`: an open app is
+//!   refused, never closed for the user.
 //! - **Previews are single-use.** Core builds and runs plan items; the FFI
 //!   session owns the preview's id, expiry, single use and the busy gate.
 //!
@@ -38,6 +43,7 @@ mod plan;
 mod run;
 mod tracked;
 mod update;
+mod version;
 
 pub use brew::{brew_lookup, locate_brew, Brew, HomebrewStatus, BREW_ENV, BREW_PATH};
 pub use brew_env::{brew_env_warnings, BrewEnvWarning};
@@ -53,7 +59,10 @@ pub use outdated::{list_outdated, still_outdated, OutdatedCask};
 pub use plan::{CaskAction, CaskPlanItem};
 pub use run::{run_item, CaskProgress, ProgressSink, RunOutcome, Stage, RUN_TIMEOUT};
 pub use tracked::{list_tracked, TrackedCask};
-pub use update::{check_apps_closed, plan_updates, run_state, run_updates, ExecutableOf, RunState};
+pub use update::{
+    check_apps_closed, plan_updates, run_state, run_updates, ExecutableOf, RunState,
+    UpdateRequestError,
+};
 
 #[cfg(test)]
 mod test_support;

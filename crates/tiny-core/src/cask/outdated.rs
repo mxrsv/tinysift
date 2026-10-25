@@ -9,6 +9,7 @@ use super::brew::Brew;
 use super::failure::{classify_exit, CaskFailure};
 use super::info::{display_version, read_cask_info, valid_token};
 use super::plan::{blocked_by, CaskAction};
+use super::version::offers_update;
 
 /// `brew outdated` reads the local index; this only bounds a broken Homebrew.
 const OUTDATED_TIMEOUT: Duration = Duration::from_secs(60);
@@ -76,7 +77,8 @@ pub fn still_outdated(brew: &Brew<'_>, token: &str) -> Result<bool, CaskFailure>
 /// The default `brew outdated` and then one `brew info` for the tokens it
 /// names. Left out besides what [`read_outdated`] drops: casks with no `app`
 /// artifact, such as command-line tools and package-only installers, because
-/// this is the Apps screen, and casks whose app already is the listed version.
+/// this is the Apps screen, and casks whose app already is the listed version
+/// or newer than it.
 pub fn list_outdated(brew: &Brew<'_>) -> Result<Vec<OutdatedCask>, CaskFailure> {
     let listed = read_outdated(brew)?;
     let tokens: Vec<&str> = listed.iter().map(|cask| cask.name.as_str()).collect();
@@ -90,21 +92,22 @@ pub fn list_outdated(brew: &Brew<'_>) -> Result<Vec<OutdatedCask>, CaskFailure> 
             }
             let from_version = info
                 .from_version()
-                .or_else(|| cask.installed_versions.last().map(String::as_str))
-                .map(display_version)?;
-            let version = display_version(&cask.current_version);
+                .or_else(|| cask.installed_versions.last().map(String::as_str))?;
+            let version = cask.current_version.as_str();
             // Homebrew's record can be older than an app that updated itself
-            // (a cask that does not declare `auto_updates`), so the cask is
-            // listed while the app on disk already is its version. An update
-            // from `0.12.1` to `0.12.1` would only quit the app.
-            if from_version == version {
+            // (a cask that does not declare `auto_updates`): then `brew
+            // outdated` lists the cask while the app on disk already is its
+            // version, or newer. Neither is an update; see `version`. The
+            // raw texts are compared, so a build-number-only update
+            // (`2.0,100` to `2.0,200`) stays.
+            if !offers_update(from_version, version) {
                 return None;
             }
             Some(OutdatedCask {
                 token: info.token.clone(),
                 name: info.name.clone(),
-                from_version: from_version.to_string(),
-                version: version.to_string(),
+                from_version: display_version(from_version).to_string(),
+                version: display_version(version).to_string(),
                 download_host: info.download_host.clone(),
                 blocked: blocked_by(info.elevation, CaskAction::Update, &info.token),
                 apps: info.apps.clone(),

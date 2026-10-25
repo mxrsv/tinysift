@@ -120,10 +120,13 @@ fn an_update_runs_upgrade_for_that_cask_alone() {
     let (outcome, stages, calls) = run(&item(CaskAction::Update), Ok(outcome(0, "", "")));
     assert_eq!(outcome, RunOutcome::Done);
     assert_eq!(stages, [Stage::Working]);
-    assert_eq!(calls, [format!("{BREW_PATH} upgrade --cask ghostty")]);
+    assert_eq!(
+        calls,
+        [format!("{BREW_PATH} upgrade --cask --no-quit ghostty")]
+    );
     assert_eq!(
         item(CaskAction::Update).command(),
-        "brew upgrade --cask ghostty"
+        "brew upgrade --cask --no-quit ghostty"
     );
     assert_eq!(
         item(CaskAction::Install).command(),
@@ -271,4 +274,20 @@ fn a_raised_flag_stops_the_run_before_brew_starts() {
     );
     assert_eq!(outcome, RunOutcome::Cancelled);
     assert!(runner.output_calls.lock().unwrap().is_empty());
+}
+
+#[test]
+fn unsupported_no_quit_fails_without_retrying_an_unsafe_command() {
+    let (outcome, _, calls) = run(
+        &item(CaskAction::Update),
+        Ok(outcome(1, "", "Error: invalid option: --no-quit")),
+    );
+    assert!(matches!(
+        outcome,
+        RunOutcome::Failed(CaskFailure::BrewFailed { .. })
+    ));
+    assert_eq!(
+        calls,
+        [format!("{BREW_PATH} upgrade --cask --no-quit ghostty")]
+    );
 }

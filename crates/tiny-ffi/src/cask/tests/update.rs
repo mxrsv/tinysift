@@ -11,23 +11,59 @@ fn an_update_preview_needs_a_current_list_and_only_tokens_from_it() {
     assert!(matches!(none, Err(FfiCaskError::PreviewInvalid { .. })));
 
     let world = updatable();
-    let kind = |tokens: &[&str]| {
+    world.brew.clear_calls();
+    let rejected = |tokens: &[&str]| {
         let tokens: Vec<String> = tokens.iter().map(|t| t.to_string()).collect();
-        failure_kind(
-            world
-                .session
-                .update_preview(&tokens, &world.seams())
-                .unwrap_err(),
-        )
+        world
+            .session
+            .update_preview(&tokens, &world.seams())
+            .unwrap_err()
     };
-    assert_eq!(kind(&["rectangle"]), FfiCaskFailureKind::NotOutdated);
-    assert_eq!(
-        kind(&["ghostty", "ghostty"]),
-        FfiCaskFailureKind::NotOutdated
+    // A bad request is not a cask that is up to date: the text must not lie.
+    for tokens in [
+        &["rectangle"][..],
+        &["ghostty", "ghostty"],
+        &["--greedy"],
+        &["user/tap/ghostty"],
+        &[],
+    ] {
+        assert!(
+            matches!(rejected(tokens), FfiCaskError::InvalidInput { .. }),
+            "{tokens:?}"
+        );
+    }
+    assert_eq!(world.brew.spawned("info"), 0, "nothing was asked of brew");
+}
+
+#[test]
+fn a_listed_cask_that_is_no_longer_outdated_or_is_past_the_cask_is_not_outdated() {
+    let world = updatable();
+    // It left `brew outdated` since the list.
+    world.info(
+        "ghostty",
+        Spec {
+            outdated: false,
+            ..outdated_spec("Ghostty")
+        },
     );
-    assert_eq!(kind(&["--greedy"]), FfiCaskFailureKind::NotOutdated);
-    let empty = world.session.update_preview(&[], &world.seams());
-    assert!(matches!(empty, Err(FfiCaskError::InvalidInput { .. })));
+    let gone = world
+        .session
+        .update_preview(&["ghostty".into()], &world.seams())
+        .unwrap_err();
+    assert_eq!(failure_kind(gone), FfiCaskFailureKind::NotOutdated);
+    // The app is past the cask, which `brew outdated` still lists.
+    world.info(
+        "ghostty",
+        Spec {
+            bundle_version: Some("3.0"),
+            ..outdated_spec("Ghostty")
+        },
+    );
+    let past = world
+        .session
+        .update_preview(&["ghostty".into()], &world.seams())
+        .unwrap_err();
+    assert_eq!(failure_kind(past), FfiCaskFailureKind::NotOutdated);
 }
 
 #[test]
@@ -55,8 +91,18 @@ fn an_update_preview_lists_each_cask_with_versions_command_and_whether_it_is_ope
     assert_eq!(
         seen,
         [
-            ("iterm2", Some("1.0"), "2.0", "brew upgrade --cask iterm2"),
-            ("ghostty", Some("1.0"), "2.0", "brew upgrade --cask ghostty"),
+            (
+                "iterm2",
+                Some("1.0"),
+                "2.0",
+                "brew upgrade --cask --no-quit iterm2"
+            ),
+            (
+                "ghostty",
+                Some("1.0"),
+                "2.0",
+                "brew upgrade --cask --no-quit ghostty"
+            ),
         ]
     );
     // Every app here has the same process name, so both read as open.
@@ -115,9 +161,11 @@ fn updates_run_one_at_a_time_in_the_previews_order_with_progress_naming_each_cas
         world.brew.calls(),
         [
             "outdated --cask --json=v2",
-            "upgrade --cask ghostty",
+            "info --cask --json=v2 ghostty",
+            "upgrade --cask --no-quit ghostty",
             "outdated --cask --json=v2",
-            "upgrade --cask iterm2"
+            "info --cask --json=v2 iterm2",
+            "upgrade --cask --no-quit iterm2"
         ]
     );
     let seen = world.steps();
@@ -211,7 +259,7 @@ fn a_cask_that_updated_itself_after_the_preview_is_reported_not_upgraded() {
             .brew
             .calls()
             .iter()
-            .filter(|c| *c == "upgrade --cask iterm2")
+            .filter(|c| *c == "upgrade --cask --no-quit iterm2")
             .count(),
         0
     );

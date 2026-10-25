@@ -47,13 +47,16 @@ fn updatable() -> World {
     world.install_app("Ghostty", GHOSTTY_ID);
     world.install_app("iTerm", "com.googlecode.iterm2");
     world.session.outdated(&world.seams()).unwrap();
+    // What a run reads right before each upgrade, one cask at a time.
+    world.info("ghostty", outdated_spec("Ghostty"));
+    world.info("iterm2", outdated_spec("iTerm"));
     world
 }
 
 fn upgrade_replies(world: &World, tokens: &[&str]) {
     for token in tokens {
         world.brew.reply(
-            &format!("upgrade --cask {token}"),
+            &format!("upgrade --cask --no-quit {token}"),
             0,
             "==> Upgrading x\n==> Moving App 'x.app'\n",
             "",

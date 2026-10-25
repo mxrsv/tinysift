@@ -204,3 +204,86 @@ fn an_app_that_already_is_the_listed_version_is_not_offered_an_update() {
         );
     assert_eq!(list(&runner), Ok(Vec::new()));
 }
+
+#[test]
+fn raw_build_updates_remain_listed_with_or_without_a_short_version() {
+    for short in [None, Some("2.0")] {
+        let mut app = simple_cask("a", "2.0,200", "A.app");
+        app["installed"] = json!("2.0,100");
+        app["bundle_short_version"] = json!(short);
+        app["outdated"] = json!(true);
+        let runner = MockRunner::new()
+            .with_exit(
+                BREW_PATH,
+                &OUTDATED_ARGS,
+                0,
+                &outdated_json(&[("a", "2.0,100", "2.0,200", false)]),
+            )
+            .with_exit(
+                BREW_PATH,
+                &["info", "--cask", "--json=v2", "a"],
+                0,
+                &info_json(&[app]),
+            );
+        let listed = list(&runner).unwrap();
+        assert_eq!(
+            listed.len(),
+            1,
+            "a short version {short:?} cannot prove build 200 installed"
+        );
+        assert_eq!(
+            (&*listed[0].from_version, &*listed[0].version),
+            ("2.0", "2.0")
+        );
+    }
+}
+
+#[test]
+fn an_app_that_updated_itself_past_the_cask_is_not_offered_a_downgrade() {
+    // The reviewer's fixture: the cask is at 2.0, Homebrew's record says 1.0,
+    // the app is at 3.0. `brew outdated` lists it because 1.0 differs from 2.0.
+    let mut app = simple_cask("a", "2.0", "A.app");
+    app["installed"] = json!("1.0");
+    app["bundle_short_version"] = json!("3.0");
+    app["outdated"] = json!(true);
+    let runner = MockRunner::new()
+        .with_exit(
+            BREW_PATH,
+            &OUTDATED_ARGS,
+            0,
+            &outdated_json(&[("a", "1.0", "2.0", false)]),
+        )
+        .with_exit(
+            BREW_PATH,
+            &["info", "--cask", "--json=v2", "a"],
+            0,
+            &info_json(&[app]),
+        );
+    assert_eq!(list(&runner), Ok(Vec::new()));
+}
+
+#[test]
+fn a_version_that_cannot_be_ordered_stays_listed() {
+    let mut app = simple_cask("a", "1.9.3b", "A.app");
+    app["installed"] = json!("1.9.2");
+    app["bundle_short_version"] = json!("1.9.3");
+    app["outdated"] = json!(true);
+    let runner = MockRunner::new()
+        .with_exit(
+            BREW_PATH,
+            &OUTDATED_ARGS,
+            0,
+            &outdated_json(&[("a", "1.9.2", "1.9.3b", false)]),
+        )
+        .with_exit(
+            BREW_PATH,
+            &["info", "--cask", "--json=v2", "a"],
+            0,
+            &info_json(&[app]),
+        );
+    let listed = list(&runner).unwrap();
+    assert_eq!(
+        (&*listed[0].from_version, &*listed[0].version),
+        ("1.9.3", "1.9.3b")
+    );
+}

@@ -55,12 +55,13 @@ pub(super) fn blocked_by(
 
 impl CaskPlanItem {
     /// The arguments `brew` is given, after its own path.
-    pub fn args(&self) -> [&str; 3] {
-        let verb = match self.action {
-            CaskAction::Install => "install",
-            CaskAction::Update => "upgrade",
-        };
-        [verb, "--cask", &self.token]
+    pub fn args(&self) -> Vec<&str> {
+        match self.action {
+            CaskAction::Install => vec!["install", "--cask", &self.token],
+            // A running-app probe cannot cover an app opened while brew fetches.
+            // Older brew versions must reject this flag, never retry without it.
+            CaskAction::Update => vec!["upgrade", "--cask", "--no-quit", &self.token],
+        }
     }
 
     /// The command as the review sheet shows it.
