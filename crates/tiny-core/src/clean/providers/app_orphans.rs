@@ -191,7 +191,8 @@ mod tests {
 
     #[test]
     fn execute_refuses_every_item_and_leaves_it_in_place() {
-        let dir = std::env::temp_dir().join(format!("tiny-app-orphans-{}", std::process::id()));
+        let fixture = tempfile::tempdir().unwrap();
+        let dir = fixture.path().canonicalize().unwrap();
         std::fs::create_dir_all(dir.join("Data")).unwrap();
         let item = CleanItem {
             category_id: ID.to_string(),
