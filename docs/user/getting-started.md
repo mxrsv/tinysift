@@ -42,6 +42,8 @@ tiny focus --minutes 50 --label "deep work"
 
 Shows a progress bar until the session ends, then appends it to
 `~/.tiny-cli/focus-sessions.json`. Stopping early with Ctrl-C records nothing.
+Completed sessions use a [locked, atomic update](../../crates/tiny-core/src/focus.rs),
+so concurrent timers keep both entries and a failed write preserves the previous history.
 
 If that file is not valid JSON, `tiny` refuses to overwrite it: it copies the file to
 `focus-sessions.json.bak` and asks you to fix or delete the original.
