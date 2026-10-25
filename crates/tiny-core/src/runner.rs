@@ -117,6 +117,13 @@ impl ToolLookup {
         }
     }
 
+    /// Also runs every tool with `extra`, after the variables set so far.
+    pub fn with_env(self, extra: &[(&'static str, &'static str)]) -> Self {
+        let mut env = self.env.clone();
+        env.extend_from_slice(extra);
+        Self { env, ..self }
+    }
+
     fn search_path(&self) -> Option<OsString> {
         self.path.clone().or_else(|| std::env::var_os("PATH"))
     }

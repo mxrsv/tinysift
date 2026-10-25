@@ -1,3 +1,4 @@
+pub mod cask;
 pub mod clean;
 pub mod error;
 pub mod focus;
