@@ -6,8 +6,9 @@
 
 **Know your Mac. Then clean it.**
 
-A free Mac app that shows what slows your Mac and what fills its disk, then cleans only what you
-pick. This repository is its open-source engine, where the rules that touch your files live.
+A Mac app, free during the beta, that shows what slows your Mac and what fills its disk, then
+cleans only what you pick. This repository is its open-source engine, where the rules that touch
+your files live.
 
 [![Latest beta](https://img.shields.io/github/v/release/mxrsv/tinysift?include_prereleases&label=beta)](https://github.com/mxrsv/tinysift/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/mxrsv/tinysift/ci.yml?branch=main&label=CI)](https://github.com/mxrsv/tinysift/actions/workflows/ci.yml)
