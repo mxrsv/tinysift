@@ -1,9 +1,10 @@
 //! Caches CoreSimulator keeps for every account in
 //! `/Library/Developer/CoreSimulator/Caches`, mostly `dyld/`: the
 //! runtimes' shared caches, built again when a simulator boots. Root owns
-//! them, so removing them needs administrator rights (`needs_admin`): the
-//! desktop deletes them only as administrator (`elevated_delete`), and the
-//! CLI, which never runs `sudo`, refuses them.
+//! them, so removing them needs administrator rights (`needs_admin`). The
+//! desktop only reports them: macOS denies even its administrator route
+//! (`elevated_delete`), see `docs/internals/clean.md`. The CLI, which never
+//! runs `sudo`, refuses them.
 //!
 //! Refused while Xcode, Simulator, a build or test tool or a booted device's
 //! `launchd_sim` runs and, when `simctl` exists or cannot be ruled out, while

@@ -44,8 +44,8 @@ default.
 Naming a category with `--category` shows it whatever its risk; the `--include-*` flags are
 then ignored. `system-simulator-caches` is Safe but needs administrator rights, which `tiny`
 never asks for: plain `tiny clean` leaves it out, and naming it lists it and then refuses it.
-The [desktop app](../../../tiny-cli/docs/user/desktop.md) can delete it after one macOS
-authentication.
+The [desktop app](../../../tiny-cli/docs/user/desktop.md) only shows its size: macOS refuses
+to let an app delete it, even after an administrator's password.
 
 ## Choosing what to clean
 

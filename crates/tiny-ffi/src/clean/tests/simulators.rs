@@ -1,11 +1,10 @@
-//! Simulator data on the desktop (spec OC8–OC11, OC13): system caches carry
-//! the administrator marker and are deleted only as administrator, through
-//! the injected fake route; runtimes carry the reason only System Settings
-//! can remove them. Temp dirs, fake runners and fake routes only.
+//! Simulator data on the desktop (spec OC8–OC11, OC13): system caches are
+//! report-only, since macOS denies their deletion even as administrator;
+//! runtimes carry the reason only System Settings can remove them. Temp
+//! dirs and fake runners only.
 
 use std::sync::Arc;
 
-use tiny_core::clean::elevated_delete::ElevatedError;
 use tiny_core::clean::providers::system_simulator_caches::SystemSimulatorCaches;
 use tiny_core::clean::providers::ReportOnly;
 use tiny_core::clean::types::{Evidence, ExecAction, ExecReport};
@@ -99,40 +98,21 @@ fn caches_providers(dir: &Path) -> Vec<Box<dyn CleanProvider>> {
     ]
 }
 
-/// `clean_remove` through the shared test routes: `FakeTrash` stands in for
-/// Finder, deletion and deletion as administrator.
-fn remove_with(
-    session: &TinySession,
-    preview_id: &str,
-    dir: &Path,
-    sinks: &FakeTrash,
-) -> Result<FfiRemovalReport, FfiError> {
-    let providers = |_: &CleanOptions| caches_providers(dir);
-    session.remove_clean(
-        preview_id,
-        &providers,
-        &NotRunning,
-        sinks,
-        sinks,
-        sinks,
-        &CancellationToken::default(),
-        &Progress::default(),
-    )
-}
-
 #[test]
-fn system_simulator_caches_are_deleted_as_administrator_in_either_mode() {
+fn system_simulator_caches_are_report_only_on_the_desktop() {
     let dir = caches_layout("system-simulator-caches");
     let session = TestSession::new();
     let discovery = discover(&session, &caches_providers(&dir)).unwrap();
     let caches = &discovery.categories[0];
     assert_eq!(caches.id, "system-simulator-caches");
     assert_eq!(caches.status, FfiCategoryStatus::Found);
-    assert!(caches.needs_admin);
     assert_eq!(
         caches.desktop_action,
-        FfiDesktopAction::DeleteAsAdministrator
+        FfiDesktopAction::ReportOnly {
+            reason: FfiReportOnlyReason::NeedsAdministrator
+        }
     );
+    assert!(!caches.needs_admin, "no password is asked for");
     assert_eq!(caches.risk, FfiRisk::Safe);
     assert_eq!(caches.section, Some(FfiCleanSection::Rebuilt));
     assert_eq!(caches.comes_back, Some(FfiComesBack::AppRecreates));
@@ -141,91 +121,16 @@ fn system_simulator_caches_are_deleted_as_administrator_in_either_mode() {
     assert_eq!(paths, vec![dir.join("Caches/dyld").to_string_lossy()]);
     let size = allocated(&dir.join("Caches/dyld/cache"));
     assert_eq!(caches.candidates[0].size_bytes, size);
-    assert!(!discovery.categories[1].needs_admin);
     let id = caches.candidates[0].id.clone();
     for mode in [FfiDeleteMode::Trash, FfiDeleteMode::Permanent] {
-        let preview = session
-            .clean_preview_with_mode(vec![id.clone()], mode)
-            .unwrap();
-        let item = &preview.items[0];
-        assert!(item.permanent && item.needs_admin, "{mode:?}");
-        assert_eq!(preview.bytes_needing_admin, size);
-        assert_eq!(preview.bytes_to_free, size);
-        assert_eq!(preview.bytes_to_trash, 0);
+        assert!(
+            matches!(
+                session.clean_preview_with_mode(vec![id.clone()], mode),
+                Err(FfiError::InvalidInput { .. })
+            ),
+            "{mode:?}"
+        );
     }
-    let logs = candidate_ids(&discovery, "user-logs");
-    let preview = session.clean_preview(logs).unwrap();
-    assert!(!preview.items[0].needs_admin);
-    assert_eq!(preview.bytes_needing_admin, 0);
-
-    // The old Trash-only call refuses it unspent; `clean_remove` runs it.
-    let preview = session.clean_preview(vec![id]).unwrap();
-    let providers = |_: &CleanOptions| caches_providers(&dir);
-    let refused = session.execute_clean(
-        &preview.preview_id,
-        &providers,
-        &NotRunning,
-        &FakeTrash::default(),
-        &CancellationToken::default(),
-        &Progress::default(),
-    );
-    assert!(matches!(refused, Err(FfiError::InvalidInput { .. })));
-    let sinks = FakeTrash::default();
-    assert!(remove_with(&session, &preview.preview_id, &dir, &sinks).is_ok());
-    assert_eq!(sinks.steps(), ["elevate dyld"]);
-    remove(&dir);
-}
-
-#[test]
-fn the_test_routes_stand_in_for_the_dialog_and_change_nothing() {
-    let dir = caches_layout("elevated-fake");
-    let session = TestSession::new();
-    let discovery = discover(&session, &caches_providers(&dir)).unwrap();
-    let ids = candidate_ids(&discovery, "system-simulator-caches");
-    let preview = session.clean_preview(ids).unwrap();
-    let sinks = FakeTrash::default();
-    let report = remove_with(&session, &preview.preview_id, &dir, &sinks).unwrap();
-    assert_eq!(sinks.steps(), ["elevate dyld"], "the fake got the batch");
-    assert!(dir.join("Caches/dyld/cache").exists(), "nothing real ran");
-    assert!(matches!(
-        &report.results[0].outcome,
-        FfiRemovalOutcome::Failed {
-            reason: FfiRemovalFailure::DeleteFailed,
-            source_still_present: true,
-            ..
-        }
-    ));
-    assert_eq!((report.bytes_freed, report.failed_count), (0, 1));
-    assert!(!report.authentication_cancelled);
-    remove(&dir);
-}
-
-#[test]
-fn a_cancelled_authentication_changes_nothing_and_the_report_says_so() {
-    let dir = caches_layout("elevated-cancelled");
-    let session = TestSession::new();
-    let discovery = discover(&session, &caches_providers(&dir)).unwrap();
-    let preview = session
-        .clean_preview_with_mode(ids(&discovery), FfiDeleteMode::Permanent)
-        .unwrap();
-    assert!(preview.items.iter().all(|i| i.permanent));
-    let sinks = FakeTrash {
-        elevate_answer: Some(ElevatedError::Cancelled),
-        ..Default::default()
-    };
-    let report = remove_with(&session, &preview.preview_id, &dir, &sinks).unwrap();
-    assert!(report.authentication_cancelled);
-    assert_eq!(report.stopped, Some(FfiStopReason::Cancelled));
-    let outcomes: Vec<_> = report.results.iter().map(|r| r.outcome.clone()).collect();
-    assert_eq!(outcomes, vec![FfiRemovalOutcome::NotAttempted; 2]);
-    assert_eq!(report.not_attempted_count, 2);
-    assert_eq!(sinks.steps(), ["elevate dyld"], "the log is not deleted");
-    assert!(dir.join("logs/a").exists() && dir.join("Caches/dyld/cache").exists());
-    let again = remove_with(&session, &preview.preview_id, &dir, &sinks);
-    assert!(
-        matches!(again, Err(FfiError::PreviewInvalid { .. })),
-        "the preview stays spent"
-    );
     remove(&dir);
 }
 

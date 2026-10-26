@@ -83,9 +83,10 @@ pub enum FfiDesktopAction {
     /// removes each selected item for good in either delete mode, and
     /// finishes in the background, so the result says it was requested.
     RequestRemoval,
-    /// Root-owned system simulator caches (`needs_admin` is set): selected
-    /// items are deleted for good as administrator, in either delete mode,
-    /// after one macOS authentication dialog per Clean. No Trash route.
+    /// Deleted for good as administrator, in either delete mode, after one
+    /// macOS authentication dialog per Clean. No category is routed here any
+    /// more: macOS denies that deletion even as root, so root-owned categories
+    /// are `ReportOnly { NeedsAdministrator }`. Kept for the app's contract.
     DeleteAsAdministrator,
     /// Shown for information; the app does not act on it (`reason` says why).
     ReportOnly { reason: FfiReportOnlyReason },
@@ -100,8 +101,8 @@ pub enum FfiReportOnlyReason {
     NotPerPathTrash,
     /// The selection rule can flag data still in use (app-orphans).
     UnreliableMatch,
-    /// Acting needs administrator rights. No longer sent: such categories
-    /// are `FfiDesktopAction::DeleteAsAdministrator`.
+    /// Root owns these and macOS denies their deletion to the app, even
+    /// after an administrator's authentication (system simulator caches).
     NeedsAdministrator,
     /// Xcode is not installed, so only System Settings > General > Storage
     /// removes these simulator runtimes (`simulator-runtime-images`).
@@ -221,7 +222,8 @@ pub struct FfiCleanCategory {
     /// `None` for an unregistered ID.
     #[uniffi(default = None)]
     pub section: Option<FfiCleanSection>,
-    /// Acting on the candidates needs administrator rights (a lock marker).
+    /// The candidates are deleted as administrator (a lock marker): only
+    /// with `FfiDesktopAction::DeleteAsAdministrator`, so never at present.
     #[uniffi(default = false)]
     pub needs_admin: bool,
 }

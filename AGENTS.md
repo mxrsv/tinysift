@@ -29,8 +29,8 @@ directory. See the [repository names](docs/operations/development.md#repository-
   `comes_back` and the `SECTIONS` table test of `category_section` in
   [`providers/mod.rs`](crates/tiny-core/src/clean/providers/mod.rs). Eligibility is deny by
   default: the desktop moves paths only when `desktop_trash_paths()` is true, and acts
-  otherwise only through `desktop_empties_trash()` (the Trash row), `desktop_tool()` (a tool
-  command) or `needs_admin()` (deletion as administrator).
+  otherwise only through `desktop_empties_trash()` (the Trash row) or `desktop_tool()` (a tool
+  command). `needs_admin()` categories are report-only: macOS denies the administrator route.
 - In cleanup, discovered paths use `symlink_metadata`; deletion goes through
   [`fs_safe.rs`](crates/tiny-core/src/clean/fs_safe.rs), [`FinderTrash`](crates/tiny-core/src/clean/finder_trash.rs),
   a category's tool command ([`tool_command.rs`](crates/tiny-core/src/clean/providers/tool_command.rs))

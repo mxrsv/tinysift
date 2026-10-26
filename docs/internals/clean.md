@@ -37,11 +37,12 @@ never hard-coded. It is the most a scan can return: a category whose tool or fol
 
 Desktop eligibility is deny by default. `desktop_trash_paths()` is true only when cleanup is
 exactly "move each listed path to Trash", and `Destructive` risk is always report only
-(`desktop_report_only`). Three narrow exceptions each have their own provider flag and their own
-sink: `desktop_empties_trash()` (only `trash`), `desktop_tool()` (uv, pnpm, simulator runtimes)
-and `needs_admin()` (system simulator caches). `desktop_report_only` keeps its answer for them
-(`Destructive`, `NotPerPathTrash`, `NeedsAdministrator`): it means "no per-path unprivileged
-route", and the flag decides what the app may do instead. The `DESKTOP_TRASH` table test fails
+(`desktop_report_only`). Two narrow exceptions each have their own provider flag and their own
+sink: `desktop_empties_trash()` (only `trash`) and `desktop_tool()` (uv, pnpm, simulator
+runtimes). `desktop_report_only` keeps its answer for them (`Destructive`, `NotPerPathTrash`): it
+means "no per-path unprivileged route", and the flag decides what the app may do instead.
+`needs_admin()` (system simulator caches) stays `NeedsAdministrator`, report-only
+([why](#deletion-as-administrator)). The `DESKTOP_TRASH` table test fails
 until a new id gets a deliberate decision. A provider whose paths come from a tool's output sets
 `roots_from_tool_output()`, and the app refuses its items outside the home folder. Shared helpers (`root_as_item`,
 `execute_per_item`, `run_tool`, `is_idle`, ...) sit in the same file;
@@ -142,7 +143,7 @@ widens: a cache folder that holds a path which only goes to the Trash goes to th
 | `RunTool(Prune)` | uv, pnpm in Permanent mode, tool found | the category's tool |
 | `RunTool(Request)` | simulator runtimes, both modes (no Trash route) | `simctl runtime delete` |
 | `EmptyTrash` | the `trash` row, both modes, only with `include_trash` | Finder |
-| `DeleteAsAdministrator` | `needs_admin` categories, both modes | [`elevated_delete`](#deletion-as-administrator) |
+| `DeleteAsAdministrator` | none at present: `needs_admin` categories are report-only on the desktop | [`elevated_delete`](#deletion-as-administrator) |
 
 The ordinary permanent-delete [walker](../../crates/tiny-core/src/clean/fs_safe/remove_tree.rs)
 opens each ancestor and directory relative to a pinned parent descriptor with `O_NOFOLLOW`.
@@ -246,6 +247,16 @@ Cleanup never touches `/System`. `inside_system` refuses it (case-insensitively,
 `execute_per_item`, the CLI per-item guard, `validate` and the administrator route's allowlist.
 
 ## Deletion as administrator
+
+**The desktop no longer routes anything here.** macOS denies the deletion even as root: the
+kernel logs `System Policy: rm deny(1) file-write-unlink` for
+`/Library/Developer/CoreSimulator/Caches`, because the platform policy asks TCC for Full Disk
+Access and `do shell script … with administrator privileges` runs through
+`Security.framework/authtrampoline`, which TCC treats as the responsible process instead of
+TinySift. The app's own Full Disk Access therefore never applies, and the password dialog always
+ends in `Operation not permitted`. [`desktop_action`](../../crates/tiny-ffi/src/clean.rs) reports
+`needs_admin` categories as `ReportOnly { NeedsAdministrator }` instead; the route and its FFI
+records stay until the app drops them.
 
 [`elevated_delete.rs`](../../crates/tiny-core/src/clean/elevated_delete.rs) documents the route;
 this is why it is shaped that way. A helper would be a resident root process, which the spec rules
