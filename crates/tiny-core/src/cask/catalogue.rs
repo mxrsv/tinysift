@@ -24,13 +24,22 @@ pub struct CatalogueEntry {
     pub bundle_id: &'static str,
 }
 
-/// Shown in this order within each group. Every `bundle_id` was verified
-/// two ways on 2026-10-25: the `CFBundleIdentifier` of the app installed on
-/// a Mac (`defaults read <app>/Contents/Info CFBundleIdentifier`), and the
+/// Shown in this order within each group. Every cask installs an app with no
+/// administrator password: `brew info --json=v2` shows no `pkg`, `installer`
+/// or `sudo` step and no `uninstall` directive that always needs root
+/// (the rules in `elevation.rs`).
+///
+/// Every `bundle_id` is the `CFBundleIdentifier` of the app the cask installs.
+/// The first seven were verified two ways on 2026-10-25: the app installed on a
+/// Mac (`defaults read <app>/Contents/Info CFBundleIdentifier`), and the
 /// identifier in the cask's own `uninstall quit` stanza (Brave has none, so
 /// its zap stanza's `com.brave.Browser` preference and cache paths stand in).
-/// ChatGPT's identifier is `com.openai.codex`, not `com.openai.chat`: the
-/// current cask installs that app.
+/// The thirteen after them were read on 2026-10-26 from the Info.plist inside
+/// the archive `brew fetch --cask` downloads (its checksum checked by `brew`),
+/// and for Cursor and Postman also from the installed app; the `uninstall quit`
+/// stanza was only a hint. ChatGPT's identifier is `com.openai.codex`, not
+/// `com.openai.chat`: the current cask installs that app. Cursor's is
+/// ToDesktop's generated identifier, not a name.
 pub const CATALOGUE: &[CatalogueEntry] = &[
     entry(
         "visual-studio-code",
@@ -38,6 +47,20 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
         "Code editor",
         Group::Recommended,
         "com.microsoft.VSCode",
+    ),
+    entry(
+        "cursor",
+        "Cursor",
+        "AI code editor",
+        Group::Recommended,
+        "com.todesktop.230313mzl4w4u92",
+    ),
+    entry(
+        "zed",
+        "Zed",
+        "Editor with built-in collaboration",
+        Group::Recommended,
+        "dev.zed.Zed",
     ),
     entry(
         "ghostty",
@@ -61,6 +84,76 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
         "com.knollsoft.Rectangle",
     ),
     entry(
+        "postman",
+        "Postman",
+        "Build and test APIs",
+        Group::Recommended,
+        "com.postmanlabs.mac",
+    ),
+    entry(
+        "jetbrains-toolbox",
+        "JetBrains Toolbox",
+        "Install and update JetBrains IDEs",
+        Group::Recommended,
+        "com.jetbrains.toolbox",
+    ),
+    entry(
+        "sublime-text",
+        "Sublime Text",
+        "Text editor for code and prose",
+        Group::More,
+        "com.sublimetext.4",
+    ),
+    entry(
+        "warp",
+        "Warp",
+        "Terminal with command blocks and AI",
+        Group::More,
+        "dev.warp.Warp-Stable",
+    ),
+    entry(
+        "fork",
+        "Fork",
+        "Git client",
+        Group::More,
+        "com.DanPristupov.Fork",
+    ),
+    entry(
+        "bruno",
+        "Bruno",
+        "Open-source API client",
+        Group::More,
+        "com.usebruno.app",
+    ),
+    entry(
+        "dbeaver-community",
+        "DBeaver",
+        "SQL client for many databases",
+        Group::More,
+        "org.jkiss.dbeaver.core.product",
+    ),
+    entry(
+        "podman-desktop",
+        "Podman Desktop",
+        "Manage containers and images",
+        Group::More,
+        "io.podmandesktop.PodmanDesktop",
+    ),
+    entry(
+        "utm",
+        "UTM",
+        "Virtual machines and emulation",
+        Group::More,
+        "com.utmapp.UTM",
+    ),
+    entry(
+        "drawio",
+        "draw.io",
+        "Diagram editor",
+        Group::More,
+        "com.jgraph.drawio.desktop",
+    ),
+    entry(
         "chatgpt",
         "ChatGPT",
         "Chat app from OpenAI",
@@ -80,6 +173,13 @@ pub const CATALOGUE: &[CatalogueEntry] = &[
         "Run language models locally",
         Group::More,
         "ai.elementlabs.lmstudio",
+    ),
+    entry(
+        "ollama-app",
+        "Ollama",
+        "Local language models with a CLI",
+        Group::More,
+        "com.electron.ollama",
     ),
 ];
 
@@ -168,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn the_catalogue_is_the_agreed_seven_in_order() {
+    fn the_catalogue_is_the_agreed_twenty_in_order() {
         let listed: Vec<_> = CATALOGUE
             .iter()
             .map(|e| (e.token, e.name, e.blurb, e.group))
@@ -180,6 +280,13 @@ mod tests {
                     "visual-studio-code",
                     "Visual Studio Code",
                     "Code editor",
+                    Group::Recommended
+                ),
+                ("cursor", "Cursor", "AI code editor", Group::Recommended),
+                (
+                    "zed",
+                    "Zed",
+                    "Editor with built-in collaboration",
                     Group::Recommended
                 ),
                 (
@@ -200,12 +307,58 @@ mod tests {
                     "Snap windows with shortcuts",
                     Group::Recommended
                 ),
+                (
+                    "postman",
+                    "Postman",
+                    "Build and test APIs",
+                    Group::Recommended
+                ),
+                (
+                    "jetbrains-toolbox",
+                    "JetBrains Toolbox",
+                    "Install and update JetBrains IDEs",
+                    Group::Recommended
+                ),
+                (
+                    "sublime-text",
+                    "Sublime Text",
+                    "Text editor for code and prose",
+                    Group::More
+                ),
+                (
+                    "warp",
+                    "Warp",
+                    "Terminal with command blocks and AI",
+                    Group::More
+                ),
+                ("fork", "Fork", "Git client", Group::More),
+                ("bruno", "Bruno", "Open-source API client", Group::More),
+                (
+                    "dbeaver-community",
+                    "DBeaver",
+                    "SQL client for many databases",
+                    Group::More
+                ),
+                (
+                    "podman-desktop",
+                    "Podman Desktop",
+                    "Manage containers and images",
+                    Group::More
+                ),
+                ("utm", "UTM", "Virtual machines and emulation", Group::More),
+                ("drawio", "draw.io", "Diagram editor", Group::More),
                 ("chatgpt", "ChatGPT", "Chat app from OpenAI", Group::More),
                 ("brave-browser", "Brave", "Browser", Group::More),
                 (
                     "lm-studio",
                     "LM Studio",
                     "Run language models locally",
+                    Group::More
+                ),
+                (
+                    "ollama-app",
+                    "Ollama",
+                    "Local language models with a CLI",
                     Group::More
                 ),
             ]

@@ -35,7 +35,7 @@ fn the_catalogue_marks_apps_by_identity_and_by_homebrews_record() {
     );
     let apps = world.session.catalogue(&world.seams()).unwrap();
     let row = |token: &str| apps.iter().find(|a| a.token == token).unwrap();
-    assert_eq!(apps.len(), 7);
+    assert_eq!(apps.len(), tiny_core::cask::CATALOGUE.len());
     assert!(row("ghostty").on_this_mac && row("ghostty").tracked_by_homebrew);
     assert!(!row("iterm2").on_this_mac && row("iterm2").tracked_by_homebrew);
     assert!(!row("rectangle").on_this_mac && !row("rectangle").tracked_by_homebrew);
@@ -46,7 +46,10 @@ fn the_catalogue_marks_apps_by_identity_and_by_homebrews_record() {
 fn the_catalogue_still_lists_without_homebrew_or_when_it_cannot_say() {
     let world = World::new();
     *world.brew.path.lock().unwrap() = None;
-    assert_eq!(world.session.catalogue(&world.seams()).unwrap().len(), 7);
+    assert_eq!(
+        world.session.catalogue(&world.seams()).unwrap().len(),
+        tiny_core::cask::CATALOGUE.len()
+    );
     assert!(world.brew.calls().is_empty());
 
     let world = World::new();

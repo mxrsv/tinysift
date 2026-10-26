@@ -33,6 +33,29 @@ fn the_catalogue_casks_need_nothing_even_visual_studio_codes_launchctl() {
 }
 
 #[test]
+fn signal_trash_and_launchctl_stop_directives_need_no_password() {
+    // `launchctl`, `signal` and `trash` in an `uninstall` never ask for a password.
+    let toolbox = json!([
+        {"uninstall": [{"launchctl": "com.jetbrains.toolbox", "quit": "com.jetbrains.toolbox",
+                        "signal": ["TERM", "com.jetbrains.toolbox"]}]},
+        {"app": ["JetBrains Toolbox.app"], "target": "/Applications/JetBrains Toolbox.app"},
+    ]);
+    let dbeaver = json!([
+        {"uninstall": [{"signal": ["TERM", "org.jkiss.dbeaver.core.product"]}]},
+        {"app": ["DBeaver.app"], "target": "/Applications/DBeaver.app"},
+        {"binary": ["/Applications/DBeaver.app/Contents/MacOS/dbeaver"], "target": "/opt/homebrew/bin/dbeaver"},
+    ]);
+    let podman = json!([
+        {"uninstall": [{"quit": "io.podmandesktop.PodmanDesktop",
+                        "trash": "~/Library/LaunchAgents/io.podman_desktop.PodmanDesktop.plist"}]},
+        {"app": ["Podman Desktop.app"], "target": "/Applications/Podman Desktop.app"},
+    ]);
+    for artifacts in [toolbox, dbeaver, podman] {
+        assert_eq!(of(artifacts), NONE);
+    }
+}
+
+#[test]
 fn a_pkg_or_keyboard_layout_needs_sudo_to_install_and_so_to_update() {
     for artifact in ["pkg", "keyboard_layout"] {
         let elevation = of(json!([{ artifact: ["Thing.pkg"] }]));
