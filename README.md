@@ -17,7 +17,7 @@ your files live.
 
 [Website](https://tinysift.app) · [Download](https://github.com/mxrsv/tinysift/releases) · [Discussions](https://github.com/mxrsv/tinysift/discussions) · [Privacy](https://tinysift.app/privacy)
 
-<img src=".github/readme/app-overview.png" width="860" alt="TinySift Overview: live CPU, memory, startup disk and listening ports">
+<img src=".github/readme/app-overview.png" width="860" alt="TinySift Overview: live CPU, memory and startup disk, the apps using the most, and listening ports">
 
 <sub>Sample data.</sub>
 
