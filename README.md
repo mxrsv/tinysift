@@ -19,8 +19,6 @@ your files live.
 
 <img src=".github/readme/app-overview.png" width="860" alt="TinySift Overview: live CPU, memory and startup disk, the apps using the most, and listening ports">
 
-<sub>Sample data.</sub>
-
 </div>
 
 ## Install
