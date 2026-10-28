@@ -186,6 +186,7 @@ fn tool_categories_stay_report_only_unless_the_app_asks() {
     let report_only = FfiDesktopAction::ReportOnly {
         reason: FfiReportOnlyReason::NotPerPathTrash,
     };
+    assert!(discovery.categories.iter().all(|c| !c.prunes));
     assert_eq!(
         actions(&discovery),
         [
@@ -209,6 +210,13 @@ fn tool_categories_stay_report_only_unless_the_app_asks() {
             ("downloads-old", FfiDesktopAction::MoveToTrash),
         ]
     );
+    let pruning: Vec<_> = discovery
+        .categories
+        .iter()
+        .filter(|c| c.prunes)
+        .map(|c| c.id.as_str())
+        .collect();
+    assert_eq!(pruning, ["uv"], "only a cache the tool prunes");
     remove(&layout.dir);
 }
 

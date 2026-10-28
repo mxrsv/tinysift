@@ -500,6 +500,7 @@ fn store_category(
         comes_back,
         section,
         needs_admin,
+        prunes: tool == Some(DesktopTool::Prune),
     };
     match category.outcome {
         CategoryOutcome::Found {

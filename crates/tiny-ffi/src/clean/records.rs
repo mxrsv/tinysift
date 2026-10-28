@@ -226,6 +226,11 @@ pub struct FfiCleanCategory {
     /// with `FfiDesktopAction::DeleteAsAdministrator`, so never at present.
     #[uniffi(default = false)]
     pub needs_admin: bool,
+    /// The category's own tool prunes it when the run removes it for good
+    /// (a uv or pnpm cache). A prune keeps what is still referenced, so it
+    /// frees at most the candidates' sizes, often far less.
+    #[uniffi(default = false)]
+    pub prunes: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
