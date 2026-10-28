@@ -6,11 +6,11 @@
 
 **Know your Mac. Then clean it.**
 
-A Mac app, free during the beta, that shows what slows your Mac and what fills its disk, then
+A Mac app that shows what slows your Mac and what fills its disk, then
 cleans only what you pick. This repository is its open-source engine, where the rules that touch
 your files live.
 
-[![Latest beta](https://img.shields.io/github/v/release/mxrsv/tinysift?include_prereleases&label=beta)](https://github.com/mxrsv/tinysift/releases)
+[![Latest release](https://img.shields.io/github/v/release/mxrsv/tinysift?label=release)](https://github.com/mxrsv/tinysift/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/mxrsv/tinysift/ci.yml?branch=main&label=CI)](https://github.com/mxrsv/tinysift/actions/workflows/ci.yml)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)](LICENSE)
 [![macOS 14+ on Apple silicon](https://img.shields.io/badge/macOS_14+-Apple_silicon-black?logo=apple)](https://tinysift.app)
@@ -31,7 +31,7 @@ Or download the DMG from [tinysift.app](https://tinysift.app) or the
 [Releases page](https://github.com/mxrsv/tinysift/releases). TinySift needs Apple silicon and
 macOS 14 or later; every DMG is Developer ID signed and notarized by Apple
 ([release guide](docs/operations/release.md)). The [setup guide](https://tinysift.app/docs) covers
-Full Disk Access. TinySift is in beta: watch this repository's releases to hear about new versions.
+Full Disk Access. Watch this repository's releases to hear about new versions.
 
 ## What it does
 
