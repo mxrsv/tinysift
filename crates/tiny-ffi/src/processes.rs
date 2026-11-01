@@ -180,8 +180,26 @@ pub struct FfiListeners {
     pub sampled_at: u64,
 }
 
+/// Where one process runs from. `path` is `None` when macOS denies the read or the process is gone.
+#[derive(Debug, Clone, PartialEq, uniffi::Record)]
+pub struct FfiWorkingDirectory {
+    pub pid: u32,
+    pub path: Option<String>,
+}
+
 #[uniffi::export]
 impl TinySession {
+    /// Working directories of the given PIDs, in order, for naming agent sessions by folder. Read-only
+    /// and cheap (one syscall per PID), so the caller asks only for the few roots it needs. Bypasses the gate.
+    pub fn process_working_directories(&self, pids: Vec<u32>) -> Vec<FfiWorkingDirectory> {
+        pids.into_iter()
+            .map(|pid| FfiWorkingDirectory {
+                pid,
+                path: processes::working_directory(pid),
+            })
+            .collect()
+    }
+
     /// Samples all processes. CPU is measured from a process's third sample.
     pub fn process_list(&self) -> Result<FfiProcessSnapshot, FfiError> {
         Ok(self.sampler().sample().into())

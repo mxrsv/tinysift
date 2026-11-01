@@ -6,6 +6,7 @@ pub mod ports;
 pub mod pressure;
 pub mod snapshot;
 pub mod terminate;
+pub mod working_dir;
 
 use serde::{Deserialize, Serialize};
 
@@ -22,6 +23,7 @@ pub use snapshot::{LoadAverage, ProcessInfo, ProcessSnapshot, Sampler, SystemUsa
 pub use terminate::{
     refusal, terminate, Refusal, TerminateKind, TerminateOutcome, TerminateTarget,
 };
+pub use working_dir::working_directory;
 
 /// Diagnostic used when ports are not probed for another user's process: a
 /// non-root `lsof` would silently report nothing for it.
