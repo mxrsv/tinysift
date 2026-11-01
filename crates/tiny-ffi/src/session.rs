@@ -4,7 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use tiny_core::processes::Sampler;
+use tiny_core::processes::{MachineSampler, Sampler};
 
 use crate::cask::CaskState;
 use crate::clean::CleanState;
@@ -17,6 +17,7 @@ use crate::FfiError;
 pub struct TinySession {
     busy: AtomicBool,
     sampler: Mutex<Sampler>,
+    machine: Mutex<MachineSampler>,
     pub(crate) clean: Mutex<CleanState>,
     pub(crate) uninstall: Mutex<UninstallState>,
     pub(crate) cask: Mutex<CaskState>,
@@ -49,6 +50,11 @@ impl TinySession {
     /// is recovered rather than failing every later query.
     pub(crate) fn sampler(&self) -> MutexGuard<'_, Sampler> {
         self.sampler.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// The whole-machine sampler, kept apart so its reads never touch process CPU intervals.
+    pub(crate) fn machine(&self) -> MutexGuard<'_, MachineSampler> {
+        self.machine.lock().unwrap_or_else(PoisonError::into_inner)
     }
 }
 

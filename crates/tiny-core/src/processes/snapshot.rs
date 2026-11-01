@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind, Users};
 
 use super::pressure::{read_memory_pressure, MemoryPressure};
+use crate::sys::MemoryParts;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -72,6 +73,11 @@ pub struct SystemUsage {
     pub load_average: Option<LoadAverage>,
     pub memory_used_bytes: Option<u64>,
     pub memory_total_bytes: Option<u64>,
+    /// The used figure split into app, wired and compressed memory; `None` where the
+    /// platform cannot split it. When present, the three sum to `memory_used_bytes`.
+    pub memory_apps_bytes: Option<u64>,
+    pub memory_wired_bytes: Option<u64>,
+    pub memory_compressed_bytes: Option<u64>,
     /// `Some(0)` for both means swap is not in use.
     pub swap_used_bytes: Option<u64>,
     pub swap_total_bytes: Option<u64>,
@@ -88,6 +94,7 @@ struct SystemReadings {
     load: [f64; 3],
     memory_total: u64,
     memory_used: Option<u64>,
+    memory_parts: Option<MemoryParts>,
     swap_used: u64,
     swap_total: u64,
     pressure: Option<MemoryPressure>,
@@ -97,6 +104,7 @@ impl SystemUsage {
     fn from_readings(raw: SystemReadings) -> Self {
         let memory_ok =
             raw.memory_total > 0 && raw.memory_used.is_some_and(|used| used <= raw.memory_total);
+        let parts = raw.memory_parts.filter(|_| memory_ok);
         let swap_ok = raw.swap_used <= raw.swap_total;
         let load_ok = raw.load.iter().all(|v| v.is_finite() && *v >= 0.0);
         let [one, five, fifteen] = raw.load;
@@ -117,6 +125,9 @@ impl SystemUsage {
             load_average: load_ok.then_some(LoadAverage { one, five, fifteen }),
             memory_used_bytes: raw.memory_used.filter(|_| memory_ok),
             memory_total_bytes: memory_ok.then_some(raw.memory_total),
+            memory_apps_bytes: parts.map(|p| p.apps),
+            memory_wired_bytes: parts.map(|p| p.wired),
+            memory_compressed_bytes: parts.map(|p| p.compressed),
             swap_used_bytes: swap_ok.then_some(raw.swap_used),
             swap_total_bytes: swap_ok.then_some(raw.swap_total),
             memory_pressure: raw.pressure,
@@ -313,26 +324,7 @@ impl Sampler {
     }
 
     fn system_usage(&self) -> SystemUsage {
-        let cpus = self.system.cpus();
-        let load = System::load_average();
-        SystemUsage::from_readings(SystemReadings {
-            cpu: if cpus.is_empty() {
-                f32::NAN
-            } else {
-                self.system.global_cpu_usage()
-            },
-            cpu_measured: self.system_cpu_samples >= 2,
-            cores: cpus.iter().map(|cpu| cpu.cpu_usage()).collect(),
-            brand: cpus
-                .first()
-                .map_or_else(String::new, |c| c.brand().to_string()),
-            load: [load.one, load.five, load.fifteen],
-            memory_total: self.system.total_memory(),
-            memory_used: crate::sys::used_memory(&self.system),
-            swap_used: self.system.used_swap(),
-            swap_total: self.system.total_swap(),
-            pressure: read_memory_pressure(),
-        })
+        usage_of(&self.system, self.system_cpu_samples)
     }
 
     fn snapshot(&self) -> ProcessSnapshot {
@@ -369,6 +361,38 @@ impl Sampler {
             system_usage: self.system_usage(),
         }
     }
+}
+
+/// Whole-machine readings from a `System` whose CPU and memory were just refreshed.
+/// `cpu_samples` counts CPU refreshes; one is not enough to measure a rate.
+pub(super) fn usage_of(system: &System, cpu_samples: u32) -> SystemUsage {
+    let cpus = system.cpus();
+    let load = System::load_average();
+    // One `host_statistics64` call feeds both the used figure and its split.
+    let parts = crate::sys::memory_parts();
+    #[cfg(target_os = "macos")]
+    let memory_used = parts.map(MemoryParts::used);
+    #[cfg(not(target_os = "macos"))]
+    let memory_used = Some(system.used_memory());
+    SystemUsage::from_readings(SystemReadings {
+        cpu: if cpus.is_empty() {
+            f32::NAN
+        } else {
+            system.global_cpu_usage()
+        },
+        cpu_measured: cpu_samples >= 2,
+        cores: cpus.iter().map(|cpu| cpu.cpu_usage()).collect(),
+        brand: cpus
+            .first()
+            .map_or_else(String::new, |c| c.brand().to_string()),
+        load: [load.one, load.five, load.fifteen],
+        memory_total: system.total_memory(),
+        memory_used,
+        memory_parts: parts,
+        swap_used: system.used_swap(),
+        swap_total: system.total_swap(),
+        pressure: read_memory_pressure(),
+    })
 }
 
 pub(crate) fn unix_now() -> u64 {

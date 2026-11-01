@@ -67,22 +67,42 @@ pub fn startup_capacity(disks: &[DiskInfo]) -> Option<DiskCapacity> {
         })
 }
 
-/// Used pages: app memory (anonymous pages less purgeable ones), wired memory and the
-/// compressor's pages, the three parts Activity Monitor lists. File cache is not used memory.
-#[cfg(any(target_os = "macos", test))]
-fn used_pages(internal: u64, purgeable: u64, wired: u64, compressor: u64) -> u64 {
-    internal
-        .saturating_sub(purgeable)
-        .saturating_add(wired)
-        .saturating_add(compressor)
+/// Used memory split the way Activity Monitor lists it. The three parts sum to the used figure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct MemoryParts {
+    pub apps: u64,
+    pub wired: u64,
+    pub compressed: u64,
+}
+
+impl MemoryParts {
+    pub fn used(self) -> u64 {
+        self.apps
+            .saturating_add(self.wired)
+            .saturating_add(self.compressed)
+    }
 }
 
 /// Memory in use as app, wired and compressed memory. `sysinfo`'s macOS figure is
 /// active + wired + compressed + speculative, which misses inactive app memory and
 /// counts active file cache, so it can read gigabytes apart. `None` when the kernel
 /// refuses the read.
+pub fn used_memory(system: &System) -> Option<u64> {
+    #[cfg(target_os = "macos")]
+    {
+        let _ = system;
+        memory_parts().map(MemoryParts::used)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Some(system.used_memory())
+    }
+}
+
+/// App, wired and compressed memory from one `host_statistics64` call. `None` when the
+/// kernel refuses the read, and always on platforms without that call.
 #[cfg(target_os = "macos")]
-pub fn used_memory(_system: &System) -> Option<u64> {
+pub fn memory_parts() -> Option<MemoryParts> {
     use std::sync::OnceLock;
     // One send right for the process's lifetime instead of a new reference per sample.
     static HOST: OnceLock<libc::mach_port_t> = OnceLock::new();
@@ -105,19 +125,30 @@ pub fn used_memory(_system: &System) -> Option<u64> {
     // SAFETY: reads a constant system value.
     let page = u64::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) }).ok()?;
     (status == libc::KERN_SUCCESS && page > 0).then(|| {
-        used_pages(
+        let (apps, wired, compressed) = part_pages(
             stats.internal_page_count.into(),
             stats.purgeable_count.into(),
             stats.wire_count.into(),
             stats.compressor_page_count.into(),
-        )
-        .saturating_mul(page)
+        );
+        MemoryParts {
+            apps: apps.saturating_mul(page),
+            wired: wired.saturating_mul(page),
+            compressed: compressed.saturating_mul(page),
+        }
     })
 }
 
 #[cfg(not(target_os = "macos"))]
-pub fn used_memory(system: &System) -> Option<u64> {
-    Some(system.used_memory())
+pub fn memory_parts() -> Option<MemoryParts> {
+    None
+}
+
+/// Pages for app memory (anonymous pages less purgeable ones), wired memory and the
+/// compressor, the three parts Activity Monitor lists. File cache is not used memory.
+#[cfg(any(target_os = "macos", test))]
+fn part_pages(internal: u64, purgeable: u64, wired: u64, compressor: u64) -> (u64, u64, u64) {
+    (internal.saturating_sub(purgeable), wired, compressor)
 }
 
 pub fn information() -> SystemInfo {
@@ -184,9 +215,16 @@ mod tests {
     #[test]
     fn used_memory_is_app_wired_and_compressed_not_active_pages() {
         // Inactive app memory counts and file cache does not, whatever the queue.
-        assert_eq!(used_pages(500, 20, 300, 400), 1180);
-        assert_eq!(used_pages(10, 20, 300, 400), 700);
-        assert_eq!(used_pages(u64::MAX, 0, 1, 0), u64::MAX);
+        let used = |parts: (u64, u64, u64)| parts.0 + parts.1 + parts.2;
+        assert_eq!(part_pages(500, 20, 300, 400), (480, 300, 400));
+        assert_eq!(used(part_pages(500, 20, 300, 400)), 1180);
+        assert_eq!(used(part_pages(10, 20, 300, 400)), 700);
+        let huge = MemoryParts {
+            apps: u64::MAX,
+            wired: 1,
+            compressed: 0,
+        };
+        assert_eq!(huge.used(), u64::MAX);
     }
 
     #[cfg(target_os = "macos")]
@@ -197,6 +235,12 @@ mod tests {
         );
         let used = used_memory(&system).expect("host_statistics64 succeeds");
         assert!(used > 0 && used <= system.total_memory());
+        let parts = memory_parts().expect("host_statistics64 succeeds");
+        assert!(parts.apps > 0 && parts.wired > 0);
+        assert!(
+            parts.used().abs_diff(used) < used / 10,
+            "parts track the used figure"
+        );
     }
 
     #[test]

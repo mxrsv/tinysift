@@ -46,6 +46,11 @@ pub struct FfiSystemUsage {
     pub cpu_warming_up: bool,
     pub memory_used_bytes: Option<u64>,
     pub memory_total_bytes: Option<u64>,
+    /// `memory_used_bytes` split into app, wired and compressed memory. All three are
+    /// `Some` or all `None`, and sum to the used figure.
+    pub memory_apps_bytes: Option<u64>,
+    pub memory_wired_bytes: Option<u64>,
+    pub memory_compressed_bytes: Option<u64>,
     /// Per-core 0–100; an entry is `None` when that core did not report. Empty while warming up.
     pub cpu_cores: Vec<Option<f32>>,
     pub cpu_brand: Option<String>,
@@ -180,6 +185,13 @@ impl TinySession {
     /// Samples all processes. CPU is measured from a process's third sample.
     pub fn process_list(&self) -> Result<FfiProcessSnapshot, FfiError> {
         Ok(self.sampler().sample().into())
+    }
+
+    /// Whole-machine CPU, memory, swap and pressure without walking processes, for the
+    /// menu bar's background record. CPU reads warming up on the first call and needs
+    /// calls at least 0.2 s apart. Bypasses the gate.
+    pub fn machine_usage(&self) -> FfiSystemUsage {
+        self.machine().sample().into()
     }
 
     /// Resamples, then returns detail, parent/children and listening ports.
@@ -354,6 +366,9 @@ impl From<SystemUsage> for FfiSystemUsage {
             cpu_warming_up: usage.cpu_warming_up,
             memory_used_bytes: usage.memory_used_bytes,
             memory_total_bytes: usage.memory_total_bytes,
+            memory_apps_bytes: usage.memory_apps_bytes,
+            memory_wired_bytes: usage.memory_wired_bytes,
+            memory_compressed_bytes: usage.memory_compressed_bytes,
             cpu_cores: usage.cpu_cores,
             cpu_brand: usage.cpu_brand,
             logical_cores: usage.logical_cores,
@@ -407,6 +422,19 @@ impl From<ListeningPort> for FfiListeningPort {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn machine_usage_reads_without_a_process_list_and_splits_memory() {
+        let session = TinySession::new();
+        let first = session.machine_usage();
+        assert!(first.cpu_warming_up);
+        let used = first.memory_used_bytes.unwrap();
+        let split = first.memory_apps_bytes.unwrap()
+            + first.memory_wired_bytes.unwrap()
+            + first.memory_compressed_bytes.unwrap();
+        assert_eq!(split, used);
+    }
 
     #[test]
     fn cpu_is_unmeasured_until_the_third_list() {

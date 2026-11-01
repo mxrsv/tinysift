@@ -1,6 +1,7 @@
 //! Process inspection and actions shared by the CLI and the native app.
 
 mod footprint;
+pub mod machine;
 pub mod ports;
 pub mod pressure;
 pub mod snapshot;
@@ -11,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::{Error, Result};
 use crate::runner::CommandRunner;
 
+pub use machine::MachineSampler;
 pub use ports::{
     listeners, port_owners, Listener, Listeners, ListeningPort, PortOwner, PortOwners,
     PORT_VISIBILITY_CAVEAT,
