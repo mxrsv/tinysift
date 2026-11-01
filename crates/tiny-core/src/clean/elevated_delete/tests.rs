@@ -209,9 +209,16 @@ mod with_osascript {
     #[test]
     fn a_running_simulator_tool_refuses_the_whole_batch() {
         let (_dir, root, _) = layout();
-        // `osascript` runs while its root shell checks, as Simulator might.
-        let busy = run_script(&variant(&root, "osascript"), &["sibling", "dyld"]);
-        assert_eq!(busy, Err(ElevatedError::Busy("osascript".into())));
+        // A tool that is not an ancestor of the check, as Simulator would be:
+        // `pgrep` leaves out its own ancestors, so `osascript` cannot stand in.
+        let mut tool = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .spawn()
+            .unwrap();
+        let busy = run_script(&variant(&root, "sleep"), &["sibling", "dyld"]);
+        tool.kill().unwrap();
+        tool.wait().unwrap();
+        assert_eq!(busy, Err(ElevatedError::Busy("sleep".into())));
         assert!(!gone(&root.join("sibling")) && !gone(&root.join("dyld")));
     }
 
