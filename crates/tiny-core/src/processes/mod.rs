@@ -2,6 +2,7 @@
 
 mod footprint;
 pub mod machine;
+pub mod network;
 pub mod ports;
 pub mod pressure;
 pub mod snapshot;
@@ -14,6 +15,7 @@ use crate::error::{Error, Result};
 use crate::runner::CommandRunner;
 
 pub use machine::MachineSampler;
+pub use network::{NetworkCounters, NetworkReading, NetworkThroughput};
 pub use ports::{
     listeners, port_owners, Listener, Listeners, ListeningPort, PortOwner, PortOwners,
     PORT_VISIBILITY_CAVEAT,

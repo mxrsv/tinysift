@@ -132,6 +132,12 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   the app's Swift-side Quit.
 - **Busy** (`FfiError::Busy`) — The [session](../../crates/tiny-ffi/src/session.rs) gate is
   held: one scan or mutation at a time, rejected rather than queued. Not: locked.
+- **Network throughput** (`NetworkThroughput`, `FfiNetworkThroughput`) — Whole-machine bytes
+  per second received and sent since the previous sample, summed over the ports and AirDrop
+  links in [`network.rs`](../../crates/tiny-core/src/processes/network.rs) (`en*`, `awdl*`,
+  `llw*`); loopback, tunnels and bridges stay out so bytes are not counted twice. The first
+  sample only sets the baseline (`network_warming_up`); no readable interface means `None`,
+  never zero. Not: per-process bytes, which macOS has no public API for.
 
 ## Uninstall
 

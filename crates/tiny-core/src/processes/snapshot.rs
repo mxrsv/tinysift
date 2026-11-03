@@ -8,6 +8,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use serde::{Deserialize, Serialize};
 use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind, Users};
 
+use super::network::{NetworkCounters, NetworkReading, NetworkThroughput};
 use super::pressure::{read_memory_pressure, MemoryPressure};
 use crate::sys::MemoryParts;
 
@@ -82,6 +83,11 @@ pub struct SystemUsage {
     pub swap_used_bytes: Option<u64>,
     pub swap_total_bytes: Option<u64>,
     pub memory_pressure: Option<MemoryPressure>,
+    /// Bytes per second over the counted interfaces since the previous sample. `None`
+    /// while the first sample sets the baseline (`network_warming_up`) or when no
+    /// interface could be read.
+    pub network: Option<NetworkThroughput>,
+    pub network_warming_up: bool,
 }
 
 /// Raw whole-machine values, before availability rules are applied.
@@ -98,6 +104,7 @@ struct SystemReadings {
     swap_used: u64,
     swap_total: u64,
     pressure: Option<MemoryPressure>,
+    network: NetworkReading,
 }
 
 impl SystemUsage {
@@ -131,6 +138,8 @@ impl SystemUsage {
             swap_used_bytes: swap_ok.then_some(raw.swap_used),
             swap_total_bytes: swap_ok.then_some(raw.swap_total),
             memory_pressure: raw.pressure,
+            network: raw.network.throughput,
+            network_warming_up: raw.network.warming_up,
         }
     }
 }
@@ -226,6 +235,8 @@ pub struct Sampler {
     current_uid: u32,
     system_cpu_samples: u32,
     last_system_cpu_sample: Option<Instant>,
+    network: NetworkCounters,
+    network_reading: NetworkReading,
 }
 
 impl Default for Sampler {
@@ -243,6 +254,8 @@ impl Sampler {
             seen: HashMap::new(),
             system_cpu_samples: 0,
             last_system_cpu_sample: None,
+            network: NetworkCounters::new(),
+            network_reading: NetworkReading::default(),
             // SAFETY: getuid has no preconditions and cannot fail.
             current_uid: unsafe { libc::getuid() },
         }
@@ -280,6 +293,7 @@ impl Sampler {
             self.system_cpu_samples = self.system_cpu_samples.saturating_add(1);
             self.last_system_cpu_sample = Some(now);
         }
+        self.network_reading = self.network.sample();
     }
 
     fn track_seen(&mut self) {
@@ -324,7 +338,7 @@ impl Sampler {
     }
 
     fn system_usage(&self) -> SystemUsage {
-        usage_of(&self.system, self.system_cpu_samples)
+        usage_of(&self.system, self.system_cpu_samples, self.network_reading)
     }
 
     fn snapshot(&self) -> ProcessSnapshot {
@@ -365,7 +379,7 @@ impl Sampler {
 
 /// Whole-machine readings from a `System` whose CPU and memory were just refreshed.
 /// `cpu_samples` counts CPU refreshes; one is not enough to measure a rate.
-pub(super) fn usage_of(system: &System, cpu_samples: u32) -> SystemUsage {
+pub(super) fn usage_of(system: &System, cpu_samples: u32, network: NetworkReading) -> SystemUsage {
     let cpus = system.cpus();
     let load = System::load_average();
     // One `host_statistics64` call feeds both the used figure and its split.
@@ -392,6 +406,7 @@ pub(super) fn usage_of(system: &System, cpu_samples: u32) -> SystemUsage {
         swap_used: system.used_swap(),
         swap_total: system.total_swap(),
         pressure: read_memory_pressure(),
+        network,
     })
 }
 

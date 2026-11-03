@@ -4,9 +4,9 @@
 use std::path::PathBuf;
 
 use tiny_core::processes::{
-    self, Listener, Listeners, ListeningPort, LoadAverage, MemoryPressure, ParentState, PortOwner,
-    PortOwners, ProcessInfo, ProcessSnapshot, Refusal, SystemUsage, TerminateKind,
-    TerminateOutcome, TerminateTarget,
+    self, Listener, Listeners, ListeningPort, LoadAverage, MemoryPressure, NetworkThroughput,
+    ParentState, PortOwner, PortOwners, ProcessInfo, ProcessSnapshot, Refusal, SystemUsage,
+    TerminateKind, TerminateOutcome, TerminateTarget,
 };
 use tiny_core::runner::RealRunner;
 
@@ -60,6 +60,19 @@ pub struct FfiSystemUsage {
     pub swap_used_bytes: Option<u64>,
     pub swap_total_bytes: Option<u64>,
     pub memory_pressure: Option<FfiMemoryPressure>,
+    /// Whole-machine bytes per second since the previous sample, over the Mac's ports and
+    /// AirDrop links. `None` while the first sample sets the baseline (`network_warming_up`)
+    /// or when no interface could be read.
+    #[uniffi(default = None)]
+    pub network: Option<FfiNetworkThroughput>,
+    #[uniffi(default = false)]
+    pub network_warming_up: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Record)]
+pub struct FfiNetworkThroughput {
+    pub received_bytes_per_second: u64,
+    pub sent_bytes_per_second: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, uniffi::Record)]
@@ -205,9 +218,9 @@ impl TinySession {
         Ok(self.sampler().sample().into())
     }
 
-    /// Whole-machine CPU, memory, swap and pressure without walking processes, for the
-    /// menu bar's background record. CPU reads warming up on the first call and needs
-    /// calls at least 0.2 s apart. Bypasses the gate.
+    /// Whole-machine CPU, memory, swap, pressure and network without walking processes, for
+    /// the menu bar's background record. CPU and network read warming up on the first call
+    /// and need calls at least 0.2 s apart. Bypasses the gate.
     pub fn machine_usage(&self) -> FfiSystemUsage {
         self.machine().sample().into()
     }
@@ -394,6 +407,17 @@ impl From<SystemUsage> for FfiSystemUsage {
             swap_used_bytes: usage.swap_used_bytes,
             swap_total_bytes: usage.swap_total_bytes,
             memory_pressure: usage.memory_pressure.map(Into::into),
+            network: usage.network.map(Into::into),
+            network_warming_up: usage.network_warming_up,
+        }
+    }
+}
+
+impl From<NetworkThroughput> for FfiNetworkThroughput {
+    fn from(rate: NetworkThroughput) -> Self {
+        Self {
+            received_bytes_per_second: rate.received_bytes_per_second,
+            sent_bytes_per_second: rate.sent_bytes_per_second,
         }
     }
 }
@@ -447,6 +471,7 @@ mod tests {
         let session = TinySession::new();
         let first = session.machine_usage();
         assert!(first.cpu_warming_up);
+        assert!(first.network_warming_up && first.network.is_none());
         let used = first.memory_used_bytes.unwrap();
         let split = first.memory_apps_bytes.unwrap()
             + first.memory_wired_bytes.unwrap()
