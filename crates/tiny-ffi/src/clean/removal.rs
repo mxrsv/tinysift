@@ -3,6 +3,7 @@
 //! apart. `clean_execute` and its report stay as they were for previews
 //! that only move to the Trash.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
@@ -15,7 +16,7 @@ use tiny_core::clean::finder_trash::{FinderTrash, Trash, TrashError};
 use tiny_core::clean::fs_safe::{Delete, SafeDelete};
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::PolicySnapshot;
-use tiny_core::clean::providers::all_providers_with;
+use tiny_core::clean::providers::{all_providers_with, CleanProvider};
 use tiny_core::clean::trash_plan::{DeleteMode, PlannedItem, Removal};
 use tiny_core::options::CleanOptions;
 
@@ -23,7 +24,7 @@ use super::protection::protection_error;
 use super::records::skip_reason;
 use super::{
     app_runner, unselected_review, FfiExecReport, FfiItemResult, FfiSkipReason, FfiStopReason,
-    ProviderFactory,
+    ProviderFactory, StoredCandidate,
 };
 use crate::session::CancellationToken;
 use crate::{FfiError, ProgressListener, TinySession};
@@ -253,9 +254,9 @@ impl TinySession {
         let policy = store.lease().map_err(protection_error)?;
         self.remember_policy(policy.snapshot())
             .map_err(protection_error)?;
-        let (items, options) =
+        let (items, scanned_with) =
             self.consume_preview(preview_id, policy.snapshot(), run.trash_only)?;
-        let providers = (run.providers)(&options);
+        let providers = providers_scanned_with(run.providers, &scanned_with);
         let plan: Vec<PlannedItem> = items.iter().map(|(_, plan)| plan.clone()).collect();
         let on_progress = |p: tiny_core::progress::Progress| progress.on_progress(p.into());
         let ctx = ExecContext {
@@ -281,7 +282,7 @@ impl TinySession {
         preview_id: &str,
         policy: &PolicySnapshot,
         trash_only: bool,
-    ) -> Result<(Vec<(String, PlannedItem)>, CleanOptions), FfiError> {
+    ) -> Result<(Vec<(String, PlannedItem)>, ScannedWith), FfiError> {
         let invalid = |detail: &str| FfiError::PreviewInvalid {
             detail: detail.into(),
         };
@@ -309,9 +310,20 @@ impl TinySession {
         if Instant::now() >= preview.expires_at || SystemTime::now() >= preview.expires_at_wall {
             return Err(invalid("preview expired"));
         }
-        let discovery = discovery
-            .filter(|d| d.id == preview.discovery_id)
-            .ok_or_else(|| invalid("discovery was replaced"))?;
+        let discovery = discovery.ok_or_else(|| invalid("discovery was replaced"))?;
+        // A scan replaces the categories it covers and keeps the IDs of the
+        // rest, so a preview is stale only when a candidate it selected is
+        // gone, or the set of candidates its paths cover changed.
+        if preview
+            .selected
+            .iter()
+            .any(|id| !discovery.candidates.contains_key(id))
+            || preview.items.iter().any(|(id, plan)| {
+                preview.covered.get(id) != Some(&discovery.covered_ids(id, &plan.item.path))
+            })
+        {
+            return Err(invalid("a category was rescanned; scan again"));
+        }
         // Defense in depth for PC-C3: preview already excluded these.
         if preview.items.iter().any(|(id, plan)| {
             !unselected_review(discovery, id, &plan.item.path, &preview.selected).is_empty()
@@ -323,7 +335,57 @@ impl TinySession {
             return Err(FfiError::ProtectionChanged);
         }
         preview.consumed = true;
-        Ok((preview.items.clone(), discovery.options.clone()))
+        let scanned_with = scanned_with(
+            preview
+                .items
+                .iter()
+                .map(|(id, _)| &discovery.candidates[id]),
+        );
+        Ok((preview.items.clone(), scanned_with))
+    }
+}
+
+/// The options each category of a run was scanned with: categories scanned
+/// together share one entry.
+type ScannedWith = Vec<(Arc<CleanOptions>, BTreeSet<String>)>;
+
+fn scanned_with<'a>(candidates: impl Iterator<Item = &'a StoredCandidate>) -> ScannedWith {
+    let mut groups: ScannedWith = Vec::new();
+    for candidate in candidates {
+        let group = match groups
+            .iter_mut()
+            .find(|(options, _)| Arc::ptr_eq(options, &candidate.options))
+        {
+            Some(group) => group,
+            None => {
+                groups.push((candidate.options.clone(), BTreeSet::new()));
+                groups.last_mut().expect("just pushed")
+            }
+        };
+        group.1.insert(candidate.category.clone());
+    }
+    groups
+}
+
+/// The providers of the run's categories, each built from the options its
+/// category was scanned with (`docs/internals/clean.md`). One scan's worth is
+/// the factory's list as is; several are cut to their own categories, so a
+/// category is never judged by another scan's options.
+fn providers_scanned_with(
+    factory: ProviderFactory<'_>,
+    scanned_with: &ScannedWith,
+) -> Vec<Box<dyn CleanProvider>> {
+    match scanned_with.as_slice() {
+        [] => Vec::new(),
+        [(options, _)] => factory(options),
+        groups => groups
+            .iter()
+            .flat_map(|(options, categories)| {
+                factory(options)
+                    .into_iter()
+                    .filter(|provider| categories.contains(provider.id()))
+            })
+            .collect(),
     }
 }
 

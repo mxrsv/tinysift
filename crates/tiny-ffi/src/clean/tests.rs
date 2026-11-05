@@ -12,6 +12,7 @@ use tiny_core::clean::types::RiskLevel;
 use super::test_support::*;
 use super::*;
 
+mod accumulation;
 mod build_output;
 mod execute_protection;
 mod places;
@@ -70,7 +71,7 @@ fn preview_is_built_from_discovered_ids_only() {
 }
 
 #[test]
-fn a_new_discovery_invalidates_old_candidate_ids() {
+fn a_full_scan_invalidates_every_old_candidate_id() {
     let dir = fixture_dir("replaced", &["a"], 1);
     let providers: Vec<Box<dyn CleanProvider>> = vec![Box::new(Fixture::new("logs", &dir))];
     let session = TestSession::new();

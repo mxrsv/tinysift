@@ -21,7 +21,7 @@ use tiny_core::clean::finder_trash::FinderTrash;
 use tiny_core::clean::freed_size::SharedBlocks;
 use tiny_core::clean::fs_safe::PathFingerprint;
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
-use tiny_core::clean::protection::{PolicySnapshot, RuleScope};
+use tiny_core::clean::protection::PolicySnapshot;
 use tiny_core::clean::protection_store::ProtectionStore;
 use tiny_core::clean::providers::{
     all_providers_with, category_family, category_section, comes_back, desktop_report_only,
@@ -39,6 +39,7 @@ use tiny_core::runner::{CommandRunner, ToolLookup, ToolRunner};
 use crate::session::CancellationToken;
 use crate::{FfiError, ProgressListener, TinySession};
 
+mod discovery_store;
 mod protection;
 mod records;
 mod removal;
@@ -51,6 +52,7 @@ pub use protection::*;
 pub use records::*;
 pub use removal::*;
 
+use discovery_store::{Scan, StoredCandidate, StoredDiscovery};
 use protection::{candidate_scope, split_protected};
 
 /// How long a confirmed preview stays executable.
@@ -77,33 +79,14 @@ pub(crate) struct CleanState {
     stored_policy_seen: bool,
 }
 
-struct StoredDiscovery {
-    id: u64,
-    options: CleanOptions,
-    candidates: HashMap<String, StoredCandidate>,
-}
-
-struct StoredCandidate {
-    item: CleanItem,
-    /// `None` when the path could not be stat'ed (e.g. a tool placeholder).
-    fingerprint: Option<PathFingerprint>,
-    roots: Arc<Vec<PathBuf>>,
-    desktop_action: FfiDesktopAction,
-    /// What "Always keep" would cover, judged once from the path's own metadata.
-    keep_scope: Option<RuleScope>,
-    size_is_upper_bound: bool,
-    /// Only what other movable candidates could complete
-    /// (`SharedBlocks::retain_completable`).
-    shared: SharedBlocks,
-    /// The category's own tool, when the app asked for tool commands.
-    tool: Option<DesktopTool>,
-}
-
 struct StoredPreview {
     id: String,
-    discovery_id: u64,
     /// `(candidate ID, plan)` in execution order.
     items: Vec<(String, PlannedItem)>,
+    /// Per item, the other candidates its path covers when the preview was
+    /// built. A rescan that changes it, or removes a selected candidate,
+    /// makes the preview stale.
+    covered: HashMap<String, Vec<String>>,
     /// Both clocks: `Instant` ignores wall-clock changes, `SystemTime`
     /// keeps running while the Mac sleeps, which `Instant` does not.
     expires_at: Instant,
@@ -127,8 +110,12 @@ impl CleanState {
 #[uniffi::export]
 impl TinySession {
     /// Scans cleanup categories. Holds the operation gate, so it returns
-    /// `Busy` while another scan or mutation runs. Replaces the previous
-    /// discovery and any preview built from it.
+    /// `Busy` while another scan or mutation runs. A completed scan replaces
+    /// the results of the categories in `options.categories` (every category
+    /// the options select, when it is empty) and returns the merged result
+    /// of all categories scanned so far; the others keep their candidate IDs.
+    /// A scan that is cancelled or fails changes nothing. A preview stays
+    /// valid until a scan replaces a category it uses.
     pub fn clean_discover(
         &self,
         options: FfiCleanOptions,
@@ -215,7 +202,7 @@ impl TinySession {
         mode: DeleteMode,
     ) -> Result<FfiPreview, FfiError> {
         let selected: BTreeSet<String> = candidate_ids.iter().cloned().collect();
-        let (discovery_id, resolved) = self.resolve_selection(candidate_ids)?;
+        let (scan_id, resolved) = self.resolve_selection(candidate_ids)?;
         // Rules and path comparison run without the state lock (lock order).
         let policy = self.load_policy()?;
         let (allowed, mut excluded) = split_protected(&policy, resolved);
@@ -224,7 +211,9 @@ impl TinySession {
         let discovery = state
             .discovery
             .as_ref()
-            .filter(|d| d.id == discovery_id)
+            // A scan that finished while the rules were read, whichever
+            // categories it covered: the selection may be stale.
+            .filter(|d| d.id == scan_id)
             .ok_or_else(|| FfiError::PreviewInvalid {
                 detail: "discovery was replaced; scan again".into(),
             })?;
@@ -268,6 +257,10 @@ impl TinySession {
             .iter()
             .map(|(id, plan)| preview_item(discovery, &selected, id, plan))
             .collect();
+        let covered = kept
+            .iter()
+            .map(|(id, plan)| (id.clone(), discovery.covered_ids(id, &plan.item.path)))
+            .collect();
         let plans = || kept.iter().map(|(_, plan)| plan);
         let with = |removal: Removal| move |plan: &&PlannedItem| plan.removal == removal;
         // A requested removal is neither freed nor moved when the run ends.
@@ -298,7 +291,7 @@ impl TinySession {
         };
         state.preview = Some(StoredPreview {
             id: preview_id,
-            discovery_id,
+            covered,
             items: kept,
             expires_at: Instant::now() + ttl,
             expires_at_wall: SystemTime::now() + ttl,
@@ -364,17 +357,16 @@ impl TinySession {
         validate_options(&options)?;
         let home = self.clean_home()?;
         let _gate = self.begin()?;
-        {
-            let mut state = self.clean_state();
-            state.discovery = None;
-            state.preview = None;
-        }
         let report = |p: tiny_core::progress::Progress| progress.on_progress(p.into());
         let ctx = ScanContext::new(Some(token.flag()), probe).refusing_protected_paths(home);
+        // Nothing is stored until the scan completes: a cancelled scan leaves
+        // every category as it was.
         let checked = discover_checked(providers, &ctx, Some(&report));
         if checked.cancelled {
             return Err(FfiError::Cancelled);
         }
+        let covers = (!options.category.is_empty()).then(|| options.category.clone());
+        let options = Arc::new(options);
         let mut state = self.clean_state();
         let id = state.next_id();
         let mut candidates = HashMap::new();
@@ -384,19 +376,25 @@ impl TinySession {
             .map(|category| {
                 let (action, tool) = desktop_action(providers, &category.id, &options);
                 let needs_admin = action == FfiDesktopAction::DeleteAsAdministrator;
-                store_category(id, category, action, tool, needs_admin, &mut candidates)
+                store_category(
+                    id,
+                    &options,
+                    category,
+                    action,
+                    tool,
+                    needs_admin,
+                    &mut candidates,
+                )
             })
             .collect();
-        keep_completable_shared_blocks(&mut candidates);
-        state.discovery = Some(StoredDiscovery {
+        let discovery = state.discovery.get_or_insert_with(Default::default);
+        discovery.merge(Scan {
             id,
-            options,
+            covers,
+            categories,
             candidates,
         });
-        Ok(FfiDiscovery {
-            discovery_id: format!("d{id}"),
-            categories,
-        })
+        Ok(discovery.record())
     }
 
     /// `HOME` checked against the account home before any scan or move.
@@ -473,7 +471,8 @@ fn candidate_evidence(item: &CleanItem) -> Vec<FfiEvidence> {
 }
 
 fn store_category(
-    discovery_id: u64,
+    scan_id: u64,
+    options: &Arc<CleanOptions>,
     category: CheckedCategory,
     desktop_action: FfiDesktopAction,
     tool: Option<DesktopTool>,
@@ -485,6 +484,7 @@ fn store_category(
         .then(|| category_family(&category.id).id().to_string());
     let comes_back = comes_back(&category.id).map(Into::into);
     let section = category_section(&category.id).map(Into::into);
+    let category_id = category.id.clone();
     let mut ffi = FfiCleanCategory {
         id: category.id,
         label: category.label,
@@ -518,7 +518,7 @@ fn store_category(
                 .collect();
             let roots = Arc::new(roots);
             for checked in items {
-                let id = format!("d{discovery_id}-{}", candidates.len());
+                let id = format!("d{scan_id}-{}", candidates.len());
                 let item = checked.item;
                 ffi.total_bytes = ffi.total_bytes.saturating_add(item.size);
                 ffi.candidates.push(FfiCleanCandidate {
@@ -546,10 +546,14 @@ fn store_category(
                         fingerprint: meta.as_ref().map(fingerprint),
                         keep_scope: candidate_scope(desktop_action, &item.path, meta.as_ref()),
                         item,
+                        category: category_id.clone(),
+                        options: options.clone(),
                         roots: roots.clone(),
                         desktop_action,
                         size_is_upper_bound: checked.size_is_upper_bound,
-                        shared: checked.shared,
+                        // Derived once every scanned category is merged.
+                        shared: SharedBlocks::default(),
+                        shared_seen: checked.shared,
                         tool,
                     },
                 );
@@ -565,24 +569,6 @@ fn store_category(
         }
     }
     ffi
-}
-
-/// Drops shared blocks no selection could complete, so the session keeps
-/// only what can change a selection's total. Report-only candidates are
-/// never selected, so theirs go entirely.
-fn keep_completable_shared_blocks(candidates: &mut HashMap<String, StoredCandidate>) {
-    let mut movable = Vec::new();
-    for candidate in candidates.values_mut() {
-        if matches!(
-            candidate.desktop_action,
-            FfiDesktopAction::ReportOnly { .. }
-        ) {
-            candidate.shared = SharedBlocks::default();
-        } else {
-            movable.push(&mut candidate.shared);
-        }
-    }
-    SharedBlocks::retain_completable(&mut movable);
 }
 
 /// Every other candidate of the discovery at `path` or inside it, selected

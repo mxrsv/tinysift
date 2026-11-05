@@ -117,6 +117,34 @@ provider executes; retained overlaps are explained in the existing failure repor
 recorded in `ExecReport.failed` and the run continues; an error from a provider as a whole
 aborts the remaining groups, after earlier groups were already acted on.
 
+## A scan replaces only the categories it covers
+
+`clean_discover` with category IDs scans those categories and, only when the scan completes,
+replaces their candidates ([store](../../crates/tiny-ffi/src/clean/discovery_store.rs)). Every
+other category keeps its candidates, IDs and results; an empty list scans by risk flags and
+replaces everything, which is what a caller that always scans everything sees. The rest follows
+from that, and each part is a trap if it slips:
+
+- **Nothing is stored before the scan completes.** A cancelled or failed scan leaves every
+  category and every preview as it was. A category the scan covered but did not report (its tool
+  or folder is absent) is dropped, because the scan replaced it; one reported as running, failed
+  or unavailable shows that state, not its earlier result.
+- **Candidate IDs are `d{scan}-{n}` with a session-unique scan number**, so a replaced
+  category's old IDs are refused ("scan again") and a kept category's IDs stay valid. Never
+  derive an ID from the merged set's size.
+- **Each candidate holds the options its scan used** (`idle_days`, `all_build_output`, ...).
+  `run_preview` builds providers once per distinct scan's options and keeps only that scan's
+  categories, so a category is never guarded by another scan's options. One scan's worth is the
+  factory's list as is.
+- **Derived values come from the merged set.** Each candidate keeps every shared block its walk
+  saw (`shared_seen`); `shared` is recomputed from them after each merge, because a block one
+  scan cannot complete another can. Covered and overlapping paths are computed at preview time
+  over the merged set.
+- **A preview is stale, not replaced, by a rescan.** `consume_preview` refuses it when a
+  selected candidate is gone or the set of candidates under an item's path changed since the
+  preview was built; a preview of untouched categories runs until its TTL. The operation gate is
+  unchanged: a scan and a run never overlap.
+
 ## The desktop's checked removal
 
 The app never calls `CleanProvider::execute`. `clean_discover` keeps each candidate's path,

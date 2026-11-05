@@ -92,6 +92,13 @@ along. Those overlapping selections are retained and explained in the final repo
   just the folders of apps that are running, without a message. Quit the app and run again
   to see them.
 
+## Scanning in the desktop app
+
+The desktop app can scan some categories without the rest. A scan replaces the results of the
+categories it covers and leaves every other category's results, and a plan already built from
+them, as they were. A scan that is stopped or fails changes nothing. `tiny clean` always scans
+afresh. How the app presents this is in the [desktop guide](../../../tiny-cli/docs/user/desktop.md).
+
 ## Your own files
 
 `downloads-old`, `screenshots-old` and `mail-attachments` hold files nothing recreates; once

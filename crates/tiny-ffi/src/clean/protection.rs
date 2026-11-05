@@ -327,17 +327,15 @@ impl TinySession {
         let Some(discovery) = state.discovery.as_ref() else {
             return (None, Vec::new());
         };
-        let mut views: Vec<CandidateView> = discovery
-            .candidates
-            .iter()
+        let views: Vec<CandidateView> = discovery
+            .candidate_ids()
+            .filter_map(|id| Some((id, discovery.candidates.get(id)?)))
             .map(|(id, candidate)| CandidateView {
-                id: id.clone(),
+                id: id.to_string(),
                 path: candidate.item.path.clone(),
                 keep_scope: candidate.keep_scope,
             })
             .collect();
-        // IDs end in the scan-order index, so length then text is numeric order.
-        views.sort_by(|a, b| (a.id.len(), &a.id).cmp(&(b.id.len(), &b.id)));
         (Some(format!("d{}", discovery.id)), views)
     }
 
@@ -391,7 +389,7 @@ impl TinySession {
     fn change_rules(&self, expected: u64, change: Change) -> Result<FfiProtection, FfiError> {
         let home = self.clean_home()?;
         let _gate = self.begin()?;
-        // After the gate: a scan in flight has no discovery to resolve yet.
+        // After the gate: no scan is replacing the discovery meanwhile.
         let target = match &change {
             Change::Keep(candidate_id) => Some(self.keep_target(candidate_id)?),
             Change::Unkeep(_) => None,
