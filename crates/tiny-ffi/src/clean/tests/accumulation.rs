@@ -237,15 +237,170 @@ fn each_category_keeps_the_options_it_was_scanned_with() {
     remove(&other);
 }
 
+/// `caches` lists `dir/Caches`, `browser` lists what is inside it, and
+/// `logs` lists `other`. With `guard`, each one waits for an app named after
+/// its letter and the scan's idle days ("C10", "B20").
+fn nested(dir: &Path, other: &Path, guard: Option<u64>) -> Vec<Box<dyn CleanProvider>> {
+    let app = |letter: &str| guard.map(|days| -> &'static str { format!("{letter}{days}").leak() });
+    let mut caches = Fixture::new("caches", dir);
+    caches.app = app("C");
+    let mut browser = Fixture::new("browser", &dir.join("Caches"));
+    browser.app = app("B");
+    let mut logs = Fixture::new("logs", other);
+    logs.app = app("L");
+    vec![Box::new(caches), Box::new(browser), Box::new(logs)]
+}
+
+fn nested_dirs(label: &str) -> (PathBuf, PathBuf) {
+    let dir = fixture_dir(label, &[], 0);
+    fs::create_dir(dir.join("Caches")).unwrap();
+    fs::write(dir.join("Caches/x"), b"12").unwrap();
+    (dir, fixture_dir(&format!("{label}-other"), &["y"], 4))
+}
+
 #[test]
-fn a_block_shared_across_categories_scanned_separately_is_counted_once() {
-    let dir = fixture_dir("shared-block", &[], 0);
+fn a_covered_category_from_another_scan_keeps_its_provider() {
+    let (dir, other) = nested_dirs("covered-provider");
+    let session = TestSession::new();
+    let all = nested(&dir, &other, None);
+    scan(&session, &["caches"], &all[..1]).unwrap();
+    scan(&session, &["browser"], &all[1..2]).unwrap();
+    let merged = scan(&session, &["logs"], &all[2..]).unwrap();
+    let builds = Mutex::new(0);
+    let factory = |_: &CleanOptions| {
+        *builds.lock().unwrap() += 1;
+        nested(&dir, &other, None)
+    };
+    let run = |categories: &[&str]| {
+        let selected = categories
+            .iter()
+            .flat_map(|c| candidate_ids(&merged, c))
+            .collect();
+        let preview = session.clean_preview(selected).unwrap();
+        session
+            .execute_clean(
+                &preview.preview_id,
+                &factory,
+                &NotRunning,
+                &FakeTrash::default(),
+                &CancellationToken::default(),
+                &Progress::default(),
+            )
+            .unwrap()
+    };
+
+    // `dir/Caches` carries `browser`'s item, so `browser`'s guards must run.
+    let report = run(&["caches", "logs"]);
+    assert_eq!(outcomes(&report), vec![FfiItemOutcome::MovedToTrash; 2]);
+    assert_eq!(
+        *builds.lock().unwrap(),
+        1,
+        "scans with equal settings share one build"
+    );
+    let report = run(&["caches"]);
+    assert_eq!(outcomes(&report), [FfiItemOutcome::MovedToTrash]);
+    remove(&dir);
+    remove(&other);
+}
+
+#[test]
+fn a_covered_category_is_judged_by_its_own_scans_options() {
+    let (dir, other) = nested_dirs("covered-options");
+    let session = TestSession::new();
+    let with = |category: &str, idle_days| CleanOptions {
+        idle_days,
+        ..covering(&[category])
+    };
+    let all = nested(&dir, &other, None);
+    discover_with(&session, &all[..1], with("caches", 10)).unwrap();
+    let merged = discover_with(&session, &all[1..2], with("browser", 20)).unwrap();
+    let preview = session
+        .clean_preview(candidate_ids(&merged, "caches"))
+        .unwrap();
+
+    let factory = |options: &CleanOptions| nested(&dir, &other, Some(options.idle_days));
+    let probe = RecordingProbe::default();
+    let report = session
+        .execute_clean(
+            &preview.preview_id,
+            &factory,
+            &probe,
+            &FakeTrash::default(),
+            &CancellationToken::default(),
+            &Progress::default(),
+        )
+        .unwrap();
+    assert_eq!(outcomes(&report), [FfiItemOutcome::MovedToTrash]);
+    let mut apps = probe.0.into_inner().unwrap();
+    apps.sort();
+    apps.dedup();
+    assert_eq!(apps, ["B20", "C10"], "browser is judged by 20 days");
+    remove(&dir);
+    remove(&other);
+}
+
+#[test]
+fn the_category_list_reaches_core_options() {
+    let options = FfiCleanOptions {
+        categories: vec!["a".into()],
+        include_review: true,
+        include_destructive: false,
+        idle_days: 30,
+        all_build_output: true,
+        include_trash: true,
+        tool_commands: true,
+    };
+    assert_eq!(CleanOptions::from(options).category, ["a"]);
+}
+
+/// `logs` and `targets` each hold an `own` file and one link of `linked`.
+fn shared_block_dir(label: &str) -> PathBuf {
+    let dir = fixture_dir(label, &[], 0);
     for name in ["logs", "targets"] {
         fs::create_dir(dir.join(name)).unwrap();
         fs::write(dir.join(name).join("own"), [1u8; 9000]).unwrap();
     }
     fs::write(dir.join("logs/linked"), [2u8; 50_000]).unwrap();
     fs::hard_link(dir.join("logs/linked"), dir.join("targets/linked")).unwrap();
+    dir
+}
+
+#[test]
+fn a_rescan_that_empties_a_category_drops_the_blocks_it_completed() {
+    let dir = shared_block_dir("shared-emptied");
+    let session = TestSession::new();
+    let logs = scan(
+        &session,
+        &["user-logs"],
+        &one("user-logs", &dir.join("logs")),
+    )
+    .unwrap();
+    let logs_id = &id_of(&logs, "linked");
+    let targets = &one("rust-targets", &dir.join("targets"));
+    scan(&session, &["rust-targets"], targets).unwrap();
+    let shares = || {
+        let state = session.clean_state();
+        let discovery = state.discovery.as_ref().unwrap();
+        !discovery.candidates[logs_id.as_str()].shared.is_empty()
+    };
+    assert!(shares(), "targets can complete the linked block");
+
+    for name in ["own", "linked"] {
+        fs::remove_file(dir.join("targets").join(name)).unwrap();
+    }
+    let emptied = scan(&session, &["rust-targets"], targets).unwrap();
+    assert!(candidate_ids(&emptied, "rust-targets").is_empty());
+    assert!(!shares(), "nothing left can complete it");
+    let rest = session
+        .clean_preview_with_mode(ids(&emptied), FfiDeleteMode::Permanent)
+        .unwrap();
+    assert_eq!(rest.bytes_to_free, allocated(&dir.join("logs/own")));
+    remove(&dir);
+}
+
+#[test]
+fn a_block_shared_across_categories_scanned_separately_is_counted_once() {
+    let dir = shared_block_dir("shared-block");
     let session = TestSession::new();
     let permanent = |ids| session.clean_preview_with_mode(ids, FfiDeleteMode::Permanent);
 
@@ -349,9 +504,46 @@ fn a_preview_of_a_rescanned_category_is_refused_unspent() {
     scan(&session, &["other"], &one("other", &other)).unwrap();
     let trash = FakeTrash::default();
     let token = CancellationToken::default();
-    let run = execute(&session, &preview.preview_id, &dir, &trash, &token);
-    assert!(invalid(run));
+    // A spent preview would answer "already used" the second time.
+    for _ in 0..2 {
+        match execute(&session, &preview.preview_id, &dir, &trash, &token) {
+            Err(FfiError::PreviewInvalid { detail }) => assert!(
+                detail.contains("rescanned"),
+                "the refusal names the rescan: {detail}"
+            ),
+            other => panic!("expected a stale preview, got {other:?}"),
+        }
+    }
     assert!(trash.steps().is_empty(), "nothing moved");
+    remove(&dir);
+    remove(&other);
+}
+
+#[test]
+fn a_rescan_that_drops_a_child_under_a_previewed_path_makes_the_preview_stale() {
+    let (dir, other) = nested_dirs("shrunk");
+    let session = TestSession::new();
+    let all = nested(&dir, &other, None);
+    scan(&session, &["caches"], &all[..1]).unwrap();
+    let merged = scan(&session, &["browser"], &all[1..2]).unwrap();
+    let preview = session
+        .clean_preview(candidate_ids(&merged, "caches"))
+        .unwrap();
+
+    // `browser` no longer lists anything inside the previewed folder.
+    scan(&session, &["browser"], &[]).unwrap();
+    let trash = FakeTrash::default();
+    let providers = |_: &CleanOptions| nested(&dir, &other, None);
+    let run = session.execute_clean(
+        &preview.preview_id,
+        &providers,
+        &NotRunning,
+        &trash,
+        &CancellationToken::default(),
+        &Progress::default(),
+    );
+    assert!(invalid(run));
+    assert!(trash.steps().is_empty());
     remove(&dir);
     remove(&other);
 }

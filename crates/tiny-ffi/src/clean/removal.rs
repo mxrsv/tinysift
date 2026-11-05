@@ -335,58 +335,61 @@ impl TinySession {
             return Err(FfiError::ProtectionChanged);
         }
         preview.consumed = true;
+        // Every candidate an item carries along is gated by its provider
+        // too; the check above made the covered IDs current.
         let scanned_with = scanned_with(
             preview
                 .items
                 .iter()
-                .map(|(id, _)| &discovery.candidates[id]),
+                .flat_map(|(id, _)| std::iter::once(id).chain(preview.covered[id].iter()))
+                .map(|id| &discovery.candidates[id]),
         );
         Ok((preview.items.clone(), scanned_with))
     }
 }
 
-/// The options each category of a run was scanned with: categories scanned
-/// together share one entry.
-type ScannedWith = Vec<(Arc<CleanOptions>, BTreeSet<String>)>;
+/// The options the run's categories were scanned with, one entry per
+/// distinct value, each with the categories scanned that way.
+type ScannedWith = Vec<(CleanOptions, BTreeSet<String>)>;
 
 fn scanned_with<'a>(candidates: impl Iterator<Item = &'a StoredCandidate>) -> ScannedWith {
     let mut groups: ScannedWith = Vec::new();
     for candidate in candidates {
-        let group = match groups
-            .iter_mut()
-            .find(|(options, _)| Arc::ptr_eq(options, &candidate.options))
-        {
+        // The category list only chose what the scan covered; no provider
+        // is built from it, so scans that differ only there share one build.
+        let options = CleanOptions {
+            category: Vec::new(),
+            ..candidate.options.as_ref().clone()
+        };
+        let group = match groups.iter_mut().find(|(other, _)| *other == options) {
             Some(group) => group,
             None => {
-                groups.push((candidate.options.clone(), BTreeSet::new()));
+                groups.push((options, BTreeSet::new()));
                 groups.last_mut().expect("just pushed")
             }
         };
-        group.1.insert(candidate.category.clone());
+        // The executor looks providers up by the item's category.
+        group.1.insert(candidate.item.category_id.clone());
     }
     groups
 }
 
 /// The providers of the run's categories, each built from the options its
-/// category was scanned with (`docs/internals/clean.md`). One scan's worth is
-/// the factory's list as is; several are cut to their own categories, so a
-/// category is never judged by another scan's options.
+/// category was scanned with (`docs/internals/clean.md`): one build per
+/// distinct options, cut to the categories scanned with them, so a category
+/// is never judged by another scan's options.
 fn providers_scanned_with(
     factory: ProviderFactory<'_>,
     scanned_with: &ScannedWith,
 ) -> Vec<Box<dyn CleanProvider>> {
-    match scanned_with.as_slice() {
-        [] => Vec::new(),
-        [(options, _)] => factory(options),
-        groups => groups
-            .iter()
-            .flat_map(|(options, categories)| {
-                factory(options)
-                    .into_iter()
-                    .filter(|provider| categories.contains(provider.id()))
-            })
-            .collect(),
-    }
+    scanned_with
+        .iter()
+        .flat_map(|(options, categories)| {
+            factory(options)
+                .into_iter()
+                .filter(|provider| categories.contains(provider.id()))
+        })
+        .collect()
 }
 
 pub(super) fn exec_report(

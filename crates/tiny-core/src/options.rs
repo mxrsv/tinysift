@@ -21,7 +21,7 @@ pub enum ScanSort {
     Path,
 }
 
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanOptions {
     pub category: Vec<String>,

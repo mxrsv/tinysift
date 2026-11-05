@@ -133,9 +133,12 @@ from that, and each part is a trap if it slips:
   category's old IDs are refused ("scan again") and a kept category's IDs stay valid. Never
   derive an ID from the merged set's size.
 - **Each candidate holds the options its scan used** (`idle_days`, `all_build_output`, ...).
-  `run_preview` builds providers once per distinct scan's options and keeps only that scan's
-  categories, so a category is never guarded by another scan's options. One scan's worth is the
-  factory's list as is.
+  [`providers_scanned_with`](../../crates/tiny-ffi/src/clean/removal.rs) builds providers once
+  per distinct options value and keeps only the categories scanned with it, so a category is never
+  guarded by another scan's options. The categories counted are those of the run's items and of
+  every candidate an item covers, which the executor gates too; a covered category left out is
+  skipped as `UnknownCategory`. Options are compared without the category list, which no provider
+  reads, so scans with equal settings share one build.
 - **Derived values come from the merged set.** Each candidate keeps every shared block its walk
   saw (`shared_seen`); `shared` is recomputed from them after each merge, because a block one
   scan cannot complete another can. Covered and overlapping paths are computed at preview time
