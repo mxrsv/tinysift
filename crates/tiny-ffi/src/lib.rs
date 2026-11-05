@@ -98,6 +98,10 @@ pub struct FfiProgress {
     pub completed: u64,
     pub total: Option<u64>,
     pub message: String,
+    /// Scan only: bytes found so far in this run, each path counted once.
+    pub found_bytes: Option<u64>,
+    /// Scan only: the category finished most recently before this event.
+    pub category: Option<String>,
 }
 
 impl From<tiny_core::progress::Progress> for FfiProgress {
@@ -107,6 +111,8 @@ impl From<tiny_core::progress::Progress> for FfiProgress {
             completed: progress.completed,
             total: progress.total,
             message: progress.message,
+            found_bytes: progress.found_bytes,
+            category: progress.category,
         }
     }
 }
@@ -145,6 +151,8 @@ mod tests {
             completed: 2,
             total: Some(4),
             message: "Xcode DerivedData".into(),
+            found_bytes: Some(7),
+            category: Some("xcode-derived".into()),
         };
         assert_eq!(
             FfiProgress::from(progress),
@@ -153,6 +161,8 @@ mod tests {
                 completed: 2,
                 total: Some(4),
                 message: "Xcode DerivedData".into(),
+                found_bytes: Some(7),
+                category: Some("xcode-derived".into()),
             }
         );
     }

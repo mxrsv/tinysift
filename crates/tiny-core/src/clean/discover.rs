@@ -298,6 +298,7 @@ pub fn discover_checked(
 ) -> CheckedDiscovery {
     let total = providers.len() as u64;
     let mut categories = Vec::new();
+    let mut so_far = FoundSoFar::default();
     for (index, provider) in providers.iter().enumerate() {
         if ctx.is_cancelled() {
             return CheckedDiscovery {
@@ -305,13 +306,7 @@ pub fn discover_checked(
                 cancelled: true,
             };
         }
-        crate::progress::report(
-            progress,
-            "scan",
-            index as u64,
-            Some(total),
-            provider.label(),
-        );
+        so_far.report(progress, index as u64, total, provider.label());
         let outcome = discover_one(provider.as_ref(), ctx);
         let findings = ctx.take_findings();
         if ctx.is_cancelled() {
@@ -329,6 +324,7 @@ pub fn discover_checked(
             Some(Err(outcome)) => outcome,
             None => continue,
         };
+        so_far.add(provider.id(), &outcome);
         // Empty categories stay: the desktop lists what was checked and found nothing.
         categories.push(CheckedCategory {
             id: provider.id().to_string(),
@@ -338,10 +334,50 @@ pub fn discover_checked(
             outcome,
         });
     }
-    crate::progress::report(progress, "scan", total, Some(total), "Discovery complete");
+    so_far.report(progress, total, total, "Discovery complete");
     CheckedDiscovery {
         categories,
         cancelled: false,
+    }
+}
+
+/// Bytes found by the categories finished so far, for scan progress. A path
+/// listed by several categories counts once; a path inside another listed
+/// path counts in both, so this can exceed what a Clean would free.
+#[derive(Default)]
+struct FoundSoFar {
+    bytes: u64,
+    paths: std::collections::HashSet<PathBuf>,
+    last_category: Option<String>,
+}
+
+impl FoundSoFar {
+    fn add(&mut self, id: &str, outcome: &CategoryOutcome) {
+        if let CategoryOutcome::Found { items, .. } = outcome {
+            for checked in items {
+                if self.paths.insert(checked.item.path.clone()) {
+                    self.bytes = self.bytes.saturating_add(checked.item.size);
+                }
+            }
+        }
+        self.last_category = Some(id.to_string());
+    }
+
+    fn report(
+        &self,
+        progress: crate::progress::ProgressCallback<'_>,
+        completed: u64,
+        total: u64,
+        message: &str,
+    ) {
+        crate::progress::report_scan(
+            progress,
+            completed,
+            total,
+            message,
+            self.bytes,
+            self.last_category.as_deref(),
+        );
     }
 }
 

@@ -364,6 +364,46 @@ mod checked {
     }
 
     #[test]
+    fn progress_carries_bytes_found_so_far_counting_each_path_once() {
+        use std::os::unix::fs::MetadataExt;
+        use std::sync::Mutex;
+        let root = fixture_root("found-bytes");
+        let missing = std::env::temp_dir().join("tiny-discover-found-bytes-missing");
+        let size = std::fs::symlink_metadata(root.join("child/file"))
+            .unwrap()
+            .blocks()
+            * 512;
+        // "twin" lists the same path as "first": it adds nothing.
+        let providers: Vec<Box<dyn CleanProvider>> = vec![
+            Box::new(Fixture::new("first", &root)),
+            Box::new(Fixture::new("twin", &root)),
+            Box::new(Fixture::new("empty", &missing)),
+        ];
+        let events = Mutex::new(Vec::new());
+        let record = |p: crate::progress::Progress| events.lock().unwrap().push(p);
+        let ctx = ScanContext::unchecked();
+        discover_checked(&providers, &ctx, Some(&record));
+        let seen: Vec<(u64, Option<u64>, Option<String>)> = events
+            .into_inner()
+            .unwrap()
+            .into_iter()
+            .map(|p| (p.completed, p.found_bytes, p.category))
+            .collect();
+        let after_first = (Some(size), Some("first".to_string()));
+        assert_eq!(
+            seen,
+            vec![
+                (0, Some(0), None),
+                (1, after_first.0, after_first.1.clone()),
+                (2, Some(size), Some("twin".into())),
+                (3, Some(size), Some("empty".into())),
+            ]
+        );
+        assert!(size > 0);
+        let _ = crate::clean::fs_safe::remove_recursive_safe(&root);
+    }
+
+    #[test]
     fn a_category_that_finds_nothing_is_still_reported() {
         let missing = std::env::temp_dir().join("tiny-discover-nothing-here-missing");
         let providers: Vec<Box<dyn CleanProvider>> =

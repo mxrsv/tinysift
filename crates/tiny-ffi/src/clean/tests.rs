@@ -40,10 +40,17 @@ fn preview_is_built_from_discovered_ids_only() {
             &progress,
         )
         .unwrap();
-    assert!(
-        !progress.0.lock().unwrap().is_empty(),
-        "progress reached the caller"
-    );
+    {
+        let events = progress.0.lock().unwrap();
+        assert!(!events.is_empty(), "progress reached the caller");
+        let last = events.last().unwrap();
+        assert_eq!(last.category.as_deref(), Some("logs"));
+        assert_eq!(
+            last.found_bytes,
+            Some(allocated(&dir.join("a")) + allocated(&dir.join("b"))),
+            "the last event carries the scan's total"
+        );
+    }
     let category = &discovery.categories[0];
     assert_eq!(category.status, FfiCategoryStatus::Found);
     assert_eq!(category.desktop_action, FfiDesktopAction::MoveToTrash);
