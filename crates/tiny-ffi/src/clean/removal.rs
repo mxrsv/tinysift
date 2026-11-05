@@ -3,7 +3,7 @@
 //! apart. `clean_execute` and its report stay as they were for previews
 //! that only move to the Trash.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime};
@@ -23,8 +23,8 @@ use tiny_core::options::CleanOptions;
 use super::protection::protection_error;
 use super::records::skip_reason;
 use super::{
-    app_runner, unselected_review, FfiExecReport, FfiItemResult, FfiSkipReason, FfiStopReason,
-    ProviderFactory, StoredCandidate,
+    app_runner, covers_unselected_review, unselected_review, FfiExecReport, FfiItemResult,
+    FfiSkipReason, FfiStopReason, ProviderFactory, StoredCandidate,
 };
 use crate::session::CancellationToken;
 use crate::{FfiError, ProgressListener, TinySession};
@@ -313,21 +313,40 @@ impl TinySession {
         let discovery = discovery.ok_or_else(|| invalid("discovery was replaced"))?;
         // A scan replaces the categories it covers and keeps the IDs of the
         // rest, so a preview is stale only when a candidate it selected is
-        // gone, or the set of candidates its paths cover changed.
-        if preview
-            .selected
-            .iter()
-            .any(|id| !discovery.candidates.contains_key(id))
-            || preview.items.iter().any(|(id, plan)| {
-                preview.covered.get(id) != Some(&discovery.covered_ids(id, &plan.item.path))
-            })
-        {
-            return Err(invalid("a category was rescanned; scan again"));
-        }
-        // Defense in depth for PC-C3: preview already excluded these.
-        if preview.items.iter().any(|(id, plan)| {
+        // gone, or the set of candidates its paths cover changed. Every scan
+        // gives the discovery a new ID, so while it is still the one the
+        // preview was built on, nothing changed and that pass is skipped.
+        let rescanned = discovery.id != preview.discovery_id;
+        if rescanned {
+            if preview
+                .selected
+                .iter()
+                .any(|id| !discovery.candidates.contains_key(id))
+            {
+                return Err(invalid("a category was rescanned; scan again"));
+            }
+            // One pass per item serves the coverage check and PC-C3 below.
+            let mut unselected_review = false;
+            for (id, plan) in &preview.items {
+                let covered = discovery.covered(id, &plan.item.path);
+                let unchanged = preview.covered.get(id).is_some_and(|before| {
+                    before
+                        .iter()
+                        .map(String::as_str)
+                        .eq(covered.iter().map(|(other, _)| *other))
+                });
+                if !unchanged {
+                    return Err(invalid("a category was rescanned; scan again"));
+                }
+                unselected_review |= covers_unselected_review(&covered, &preview.selected);
+            }
+            if unselected_review {
+                return Err(invalid("an item would move an unselected review item"));
+            }
+        } else if preview.items.iter().any(|(id, plan)| {
             !unselected_review(discovery, id, &plan.item.path, &preview.selected).is_empty()
         }) {
+            // Defense in depth for PC-C3: preview already excluded these.
             return Err(invalid("an item would move an unselected review item"));
         }
         if preview.policy != *policy {
@@ -354,22 +373,33 @@ type ScannedWith = Vec<(CleanOptions, BTreeSet<String>)>;
 
 fn scanned_with<'a>(candidates: impl Iterator<Item = &'a StoredCandidate>) -> ScannedWith {
     let mut groups: ScannedWith = Vec::new();
+    // A scan's candidates share one `Arc`, so each is compared by value once.
+    // The candidates outlive the loop, so a pointer names one `Arc` throughout.
+    let mut by_arc: HashMap<*const CleanOptions, usize> = HashMap::new();
     for candidate in candidates {
-        // The category list only chose what the scan covered; no provider
-        // is built from it, so scans that differ only there share one build.
-        let options = CleanOptions {
-            category: Vec::new(),
-            ..candidate.options.as_ref().clone()
-        };
-        let group = match groups.iter_mut().find(|(other, _)| *other == options) {
-            Some(group) => group,
-            None => {
-                groups.push((options, BTreeSet::new()));
-                groups.last_mut().expect("just pushed")
-            }
-        };
+        let index = *by_arc
+            .entry(Arc::as_ptr(&candidate.options))
+            .or_insert_with(|| {
+                // The category list only chose what the scan covered; no
+                // provider is built from it, so scans that differ only there
+                // share one build.
+                let options = CleanOptions {
+                    category: Vec::new(),
+                    ..candidate.options.as_ref().clone()
+                };
+                groups
+                    .iter()
+                    .position(|(other, _)| *other == options)
+                    .unwrap_or_else(|| {
+                        groups.push((options, BTreeSet::new()));
+                        groups.len() - 1
+                    })
+            });
         // The executor looks providers up by the item's category.
-        group.1.insert(candidate.item.category_id.clone());
+        let categories = &mut groups[index].1;
+        if !categories.contains(&candidate.item.category_id) {
+            categories.insert(candidate.item.category_id.clone());
+        }
     }
     groups
 }

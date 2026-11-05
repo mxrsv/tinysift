@@ -493,6 +493,41 @@ fn a_preview_of_untouched_categories_survives_a_rescan_of_another() {
 }
 
 #[test]
+fn a_preview_on_the_latest_scan_skips_the_stale_pass() {
+    let dir = fixture_dir("fast-path", &["x"], 4);
+    let other = fixture_dir("fast-path-other", &["y"], 4);
+    let session = TestSession::new();
+    scan(&session, &["logs"], &one("logs", &dir)).unwrap();
+    let merged = scan(&session, &["other"], &one("other", &other)).unwrap();
+    let trash = FakeTrash::default();
+    let token = CancellationToken::default();
+    // A selected candidate no scan ever stored: only the stale pass sees it.
+    let forge = |preview_id: &str| {
+        let mut state = session.clean_state();
+        let preview = state.preview.as_mut().unwrap();
+        assert_eq!(preview.id, preview_id);
+        preview.selected.insert("d0-gone".into());
+    };
+
+    let preview = session
+        .clean_preview(candidate_ids(&merged, "logs"))
+        .unwrap();
+    forge(&preview.preview_id);
+    let run = execute(&session, &preview.preview_id, &dir, &trash, &token).unwrap();
+    assert_eq!(outcomes(&run), vec![FfiItemOutcome::MovedToTrash]);
+
+    let preview = session
+        .clean_preview(candidate_ids(&merged, "logs"))
+        .unwrap();
+    forge(&preview.preview_id);
+    scan(&session, &["other"], &one("other", &other)).unwrap();
+    let run = execute(&session, &preview.preview_id, &dir, &trash, &token);
+    assert!(invalid(run), "a scan since makes the stale pass run");
+    remove(&dir);
+    remove(&other);
+}
+
+#[test]
 fn a_preview_of_a_rescanned_category_is_refused_unspent() {
     let dir = fixture_dir("stale", &["x"], 4);
     let other = fixture_dir("stale-other", &["y"], 4);

@@ -28,9 +28,9 @@ pub(super) struct StoredDiscovery {
 }
 
 pub(super) struct StoredCandidate {
+    /// `item.category_id` is the category it was found in
+    /// (`FfiCleanCategory::id`).
     pub(super) item: CleanItem,
-    /// The category it was found in (`FfiCleanCategory::id`).
-    pub(super) category: String,
     /// The options its category was scanned with; removal rebuilds the
     /// category's provider from them.
     pub(super) options: Arc<CleanOptions>,
@@ -67,18 +67,26 @@ impl StoredDiscovery {
     pub(super) fn merge(&mut self, scan: Scan) {
         let Some(covers) = scan.covers else {
             // A full scan is the whole picture, in scan order.
+            let shares =
+                shares_blocks(self.candidates.values()) || shares_blocks(scan.candidates.values());
             self.categories = scan.categories;
             self.candidates = scan.candidates;
             self.id = scan.id;
-            self.keep_completable_shared_blocks();
+            if shares {
+                self.keep_completable_shared_blocks();
+            }
             return;
         };
         let replaced: HashSet<String> = covers
             .into_iter()
             .chain(scan.categories.iter().map(|c| c.id.clone()))
             .collect();
+        let in_replaced =
+            |candidate: &StoredCandidate| replaced.contains(&candidate.item.category_id);
+        let shares = shares_blocks(self.candidates.values().filter(|c| in_replaced(c)))
+            || shares_blocks(scan.candidates.values());
         self.candidates
-            .retain(|_, candidate| !replaced.contains(&candidate.category));
+            .retain(|_, candidate| !in_replaced(candidate));
         let mut fresh: Vec<Option<FfiCleanCategory>> =
             scan.categories.into_iter().map(Some).collect();
         let mut merged = Vec::with_capacity(self.categories.len() + fresh.len());
@@ -96,7 +104,9 @@ impl StoredDiscovery {
         self.categories = merged;
         self.candidates.extend(scan.candidates);
         self.id = scan.id;
-        self.keep_completable_shared_blocks();
+        if shares {
+            self.keep_completable_shared_blocks();
+        }
     }
 
     /// The merged set, as the caller shows it.
@@ -117,7 +127,9 @@ impl StoredDiscovery {
     /// Drops the shared blocks no selection could complete, so a selection's
     /// total counts a block shared across categories once and only when it
     /// holds every link. Report-only candidates are never selected, so theirs
-    /// go entirely. Derived from everything seen, over the merged set.
+    /// go entirely. Derived from everything seen, over the merged set. Only
+    /// the candidates' blocks decide it, so a merge that dropped and added
+    /// none with blocks (`shares_blocks`) leaves it as it was.
     fn keep_completable_shared_blocks(&mut self) {
         let mut movable = Vec::new();
         for candidate in self.candidates.values_mut() {
@@ -134,16 +146,21 @@ impl StoredDiscovery {
         SharedBlocks::retain_completable(&mut movable);
     }
 
-    /// Every other candidate at `path` or inside it, selected or not, by ID.
-    /// Moving `path` moves them too.
-    pub(super) fn covered_ids(&self, id: &str, path: &Path) -> Vec<String> {
-        let mut ids: Vec<String> = self
+    /// Every other candidate at `path` or inside it, selected or not, sorted
+    /// by ID. Moving `path` moves them too.
+    pub(super) fn covered(&self, id: &str, path: &Path) -> Vec<(&str, &StoredCandidate)> {
+        let mut covered: Vec<_> = self
             .candidates
             .iter()
             .filter(|(other, candidate)| *other != id && candidate.item.path.starts_with(path))
-            .map(|(other, _)| other.clone())
+            .map(|(other, candidate)| (other.as_str(), candidate))
             .collect();
-        ids.sort();
-        ids
+        covered.sort_unstable_by_key(|(other, _)| *other);
+        covered
     }
+}
+
+/// Whether any of the candidates saw a shared block.
+fn shares_blocks<'a>(mut candidates: impl Iterator<Item = &'a StoredCandidate>) -> bool {
+    candidates.any(|candidate| !candidate.shared_seen.is_empty())
 }

@@ -81,6 +81,9 @@ pub(crate) struct CleanState {
 
 struct StoredPreview {
     id: String,
+    /// The scan the preview was built on (`StoredDiscovery::id`). While it is
+    /// still the latest, no candidate changed since.
+    discovery_id: u64,
     /// `(candidate ID, plan)` in execution order.
     items: Vec<(String, PlannedItem)>,
     /// Per item, the other candidates its path covers when the preview was
@@ -218,6 +221,7 @@ impl TinySession {
                 detail: "discovery was replaced; scan again".into(),
             })?;
         let mut planned = Vec::new();
+        let discovery_id = discovery.id;
         // PC-C3 before overlaps: a blocked ancestor must not hide its selected children.
         for (id, plan) in allowed {
             let review = unselected_review(discovery, &id, &plan.item.path, &selected);
@@ -234,8 +238,13 @@ impl TinySession {
             }
         }
         let (mut kept, covered) = partition_overlaps(planned, |(_, plan)| plan.item.path.as_path());
+        let mut covered_ids = Vec::with_capacity(kept.len());
+        let mut shown_covers = Vec::with_capacity(kept.len());
         for (id, plan) in &mut kept {
-            plan.covers = covered_candidates(discovery, id, &plan.item.path);
+            let found = discovery.covered(id, &plan.item.path);
+            plan.covers = covered_items(&found);
+            covered_ids.push(found.iter().map(|(other, _)| other.to_string()).collect());
+            shown_covers.push(shown_covers_of(&found, &selected));
             let candidate = discovery.candidates.get(id.as_str());
             plan.removal = match candidate.map(|c| c.desktop_action) {
                 Some(FfiDesktopAction::EmptyTrash) => Removal::EmptyTrash,
@@ -255,11 +264,13 @@ impl TinySession {
         );
         let items = kept
             .iter()
-            .map(|(id, plan)| preview_item(discovery, &selected, id, plan))
+            .zip(shown_covers)
+            .map(|((id, plan), covers)| preview_item(id, plan, covers))
             .collect();
         let covered = kept
             .iter()
-            .map(|(id, plan)| (id.clone(), discovery.covered_ids(id, &plan.item.path)))
+            .zip(covered_ids)
+            .map(|((id, _), ids)| (id.clone(), ids))
             .collect();
         let plans = || kept.iter().map(|(_, plan)| plan);
         let with = |removal: Removal| move |plan: &&PlannedItem| plan.removal == removal;
@@ -291,6 +302,7 @@ impl TinySession {
         };
         state.preview = Some(StoredPreview {
             id: preview_id,
+            discovery_id,
             covered,
             items: kept,
             expires_at: Instant::now() + ttl,
@@ -484,7 +496,6 @@ fn store_category(
         .then(|| category_family(&category.id).id().to_string());
     let comes_back = comes_back(&category.id).map(Into::into);
     let section = category_section(&category.id).map(Into::into);
-    let category_id = category.id.clone();
     let mut ffi = FfiCleanCategory {
         id: category.id,
         label: category.label,
@@ -546,7 +557,6 @@ fn store_category(
                         fingerprint: meta.as_ref().map(fingerprint),
                         keep_scope: candidate_scope(desktop_action, &item.path, meta.as_ref()),
                         item,
-                        category: category_id.clone(),
                         options: options.clone(),
                         roots: roots.clone(),
                         desktop_action,
@@ -571,23 +581,42 @@ fn store_category(
     ffi
 }
 
-/// Every other candidate of the discovery at `path` or inside it, selected
-/// or not. Moving `path` moves them too, so their providers' guards and app
-/// gates must hold (e.g. streaming-caches' Spotify gate on a user-caches
-/// folder). Sorted so the checks run in a stable order.
-fn covered_candidates(discovery: &StoredDiscovery, id: &str, path: &Path) -> Vec<CleanItem> {
-    let mut covered: Vec<CleanItem> = discovery
-        .candidates
+/// The items of the candidates a path covers (`StoredDiscovery::covered`):
+/// moving the path moves them too, so their providers' guards and app gates
+/// must hold (e.g. streaming-caches' Spotify gate on a user-caches folder).
+/// Sorted so the checks run in a stable order.
+fn covered_items(covered: &[(&str, &StoredCandidate)]) -> Vec<CleanItem> {
+    let mut items: Vec<CleanItem> = covered
         .iter()
-        .filter(|(other, candidate)| *other != id && candidate.item.path.starts_with(path))
         .map(|(_, candidate)| candidate.item.clone())
         .collect();
-    covered.sort_by(|a, b| (&a.path, &a.category_id).cmp(&(&b.path, &b.category_id)));
+    items.sort_by(|a, b| (&a.path, &a.category_id).cmp(&(&b.path, &b.category_id)));
+    items
+}
+
+/// A review-risk candidate the user did not select. Moving a path that
+/// covers it would move it without explicit consent.
+fn is_unselected_review(
+    id: &str,
+    candidate: &StoredCandidate,
+    selected: &BTreeSet<String>,
+) -> bool {
+    candidate.item.risk != RiskLevel::Safe && !selected.contains(id)
+}
+
+/// Whether `covered` holds a review candidate the user did not select.
+fn covers_unselected_review(
+    covered: &[(&str, &StoredCandidate)],
+    selected: &BTreeSet<String>,
+) -> bool {
     covered
+        .iter()
+        .any(|(other, candidate)| is_unselected_review(other, candidate, selected))
 }
 
 /// Review-risk candidates at `path` or inside it that the user did not
-/// select, sorted. Moving `path` would move them without explicit consent.
+/// select, sorted. The cheap test runs first: few candidates are not safe,
+/// and the path comparison is the costly one.
 fn unselected_review(
     discovery: &StoredDiscovery,
     id: &str,
@@ -599,9 +628,8 @@ fn unselected_review(
         .iter()
         .filter(|(other, candidate)| {
             *other != id
-                && candidate.item.risk != RiskLevel::Safe
+                && is_unselected_review(other, candidate, selected)
                 && candidate.item.path.starts_with(path)
-                && !selected.contains(*other)
         })
         .map(|(other, _)| other.clone())
         .collect();
@@ -683,26 +711,24 @@ fn exclusion(
     }
 }
 
-fn preview_item(
-    discovery: &StoredDiscovery,
+fn shown_covers_of(
+    covered: &[(&str, &StoredCandidate)],
     selected: &BTreeSet<String>,
-    id: &str,
-    plan: &PlannedItem,
-) -> FfiPreviewItem {
-    let mut covers: Vec<FfiCoveredCandidate> = discovery
-        .candidates
+) -> Vec<FfiCoveredCandidate> {
+    let mut covers: Vec<FfiCoveredCandidate> = covered
         .iter()
-        .filter(|(other, candidate)| {
-            *other != id && candidate.item.path.starts_with(&plan.item.path)
-        })
         .map(|(other, candidate)| FfiCoveredCandidate {
-            candidate_id: other.clone(),
+            candidate_id: other.to_string(),
             path: candidate.item.path.to_string_lossy().into_owned(),
             risk: candidate.item.risk.into(),
-            selected: selected.contains(other),
+            selected: selected.contains(*other),
         })
         .collect();
     covers.sort_by(|a, b| (&a.path, &a.candidate_id).cmp(&(&b.path, &b.candidate_id)));
+    covers
+}
+
+fn preview_item(id: &str, plan: &PlannedItem, covers: Vec<FfiCoveredCandidate>) -> FfiPreviewItem {
     FfiPreviewItem {
         candidate_id: id.to_string(),
         category_id: plan.item.category_id.clone(),
