@@ -15,7 +15,8 @@ use std::sync::{Arc, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
 use tiny_core::clean::discover::{
-    discover_checked, select_providers_with, validate_options, CategoryOutcome, CheckedCategory,
+    discover_checked_counting, select_providers_with, validate_options, CategoryOutcome,
+    CheckedCategory,
 };
 use tiny_core::clean::freed_size::SharedBlocks;
 use tiny_core::clean::fs_safe::PathFingerprint;
@@ -275,17 +276,16 @@ impl TinySession {
             .collect();
         let plans = || kept.iter().map(|(_, plan)| plan);
         let with = |removal: Removal| move |plan: &&PlannedItem| plan.removal == removal;
-        // A requested removal is neither freed nor moved when the run ends.
+        // A requested removal is neither freed nor moved when the run ends,
+        // and a prune has no estimate of its own (`bytes_prune_up_to`).
         let frees = |plan: &&PlannedItem| {
             matches!(
                 plan.removal,
-                Removal::Delete
-                    | Removal::DeleteAsAdministrator
-                    | Removal::EmptyTrash
-                    | Removal::RunTool(DesktopTool::Prune)
+                Removal::Delete | Removal::DeleteAsAdministrator | Removal::EmptyTrash
             )
         };
         let (bytes_to_free, bytes_to_free_is_upper_bound) = freed_together(plans().filter(frees));
+        let prune = Removal::RunTool(DesktopTool::Prune);
         let request = Removal::RunTool(DesktopTool::Request);
         let as_admin = Removal::DeleteAsAdministrator;
         let preview_id = format!("p{}", state.next_id());
@@ -300,6 +300,7 @@ impl TinySession {
             bytes_to_trash: total_size(plans().filter(with(Removal::MoveToTrash)).map(|p| &p.item)),
             bytes_requested: total_size(plans().filter(with(request)).map(|p| &p.item)),
             bytes_needing_admin: total_size(plans().filter(with(as_admin)).map(|p| &p.item)),
+            bytes_prune_up_to: total_size(plans().filter(with(prune)).map(|p| &p.item)),
         };
         state.preview = Some(StoredPreview {
             id: preview_id,
@@ -374,7 +375,17 @@ impl TinySession {
         let ctx = ScanContext::new(Some(token.flag()), probe).refusing_protected_paths(home);
         // Nothing is stored until the scan completes: a cancelled scan leaves
         // every category as it was.
-        let checked = discover_checked(providers, &ctx, Some(&report));
+        // The found figure counts only what a Clean surely frees (FG1).
+        let surely_frees = |provider: &dyn CleanProvider| {
+            matches!(
+                desktop_action(providers, provider.id(), &options),
+                (
+                    FfiDesktopAction::MoveToTrash | FfiDesktopAction::EmptyTrash,
+                    None
+                )
+            )
+        };
+        let checked = discover_checked_counting(providers, &ctx, Some(&report), &surely_frees);
         if checked.cancelled {
             return Err(FfiError::Cancelled);
         }

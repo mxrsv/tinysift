@@ -305,11 +305,11 @@ pub struct FfiPreview {
     /// Sum of `items` sizes as measured at discovery. Not freed space.
     pub bytes_selected: u64,
     pub expires_in_seconds: u64,
-    /// What the deleted items, prunes and the Trash row free together: their
+    /// What the deleted items and the Trash row surely free together: their
     /// sizes, plus blocks they share only with each other (hard links, APFS
-    /// clones) counted once. A prune frees at most its cache's size, so it
-    /// makes this an upper bound. Report-only candidates are never in a
-    /// preview.
+    /// clones) counted once. Prunes are left out (`bytes_prune_up_to`), and
+    /// so are moves and requested removals. Report-only candidates are never
+    /// in a preview.
     #[uniffi(default = 0)]
     pub bytes_to_free: u64,
     /// `bytes_to_free` counts blocks the volume could not show as unshared
@@ -329,6 +329,11 @@ pub struct FfiPreview {
     /// dialog once, before anything changes.
     #[uniffi(default = 0)]
     pub bytes_needing_admin: u64,
+    /// Sum of the sizes of the caches their own tool prunes (uv, pnpm). The
+    /// tools have no dry run, so a prune has no estimate: it frees "up to"
+    /// this, often far less, and is never part of `bytes_to_free`.
+    #[uniffi(default = 0)]
+    pub bytes_prune_up_to: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]

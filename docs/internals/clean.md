@@ -239,6 +239,14 @@ counts in neither. Discovery therefore keeps those `SharedBlocks` (`retain_compl
 no selection could complete), and `freed_together` adds back the blocks that items share only with
 each other.
 
+**Figures count only what surely goes.** The preview's `bytes_to_free` leaves out prunes: neither
+`uv cache prune` (uv 0.8.16: only `--ci`) nor `pnpm store prune` (pnpm 12.18.0: only `-y`) has a dry
+run, so a prune has no estimate, and its cache's size is `bytes_prune_up_to`, a ceiling the client
+shows as "up to" and keeps out of its button. Requested removals and moves are never in it either.
+The scan's progress figure (`found_bytes`) counts only categories whose `desktop_action` is
+`MoveToTrash` without a tool or `EmptyTrash` (`discover_checked_counting`); the CLI still counts
+every category. Docker's figure is `docker system df`'s Reclaimable column, never Size.
+
 **Tool commands** need `tool_commands` in the options; without it every tool row stays
 `ReportOnly{NotPerPathTrash}`, so an app that does not know the option cannot preselect uv into a
 whole-cache Trash move. The command runs through the bounded `CommandRunner::output`

@@ -291,10 +291,23 @@ fn legacy_report(checked: CheckedDiscovery) -> DiscoveryReport {
 /// Runs every provider, isolating failures: a provider that errors, lacks
 /// its tool or cannot check its app becomes a typed entry and the rest
 /// still run. Stops between and inside providers once `ctx` is cancelled.
+/// The progress figure counts every category found.
 pub fn discover_checked(
     providers: &[Box<dyn CleanProvider>],
     ctx: &ScanContext<'_>,
     progress: crate::progress::ProgressCallback<'_>,
+) -> CheckedDiscovery {
+    discover_checked_counting(providers, ctx, progress, &|_| true)
+}
+
+/// `discover_checked` whose progress figure (`found_bytes`) counts only the
+/// categories `counts` accepts, so a client leaves out what it can never
+/// free for sure (report-only categories, requested removals, prunes).
+pub fn discover_checked_counting(
+    providers: &[Box<dyn CleanProvider>],
+    ctx: &ScanContext<'_>,
+    progress: crate::progress::ProgressCallback<'_>,
+    counts: &dyn Fn(&dyn CleanProvider) -> bool,
 ) -> CheckedDiscovery {
     let total = providers.len() as u64;
     let mut categories = Vec::new();
@@ -330,7 +343,7 @@ pub fn discover_checked(
             Some(Err(outcome)) => outcome,
             None => continue,
         };
-        so_far.add(provider.id(), &outcome);
+        so_far.add(provider.id(), &outcome, counts(provider.as_ref()));
         // Empty categories stay: the desktop lists what was checked and found nothing.
         categories.push(CheckedCategory {
             id: provider.id().to_string(),
@@ -347,9 +360,10 @@ pub fn discover_checked(
     }
 }
 
-/// Bytes found by the categories finished so far, for scan progress. A path
-/// listed by several categories counts once; a path inside another listed
-/// path counts in both, so this can exceed what a Clean would free.
+/// Bytes found by the counted categories finished so far, for scan
+/// progress. A path listed by several categories counts once; a path inside
+/// another listed path counts in both, so this can exceed what a Clean
+/// would free.
 #[derive(Default)]
 struct FoundSoFar {
     bytes: u64,
@@ -358,9 +372,9 @@ struct FoundSoFar {
 }
 
 impl FoundSoFar {
-    fn add(&mut self, id: &str, outcome: &CategoryOutcome) {
+    fn add(&mut self, id: &str, outcome: &CategoryOutcome, counted: bool) {
         if let CategoryOutcome::Found { items, .. } = outcome {
-            for checked in items {
+            for checked in items.iter().filter(|_| counted) {
                 if self.paths.insert(checked.item.path.clone()) {
                     self.bytes = self.bytes.saturating_add(checked.item.size);
                 }

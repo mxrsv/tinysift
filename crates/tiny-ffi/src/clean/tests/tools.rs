@@ -249,12 +249,12 @@ fn permanent_mode_prunes_requests_and_trashes_and_counts_each_apart() {
     );
     let cache_size = by_path(&preview, "cache").size_bytes;
     assert_eq!(
-        preview.bytes_to_free, cache_size,
-        "the runtime is not freed"
+        preview.bytes_to_free, 0,
+        "neither the runtime nor the prune is surely freed"
     );
-    assert!(
-        preview.bytes_to_free_is_upper_bound,
-        "a prune frees at most that"
+    assert_eq!(
+        preview.bytes_prune_up_to, cache_size,
+        "a prune frees at most its cache, with no estimate"
     );
     assert_eq!(preview.bytes_requested, RUNTIME_BYTES);
     assert_eq!(preview.bytes_to_trash, 0, "the kept file is excluded");
@@ -380,5 +380,43 @@ fn a_failed_tool_is_never_retried_another_way() {
     );
     assert_eq!((report.bytes_freed, report.bytes_requested), (0, 0));
     assert!(layout.dir.join("cache/one").exists());
+    remove(&layout.dir);
+}
+
+#[test]
+fn the_scan_figure_counts_only_what_a_clean_surely_frees() {
+    let layout = Layout::new("tools-found");
+    fs::create_dir(layout.dir.join("report")).unwrap();
+    fs::write(layout.dir.join("report/r"), vec![1u8; 30_000]).unwrap();
+    let mut providers = layout.providers();
+    providers.push(Box::new(Fixture {
+        desktop: false,
+        ..Fixture::new("docker", &layout.dir.join("report"))
+    }));
+    let found = |options: CleanOptions| {
+        let progress = Progress::default();
+        TestSession::new()
+            .discover_clean(
+                options,
+                &providers,
+                &NotRunning,
+                &CancellationToken::default(),
+                &progress,
+            )
+            .unwrap();
+        let events = progress.0.lock().unwrap();
+        events.last().unwrap().found_bytes
+    };
+    let download = Some(allocated(&layout.dir.join("downloads/d")));
+    assert_eq!(
+        found(with_tools()),
+        download,
+        "no prune, requested runtime or report-only category"
+    );
+    assert_eq!(
+        found(CleanOptions::default()),
+        download,
+        "tools stay report-only"
+    );
     remove(&layout.dir);
 }
