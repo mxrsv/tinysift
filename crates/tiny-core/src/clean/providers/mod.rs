@@ -132,13 +132,14 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
         "font-quicklook-caches" | "system-simulator-caches" | "xcode-previews" => {
             Some(ComesBack::AppRecreates)
         }
+        // A device that cannot boot; Xcode creates devices for an installed
+        // runtime again.
+        "simulator-devices" => Some(ComesBack::AppRecreates),
         "xcode-archives" | "downloads-old" | "screenshots-old" | "mail-attachments" => {
             Some(ComesBack::TrashOnly)
         }
         "app-orphans" => Some(ComesBack::TrashOnly),
-        "time-machine-local" | "trash" | "docker-volumes" | "simulator-devices" => {
-            Some(ComesBack::NotRecoverable)
-        }
+        "time-machine-local" | "trash" | "docker-volumes" => Some(ComesBack::NotRecoverable),
         _ => None,
     }
 }

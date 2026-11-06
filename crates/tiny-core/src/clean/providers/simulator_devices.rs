@@ -1,11 +1,15 @@
 //! iOS Simulator devices that `xcrun simctl list devices -j` reports as
 //! unavailable (usually their runtime was removed). Discovery lists each
-//! one's data folder; `execute` runs `xcrun simctl delete <udid>` per item so
-//! CoreSimulator updates its registry. Never `delete unavailable`, never a
-//! filesystem removal.
+//! one's data folder; the CLI's `execute` and the desktop's tool command run
+//! `xcrun simctl delete <udid>` per item so CoreSimulator updates its
+//! registry. Never `delete unavailable`, which would also take devices the
+//! user unticked or that turned unavailable after the scan; never a
+//! filesystem removal. The desktop checks right before each delete that
+//! `simctl` still lists the device as unavailable.
 //!
-//! Risk = **Destructive**: a deleted device and its data are gone. As for
-//! Time Machine snapshots, Trash and HardDelete run the same command.
+//! Risk = **Review**: such a device cannot boot, and Xcode creates devices
+//! again for a runtime that is installed, but a deleted device's data is
+//! gone. Trash and HardDelete run the same command: there is no Trash route.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -15,7 +19,8 @@ use crate::engine_error;
 use crate::error::Result;
 
 use super::ios_simulators::SIMULATOR_APPS;
-use super::{run_tool, CleanProvider};
+use super::tool_command::run_tool_command;
+use super::{run_tool, CleanProvider, DesktopTool};
 use crate::clean::fs_safe::{dir_size_checked, is_dir_safe};
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, Evidence, ExecAction, ExecReport, RiskLevel};
@@ -64,6 +69,19 @@ impl SimulatorDevices {
         simctl_found(self.runner.as_ref())
     }
 
+    /// `simctl list devices -j`, parsed.
+    fn list(&self) -> Result<DeviceList> {
+        let out = run_tool(self.runner.as_ref(), XCRUN, LIST_ARGS)?;
+        if !out.success() {
+            return Err(engine_error!(
+                "xcrun simctl list devices failed: {}",
+                out.stderr.trim()
+            ));
+        }
+        serde_json::from_str(&out.stdout)
+            .map_err(|e| engine_error!("unexpected xcrun simctl output: {e}"))
+    }
+
     /// Unavailable devices whose folder exists under `devices_root`. The
     /// path is built from the validated UDID, never from simctl's `dataPath`.
     fn unavailable_devices(
@@ -76,15 +94,7 @@ impl SimulatorDevices {
         if !is_dir_safe(devices_root) {
             return Ok(Vec::new());
         }
-        let out = run_tool(self.runner.as_ref(), XCRUN, LIST_ARGS)?;
-        if !out.success() {
-            return Err(engine_error!(
-                "xcrun simctl list devices failed: {}",
-                out.stderr.trim()
-            ));
-        }
-        let list: DeviceList = serde_json::from_str(&out.stdout)
-            .map_err(|e| engine_error!("unexpected xcrun simctl output: {e}"))?;
+        let list = self.list()?;
         ctx.add_root(devices_root);
         let mut items = Vec::new();
         for device in list.devices.into_values().flatten() {
@@ -101,7 +111,7 @@ impl SimulatorDevices {
                 category_label: LABEL.to_string(),
                 path,
                 size,
-                risk: RiskLevel::Destructive,
+                risk: RiskLevel::Review,
                 evidence: vec![Evidence::SimulatorUnavailable {
                     name: device.name,
                     reason: device.availability_error.unwrap_or_default(),
@@ -124,7 +134,7 @@ impl CleanProvider for SimulatorDevices {
             .into()
     }
     fn risk(&self) -> RiskLevel {
-        RiskLevel::Destructive
+        RiskLevel::Review
     }
     fn quit_apps(&self) -> Vec<&'static str> {
         SIMULATOR_APPS.to_vec()
@@ -147,18 +157,33 @@ impl CleanProvider for SimulatorDevices {
             None => Ok(Vec::new()),
         }
     }
+    /// Only with a Devices folder, so a Mac without one spawns no `xcrun`.
+    fn desktop_tool(&self) -> Option<DesktopTool> {
+        let has_devices = home().is_some_and(|h| is_dir_safe(&h.join(DEVICES_DIR)));
+        (has_devices && self.simctl_found()).then_some(DesktopTool::Remove { sure: true })
+    }
+    fn run_desktop_tool(&self, item: &CleanItem) -> std::result::Result<(), String> {
+        let udid = udid_of(&item.path).ok_or("not a simulator device folder")?;
+        run_tool_command(self.runner.as_ref(), XCRUN, &["simctl", "delete", udid])
+    }
+    /// The device must still be one `simctl` lists as unavailable.
+    fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
+        let udid = udid_of(path).ok_or("not a simulator device folder")?;
+        let list = self.list().map_err(|e| e.to_string())?;
+        let device = list.devices.values().flatten().find(|d| d.udid == udid);
+        match device.map(|d| d.is_available) {
+            Some(Some(false)) => Ok(()),
+            Some(_) => Err("the simulator device is available again".into()),
+            None => Err("simctl no longer lists the simulator device".into()),
+        }
+    }
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
         if matches!(action, ExecAction::EmptyTrash) {
             return Err(engine_error!("{} provider does not accept EmptyTrash", ID));
         }
         let mut report = ExecReport::default();
         for item in items {
-            let udid = item
-                .path
-                .file_name()
-                .and_then(|name| name.to_str())
-                .filter(|name| is_udid(name));
-            let Some(udid) = udid else {
+            let Some(udid) = udid_of(&item.path) else {
                 report
                     .failed
                     .push((item.path.clone(), "not a simulator device folder".into()));
@@ -203,6 +228,13 @@ pub(super) fn simctl_lookup(runner: &dyn CommandRunner) -> Simctl {
 /// Whether `simctl` is there to use; an unknown answer is not.
 pub(super) fn simctl_found(runner: &dyn CommandRunner) -> bool {
     simctl_lookup(runner) == Simctl::Found
+}
+
+/// The validated UDID a device folder is named after.
+fn udid_of(path: &Path) -> Option<&str> {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| is_udid(name))
 }
 
 /// `01DADBA3-1A21-4914-A093-29B4D0D7B9C8`: checked before a UDID becomes a
@@ -264,7 +296,7 @@ mod tests {
             category_label: LABEL.into(),
             path,
             size: 0,
-            risk: RiskLevel::Destructive,
+            risk: RiskLevel::Review,
             evidence: Vec::new(),
         }
     }
@@ -285,7 +317,7 @@ mod tests {
         assert_eq!(items[0].path, root.join(GONE));
         let file = std::fs::symlink_metadata(root.join(GONE).join("data/file")).unwrap();
         assert_eq!(items[0].size, file.blocks() * 512);
-        assert_eq!(items[0].risk, RiskLevel::Destructive);
+        assert_eq!(items[0].risk, RiskLevel::Review);
         assert_eq!(
             items[0].evidence,
             vec![Evidence::SimulatorUnavailable {
@@ -426,10 +458,101 @@ mod tests {
     }
 
     #[test]
-    fn simulator_devices_is_registered_destructive_and_gated() {
+    fn simulator_devices_is_registered_review_and_gated() {
         let p = SimulatorDevices::with_runner(Arc::new(MockRunner::new()));
         assert!(known_category_ids().contains(&ID));
-        assert_eq!(p.risk(), RiskLevel::Destructive);
+        assert_eq!(p.risk(), RiskLevel::Review);
         assert_eq!(p.quit_apps(), vec!["Xcode", "Simulator"]);
+    }
+}
+
+#[cfg(test)]
+mod desktop_tests {
+    use super::*;
+    use crate::runner::test_support::MockRunner;
+
+    const GONE: &str = "01DADBA3-1A21-4914-A093-29B4D0D7B9C8";
+    const LIVE: &str = "6F1C0E52-7A0B-4C1D-9E2F-3A4B5C6D7E8F";
+
+    fn listing(gone_available: bool) -> String {
+        format!(
+            r#"{{"devices": {{"com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
+    {{"udid": "{GONE}", "name": "iPhone 15", "isAvailable": {gone_available}}},
+    {{"udid": "{LIVE}", "name": "iPhone 16", "isAvailable": true}}
+]}}}}"#
+        )
+    }
+
+    fn item(udid: &str) -> CleanItem {
+        CleanItem {
+            category_id: ID.into(),
+            category_label: LABEL.into(),
+            path: PathBuf::from("/Users/me").join(DEVICES_DIR).join(udid),
+            size: 1,
+            risk: RiskLevel::Review,
+            evidence: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn the_desktop_deletes_one_reviewed_device_by_its_udid() {
+        let delete = ["simctl", "delete", GONE];
+        let runner = Arc::new(
+            MockRunner::new()
+                .with_exit(XCRUN, LIST_ARGS, 0, &listing(false))
+                .with_exit(XCRUN, &delete, 0, ""),
+        );
+        let devices = SimulatorDevices::with_runner(runner.clone());
+        let gone = item(GONE);
+        assert_eq!(devices.check_item(&gone.path), Ok(()));
+        assert_eq!(devices.run_desktop_tool(&gone), Ok(()));
+        let calls = runner.output_calls.lock().unwrap().clone();
+        assert_eq!(
+            calls.last().unwrap(),
+            &format!("{XCRUN} simctl delete {GONE}"),
+            "never `delete unavailable`"
+        );
+        assert!(runner.run_calls.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn a_device_available_again_or_gone_from_the_list_is_refused() {
+        let again = SimulatorDevices::with_runner(Arc::new(MockRunner::new().with_exit(
+            XCRUN,
+            LIST_ARGS,
+            0,
+            &listing(true),
+        )));
+        assert!(again.check_item(&item(GONE).path).is_err());
+        assert!(again.check_item(&item(LIVE).path).is_err());
+        let unlisted = item("AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE");
+        assert!(again.check_item(&unlisted.path).is_err());
+        let failing = SimulatorDevices::with_runner(Arc::new(
+            MockRunner::new().with_exit(XCRUN, LIST_ARGS, 1, ""),
+        ));
+        assert!(failing.check_item(&item(GONE).path).is_err());
+        let not_a_device = CleanItem {
+            path: PathBuf::from("/Users/me/Documents"),
+            ..item(GONE)
+        };
+        assert!(again.check_item(&not_a_device.path).is_err());
+        assert!(again.run_desktop_tool(&not_a_device).is_err());
+    }
+
+    #[test]
+    fn the_desktop_tool_needs_a_devices_folder_and_a_found_simctl() {
+        let found = MockRunner::new().with_exit(XCRUN, FIND_ARGS, 0, "/x/simctl\n");
+        let devices = SimulatorDevices::with_runner(Arc::new(found));
+        // `desktop_tool` reads `HOME`; only the answer for this Mac's folder
+        // is checked here, so the test holds on any machine.
+        let has_folder = std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .is_some_and(|h| is_dir_safe(&h.join(DEVICES_DIR)));
+        let expected = has_folder.then_some(DesktopTool::Remove { sure: true });
+        assert_eq!(devices.desktop_tool(), expected);
+        let absent = SimulatorDevices::with_runner(Arc::new(
+            MockRunner::new().with_exit(XCRUN, FIND_ARGS, 72, ""),
+        ));
+        assert_eq!(absent.desktop_tool(), None);
     }
 }

@@ -48,8 +48,8 @@ const DESKTOP_TRASH: &[(&str, Option<ReportOnly>)] = &[
     ("jetbrains", None),
     ("vscode", None),
     ("ios-simulators", None),
-    // Destructive: `xcrun simctl delete` removes the device for good.
-    ("simulator-devices", Some(ReportOnly::Destructive)),
+    // Runs `xcrun simctl delete <udid>`, not a per-path move.
+    ("simulator-devices", Some(ReportOnly::NotPerPathTrash)),
     // Root-owned: no unprivileged route; the app deletes them as
     // administrator, the CLI refuses them (no sudo).
     (
@@ -294,7 +294,7 @@ const SECTIONS: &[(&str, Section)] = &[
     ("jetbrains", Section::Rebuilt),
     ("vscode", Section::Rebuilt),
     ("ios-simulators", Section::Rebuilt),
-    ("simulator-devices", Section::YourFiles),
+    ("simulator-devices", Section::Rebuilt),
     ("system-simulator-caches", Section::Rebuilt),
     ("simulator-runtimes", Section::Rebuilt),
     ("simulator-runtime-images", Section::Rebuilt),
