@@ -166,8 +166,12 @@ fn permanent_mode_deletes_what_comes_back_and_trashes_your_files() {
     let size = |path: &str| allocated(&dir.join(path));
     assert_eq!(preview.bytes_to_free, size("logs/a") + size("targets/t"));
     assert_eq!(preview.bytes_to_trash, size("downloads/d"));
+    let log = size("logs/a");
 
-    let sinks = FakeTrash::default();
+    let sinks = FakeTrash {
+        deletes: true,
+        ..Default::default()
+    };
     let report = run_remove(&session, &preview.preview_id, &dir, &sinks, &sinks).unwrap();
     assert_eq!(
         removal_outcomes(&report),
@@ -179,6 +183,17 @@ fn permanent_mode_deletes_what_comes_back_and_trashes_your_files() {
     );
     assert_eq!(sinks.steps(), ["delete a", "delete t", "trash d"]);
     assert_eq!(report.bytes_freed, preview.bytes_to_free);
+    let extents: Vec<_> = report.results.iter().map(|r| r.extent).collect();
+    assert_eq!(
+        extents,
+        [
+            Some(FfiRemovalExtent::MovedToTrash),
+            Some(FfiRemovalExtent::Removed),
+            Some(FfiRemovalExtent::Removed)
+        ]
+    );
+    assert_eq!(report.results[0].bytes_freed, 0, "moved, not freed");
+    assert_eq!(report.results[1].bytes_freed, log);
     assert_eq!(report.bytes_moved_to_trash, preview.bytes_to_trash);
     assert_eq!((report.deleted_count, report.moved_count), (2, 1));
     remove(&dir);
@@ -328,7 +343,11 @@ fn the_trash_row_is_emptied_only_when_selected_and_before_any_move() {
         ("trash", true),
         "permanent by nature"
     );
-    let sinks = FakeTrash::default();
+    let old = allocated(&dir.join(".Trash/old"));
+    let sinks = FakeTrash {
+        bin: Some(dir.join(".Trash")),
+        ..Default::default()
+    };
     let report = run_remove(&session, &preview.preview_id, &dir, &sinks, &sinks).unwrap();
     assert_eq!(report.results[0].outcome, FfiRemovalOutcome::TrashEmptied);
     assert_eq!(
@@ -336,7 +355,8 @@ fn the_trash_row_is_emptied_only_when_selected_and_before_any_move() {
         ["empty", "trash d", "trash a", "trash t"],
         "emptied before this run moved anything there"
     );
-    assert_eq!(report.bytes_freed, allocated(&dir.join(".Trash/old")));
+    assert_eq!(report.bytes_freed, old, "measured before minus after");
+    assert_eq!(report.results[0].bytes_freed, old);
     assert_eq!(report.deleted_count, 1);
     remove(&dir);
 }

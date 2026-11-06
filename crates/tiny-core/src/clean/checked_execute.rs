@@ -14,176 +14,27 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::elevated_delete::{ElevatedDelete, ElevatedError};
 use super::finder_trash::{Trash, TrashError};
-use super::fs_safe::{dir_size_checked, Delete, PathFingerprint};
+use super::fs_safe::{Delete, PathFingerprint, TreeRemoval};
 use super::process::AppProbe;
 use super::protection::{Evaluation, Matcher, Relation, INTERNAL_ID_PREFIX};
 use super::protection_store::{StoreError, StoreLease};
 use super::providers::{desktop_report_only, CleanProvider, DesktopTool};
-use super::scan_context::ScanContext;
 use super::trash_plan::{
-    freed_together, inside_system, protected_reason, removal_for, DeleteMode, PlannedItem, Removal,
+    inside_system, protected_reason, removal_for, DeleteMode, PlannedItem, Removal,
 };
-use super::types::CleanItem;
 
-/// Why a path was not moved even though it was planned.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SkipReason {
-    /// The category is report-only on the desktop.
-    ReportOnly,
-    /// No registered provider has the item's category ID.
-    UnknownCategory,
-    Missing,
-    /// The path itself is a symlink now.
-    Symlink,
-    /// Replaced or edited since discovery.
-    Changed,
-    /// Not inside a discovery root, or a symlink appeared on the way to it.
-    OutsideRoots,
-    /// The file-system root, the home folder or one of its ancestors, a
-    /// tool-reported path outside the home folder, or anything in `/System`.
-    ProtectedPath(String),
-    /// On another volume than the home folder. Finder may delete such a
-    /// path permanently when that volume has no Trash.
-    NotOnHomeVolume,
-    /// The provider's own guard refused the path.
-    ProviderGuard(String),
-    AppRunning(String),
-    /// A required safety check could not run; acting would be a guess.
-    SafetyCheckFailed(String),
-    /// A saved rule keeps the path itself, or it lies inside a kept folder.
-    Kept {
-        rule_path: PathBuf,
-    },
-    /// The path is a parent of a saved rule's path, so moving it would carry
-    /// the kept path along, found by discovery or not.
-    HoldsKept {
-        rule_path: PathBuf,
-    },
-    /// Whether a saved rule covers the path could not be decided.
-    KeepUncertain(String),
-}
+mod measure;
+mod report;
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ItemOutcome {
-    MovedToTrash,
-    /// Deleted for good (`Removal::Delete`), or gone after deletion as
-    /// administrator.
-    Deleted,
-    /// Finder emptied the Trash (`Removal::EmptyTrash`).
-    TrashEmptied,
-    /// Finder refused to move the path or to empty the Trash.
-    /// `source_present` is re-checked afterwards.
-    Failed {
-        error: TrashError,
-        source_present: bool,
-    },
-    /// Permanent deletion failed, or the path is still there after deletion
-    /// as administrator; part of it may be gone. Nothing else is tried: no
-    /// Trash, no other route, never administrator rights after a failure.
-    DeleteFailed {
-        detail: String,
-        source_present: bool,
-    },
-    /// The tool pruned the cache folder: `bytes_freed` is its size before
-    /// minus after, an upper bound when the volume could not tell which
-    /// blocks other files share or the walk after could not read everything.
-    Pruned {
-        bytes_freed: u64,
-        upper_bound: bool,
-    },
-    /// The tool accepted the removal and finishes it in the background
-    /// (`simctl runtime delete`): neither freed nor moved yet.
-    RemovalRequested,
-    /// The tool command failed or could not run; part of the cache may be
-    /// pruned. Nothing else is tried: no deletion, no Trash, no elevation.
-    ToolFailed {
-        detail: String,
-    },
-    Skipped(SkipReason),
-    /// Execution stopped before this path.
-    NotAttempted,
-}
-
-impl ItemOutcome {
-    /// Deleted, pruned, or the Trash emptied: the item's bytes are free now.
-    pub fn frees_space(&self) -> bool {
-        matches!(
-            self,
-            Self::Deleted | Self::TrashEmptied | Self::Pruned { .. }
-        )
-    }
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum StopReason {
-    Cancelled,
-    /// The user cancelled the authentication dialog for deletion as
-    /// administrator, which comes before anything changes.
-    AuthenticationCancelled,
-    AutomationDenied,
-    /// The saved rules differ from what this run started with.
-    ProtectionChanged,
-    /// The saved rules could not be read again.
-    ProtectionUnavailable(String),
-}
-
-#[derive(Debug, Clone)]
-pub struct ItemResult {
-    pub item: CleanItem,
-    pub outcome: ItemOutcome,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct CheckedExecReport {
-    /// One entry per planned item, in plan order.
-    pub results: Vec<ItemResult>,
-    pub stopped: Option<StopReason>,
-    /// What the deleted items and the emptied Trash freed, blocks shared
-    /// between them counted once (`freed_together`), plus what each prune
-    /// freed as measured around it.
-    pub bytes_freed: u64,
-    /// `bytes_freed` counts blocks the volume could not show as unshared.
-    pub freed_is_upper_bound: bool,
-}
-
-impl CheckedExecReport {
-    /// Sizes measured at discovery of every planned item.
-    pub fn bytes_selected(&self) -> u64 {
-        self.sum(|_| true)
-    }
-
-    /// Sizes measured at discovery of the items moved to Trash. Moving to
-    /// Trash frees no space until Trash is emptied.
-    pub fn bytes_moved_to_trash(&self) -> u64 {
-        self.sum(|outcome| *outcome == ItemOutcome::MovedToTrash)
-    }
-
-    /// Sizes measured at discovery of the items whose removal a tool
-    /// accepted and finishes in the background: neither freed nor moved.
-    pub fn bytes_requested(&self) -> u64 {
-        self.sum(|outcome| *outcome == ItemOutcome::RemovalRequested)
-    }
-
-    pub fn moved_count(&self) -> usize {
-        self.count(|outcome| *outcome == ItemOutcome::MovedToTrash)
-    }
-
-    pub fn count(&self, keep: impl Fn(&ItemOutcome) -> bool) -> usize {
-        self.results.iter().filter(|r| keep(&r.outcome)).count()
-    }
-
-    fn sum(&self, keep: impl Fn(&ItemOutcome) -> bool) -> u64 {
-        self.results
-            .iter()
-            .filter(|r| keep(&r.outcome))
-            .fold(0, |sum, r| sum.saturating_add(r.item.size))
-    }
-}
+use measure::{frees_space, measure, settle, Measured, Settled};
+pub use report::{
+    CheckedExecReport, ItemOutcome, ItemResult, RemovalExtent, SkipReason, StopReason,
+};
 
 /// Everything execution needs besides the plan.
 pub struct ExecContext<'a> {
@@ -220,17 +71,26 @@ impl ExecContext<'_> {
 /// authentication dialog, so cancelling it changes nothing. Other permanent
 /// removals come next, so emptying the Trash never takes what this run
 /// moves there; if that emptying fails, Finder may still be at it, so the
-/// moves are skipped. Results stay in plan order. Stops on cancellation (of
-/// the run or the dialog), an Automation denial or a change in the saved
-/// rules; the remaining paths are reported as not attempted.
+/// moves are skipped. A permanent deletion goes on past entries that fail.
+/// Each removal that frees space is measured right before and right after
+/// it (`ItemResult::bytes_freed`). Results stay in plan order. Stops on
+/// cancellation (of the run or the dialog), an Automation denial or a
+/// change in the saved rules; the remaining paths are reported as not
+/// attempted.
 pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedExecReport {
     let total = plan.len() as u64;
     let mut stopped = None;
-    let mut outcomes = vec![ItemOutcome::NotAttempted; plan.len()];
+    let unchanged = Settled {
+        extent: RemovalExtent::NotRemoved,
+        freed: 0,
+        left: 0,
+        upper_bound: false,
+    };
+    let mut done = vec![(ItemOutcome::NotAttempted, unchanged); plan.len()];
     let (as_admin, others): (Vec<usize>, Vec<usize>) = execution_order(plan)
         .into_iter()
         .partition(|&index| plan[index].removal == Removal::DeleteAsAdministrator);
-    delete_as_administrator(plan, &as_admin, ctx, &mut outcomes, &mut stopped);
+    delete_as_administrator(plan, &as_admin, ctx, &mut done, &mut stopped);
     // Finder may still be emptying after a failed or timed-out Empty Trash.
     let mut emptying_failed = false;
     for (step, index) in others.into_iter().enumerate() {
@@ -240,47 +100,38 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
         let planned = &plan[index];
         ctx.report_step(as_admin.len() + step, total, &planned.item.path);
         if emptying_failed && planned.removal == Removal::MoveToTrash {
-            outcomes[index] = ItemOutcome::Skipped(SkipReason::SafetyCheckFailed(
+            let reason = SkipReason::SafetyCheckFailed(
                 "the Trash was not emptied cleanly, so nothing is moved into it".into(),
-            ));
+            );
+            done[index].0 = ItemOutcome::Skipped(reason);
             continue;
         }
-        outcomes[index] = act_on(planned, ctx, &mut stopped);
+        let acted = act_on(planned, ctx, &mut stopped);
         emptying_failed |= planned.removal == Removal::EmptyTrash
-            && matches!(outcomes[index], ItemOutcome::Failed { .. });
+            && matches!(acted.outcome, ItemOutcome::Failed { .. });
+        done[index] = acted.settle(&planned.item.path);
     }
     if stopped.is_none() {
         crate::progress::report(ctx.progress, "trash", total, Some(total), "Done");
     }
-    // A prune's freed bytes were measured around it, so it stays out of the union.
-    let (removed, removed_upper_bound) = freed_together(
-        plan.iter()
-            .zip(&outcomes)
-            .filter(|(_, outcome)| {
-                matches!(outcome, ItemOutcome::Deleted | ItemOutcome::TrashEmptied)
-            })
-            .map(|(planned, _)| planned),
-    );
-    let (pruned, pruned_upper_bound) =
-        outcomes
-            .iter()
-            .fold((0u64, false), |(sum, upper), outcome| match outcome {
-                ItemOutcome::Pruned {
-                    bytes_freed,
-                    upper_bound,
-                } => (sum.saturating_add(*bytes_freed), upper || *upper_bound),
-                _ => (sum, upper),
-            });
-    let bytes_freed = removed.saturating_add(pruned);
-    let freed_is_upper_bound = removed_upper_bound || pruned_upper_bound;
-    let results = plan
+    let results: Vec<ItemResult> = plan
         .iter()
-        .zip(outcomes)
-        .map(|(planned, outcome)| ItemResult {
+        .zip(done)
+        .map(|(planned, (outcome, settled))| ItemResult {
             item: planned.item.clone(),
             outcome,
+            extent: settled.extent,
+            bytes_freed: settled.freed,
+            bytes_left: settled.left,
+            freed_is_upper_bound: settled.upper_bound,
         })
         .collect();
+    let bytes_freed = results
+        .iter()
+        .fold(0u64, |sum, r| sum.saturating_add(r.bytes_freed));
+    let freed_is_upper_bound = results
+        .iter()
+        .any(|r| r.bytes_freed > 0 && r.freed_is_upper_bound);
     CheckedExecReport {
         results,
         stopped,
@@ -305,24 +156,24 @@ fn execution_order(plan: &[PlannedItem]) -> Vec<usize> {
 }
 
 /// Deletes the items planned as `DeleteAsAdministrator` (`indexes`), before
-/// anything else changes. Each passes every check `act_on` runs; then one
-/// call to `ctx.elevated`, one dialog, takes all that passed, and each
-/// outcome is what `symlink_metadata` finds afterwards. A cancelled dialog
-/// stops the run with every item not attempted. Nothing is retried another
-/// way.
+/// anything else changes. Each passes every check `act_on` runs and is
+/// measured; then one call to `ctx.elevated`, one dialog, takes all that
+/// passed, and each outcome is what `symlink_metadata` finds afterwards. A
+/// cancelled dialog stops the run with every item not attempted. Nothing is
+/// retried another way.
 fn delete_as_administrator(
     plan: &[PlannedItem],
     indexes: &[usize],
     ctx: &ExecContext<'_>,
-    outcomes: &mut [ItemOutcome],
+    done: &mut [(ItemOutcome, Settled)],
     stopped: &mut Option<StopReason>,
 ) {
     let mut batch = Vec::new();
     for (step, &index) in indexes.iter().enumerate() {
         ctx.report_step(step, plan.len() as u64, &plan[index].item.path);
         match prepare(&plan[index], ctx) {
-            Ok(_) => batch.push(index),
-            Err(Halt::Skip(reason)) => outcomes[index] = ItemOutcome::Skipped(reason),
+            Ok(before) => batch.push((index, before)),
+            Err(Halt::Skip(reason)) => done[index].0 = ItemOutcome::Skipped(reason),
             Err(Halt::Stop(reason)) => {
                 *stopped = Some(reason);
                 return;
@@ -341,30 +192,42 @@ fn delete_as_administrator(
         *stopped = Some(reason);
         return;
     }
-    let paths: Vec<&Path> = batch.iter().map(|&i| plan[i].item.path.as_path()).collect();
+    let paths: Vec<&Path> = batch
+        .iter()
+        .map(|&(i, _)| plan[i].item.path.as_path())
+        .collect();
     let detail = match ctx.elevated.delete(&paths) {
         Err(ElevatedError::Cancelled) => {
             *stopped = Some(StopReason::AuthenticationCancelled);
-            outcomes.fill(ItemOutcome::NotAttempted);
+            for entry in done.iter_mut() {
+                entry.0 = ItemOutcome::NotAttempted;
+            }
             return;
         }
         Err(ElevatedError::Busy(app)) => {
-            for &index in &batch {
-                outcomes[index] = ItemOutcome::Skipped(SkipReason::AppRunning(app.clone()));
+            for &(index, _) in &batch {
+                done[index].0 = ItemOutcome::Skipped(SkipReason::AppRunning(app.clone()));
             }
             return;
         }
         Err(ElevatedError::Failed(detail)) => detail,
         Ok(()) => "still there after deletion as administrator".into(),
     };
-    for &index in &batch {
-        outcomes[index] = match fs::symlink_metadata(&plan[index].item.path) {
+    for (index, before) in batch {
+        let path = &plan[index].item.path;
+        let outcome = match fs::symlink_metadata(path) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => ItemOutcome::Deleted,
             _ => ItemOutcome::DeleteFailed {
                 detail: detail.clone(),
                 source_present: true,
             },
         };
+        let acted = Acted {
+            outcome,
+            before,
+            removed_some: false,
+        };
+        done[index] = acted.settle(path);
     }
 }
 
@@ -374,19 +237,18 @@ enum Halt {
     Stop(StopReason),
 }
 
-/// Every check right before `planned` changes. Returns a pruned cache's
-/// freed-bytes size before its tool runs.
-fn prepare(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<Option<(u64, bool)>, Halt> {
+/// Every check right before `planned` changes. Returns the item's freed
+/// bytes measured now when its removal frees space.
+fn prepare(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<Option<Measured>, Halt> {
     if ctx.is_cancelled() {
         return Err(Halt::Stop(StopReason::Cancelled));
     }
     // Before the slow checks, so a changed policy never spends a probe.
     policy_unchanged(ctx.policy).map_err(Halt::Stop)?;
     validate(planned, ctx).map_err(Halt::Skip)?;
-    // A pruned cache is measured among the slow checks, so the checks below
-    // also cover the time its walk takes.
-    let before_prune =
-        (planned.removal == Removal::RunTool(DesktopTool::Prune)).then(|| measure(planned, false));
+    // Measured among the slow checks, so the checks below also cover the
+    // time its walk takes.
+    let before = frees_space(planned.removal).then(|| measure(&planned.item.path, false));
     // After them, which can take long enough for the rules to change.
     policy_unchanged(ctx.policy).map_err(Halt::Stop)?;
     if names_a_file(planned) {
@@ -396,23 +258,57 @@ fn prepare(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<Option<(u64, 
     if ctx.is_cancelled() {
         return Err(Halt::Stop(StopReason::Cancelled));
     }
-    Ok(before_prune)
+    Ok(before)
 }
 
-fn act_on(
-    planned: &PlannedItem,
-    ctx: &ExecContext<'_>,
-    stopped: &mut Option<StopReason>,
-) -> ItemOutcome {
-    let before_prune = match prepare(planned, ctx) {
+/// What acting on one item did, before it is measured again.
+struct Acted {
+    outcome: ItemOutcome,
+    /// The measurement `prepare` took, for removals that free space.
+    before: Option<Measured>,
+    /// The route removed at least one entry.
+    removed_some: bool,
+}
+
+impl Acted {
+    fn untouched(outcome: ItemOutcome) -> Self {
+        Self {
+            outcome,
+            before: None,
+            removed_some: false,
+        }
+    }
+
+    /// Measures `path` again, right after the action, and puts a prune's
+    /// measured bytes into its outcome.
+    fn settle(self, path: &Path) -> (ItemOutcome, Settled) {
+        let settled = settle(path, &self.outcome, self.before, self.removed_some);
+        let outcome = match self.outcome {
+            ItemOutcome::Pruned { .. } => ItemOutcome::Pruned {
+                bytes_freed: settled.freed,
+                upper_bound: settled.upper_bound,
+            },
+            other => other,
+        };
+        (outcome, settled)
+    }
+}
+
+fn act_on(planned: &PlannedItem, ctx: &ExecContext<'_>, stopped: &mut Option<StopReason>) -> Acted {
+    let before = match prepare(planned, ctx) {
         Ok(before) => before,
-        Err(Halt::Skip(reason)) => return ItemOutcome::Skipped(reason),
+        Err(Halt::Skip(reason)) => return Acted::untouched(ItemOutcome::Skipped(reason)),
         Err(Halt::Stop(reason)) => {
             *stopped = Some(reason);
-            return ItemOutcome::NotAttempted;
+            return Acted::untouched(ItemOutcome::NotAttempted);
         }
     };
     let path = &planned.item.path;
+    let acted = |outcome| Acted {
+        outcome,
+        before,
+        removed_some: false,
+    };
     // One route per item: a failure is reported, never retried another way.
     let finder = match planned.removal {
         Removal::MoveToTrash => ctx
@@ -421,19 +317,18 @@ fn act_on(
             .map(|()| ItemOutcome::MovedToTrash),
         Removal::EmptyTrash => ctx.trash.empty_trash().map(|()| ItemOutcome::TrashEmptied),
         Removal::Delete => {
-            return ctx.delete.delete(path).map_or_else(
-                |error| ItemOutcome::DeleteFailed {
-                    detail: error.to_string(),
-                    source_present: fs::symlink_metadata(path).is_ok(),
-                },
-                |()| ItemOutcome::Deleted,
-            )
+            let removal = ctx.delete.delete_each(path);
+            return Acted {
+                outcome: deletion_outcome(&removal, path),
+                before,
+                removed_some: removal.removed_entries > 0,
+            };
         }
-        Removal::RunTool(_) => return run_tool(planned, before_prune, ctx),
+        Removal::RunTool(_) => return acted(run_tool(planned, before.is_some(), ctx)),
         // Only `delete_as_administrator` acts on these, as one batch.
-        Removal::DeleteAsAdministrator => return ItemOutcome::NotAttempted,
+        Removal::DeleteAsAdministrator => return Acted::untouched(ItemOutcome::NotAttempted),
     };
-    finder.unwrap_or_else(|error| {
+    acted(finder.unwrap_or_else(|error| {
         if matches!(error, TrashError::AutomationDenied(_)) {
             *stopped = Some(StopReason::AutomationDenied);
         }
@@ -441,31 +336,34 @@ fn act_on(
             error,
             source_present: fs::symlink_metadata(path).is_ok(),
         }
-    })
+    }))
 }
 
-/// The freed bytes of `planned`'s folder by the freed-bytes rule, and
-/// whether that is only an upper bound. `unreadable_is_upper_bound` counts a
-/// walk that could not read everything as one too: after a prune such a size
-/// is too low, so the bytes freed (before minus after) would read too high.
-fn measure(planned: &PlannedItem, unreadable_is_upper_bound: bool) -> (u64, bool) {
-    let scan = ScanContext::unchecked();
-    let bytes = dir_size_checked(&planned.item.path, &scan);
-    let findings = scan.take_findings();
-    let upper_bound = !findings.size_upper_bound.is_empty()
-        || (unreadable_is_upper_bound && !findings.unreadable.is_empty());
-    (bytes, upper_bound)
+/// `Deleted` when nothing failed, otherwise `DeleteFailed` naming the first
+/// entry left.
+fn deletion_outcome(removal: &TreeRemoval, path: &Path) -> ItemOutcome {
+    let Some(first) = removal.failures.first() else {
+        return ItemOutcome::Deleted;
+    };
+    let more = removal.failed_entries.saturating_sub(1);
+    let mut detail = match first.path == path {
+        true => first.error.to_string(),
+        false => format!("{}: {}", first.path.display(), first.error),
+    };
+    if more > 0 {
+        detail.push_str(&format!(" (and {more} more left)"));
+    }
+    ItemOutcome::DeleteFailed {
+        detail,
+        source_present: fs::symlink_metadata(path).is_ok(),
+    }
 }
 
 /// Runs the category's own tool for `planned`, once: a prune when its cache
-/// was measured `before`, a requested removal otherwise. A prune is measured
-/// again afterwards; a failure is the item's outcome and nothing else is
-/// tried.
-fn run_tool(
-    planned: &PlannedItem,
-    before: Option<(u64, bool)>,
-    ctx: &ExecContext<'_>,
-) -> ItemOutcome {
+/// was measured, a requested removal otherwise. The prune's bytes are filled
+/// in once it is measured again; a failure is the item's outcome and nothing
+/// else is tried.
+fn run_tool(planned: &PlannedItem, measured: bool, ctx: &ExecContext<'_>) -> ItemOutcome {
     let item = &planned.item;
     let Some(provider) = ctx.providers.iter().find(|p| p.id() == item.category_id) else {
         return ItemOutcome::Skipped(SkipReason::UnknownCategory);
@@ -473,15 +371,12 @@ fn run_tool(
     if let Err(detail) = provider.run_desktop_tool(item) {
         return ItemOutcome::ToolFailed { detail };
     }
-    match before {
-        Some((before, upper_before)) => {
-            let (after, upper_after) = measure(planned, true);
-            ItemOutcome::Pruned {
-                bytes_freed: before.saturating_sub(after),
-                upper_bound: upper_before || upper_after,
-            }
-        }
-        None => ItemOutcome::RemovalRequested,
+    match measured {
+        true => ItemOutcome::Pruned {
+            bytes_freed: 0,
+            upper_bound: false,
+        },
+        false => ItemOutcome::RemovalRequested,
     }
 }
 

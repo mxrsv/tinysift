@@ -21,6 +21,8 @@ pub(super) struct Sinks {
     pub(super) fail_elevate: Option<ElevatedError>,
     /// Left in place by an elevated batch that otherwise deletes.
     pub(super) keep_on_elevate: Option<&'static str>,
+    /// The test's own Trash folder, whose contents Empty Trash removes.
+    pub(super) bin: Option<PathBuf>,
 }
 
 impl Sinks {
@@ -51,6 +53,9 @@ impl Trash for Sinks {
             return Err(error.clone());
         }
         self.record("empty".into());
+        for entry in self.bin.iter().flat_map(|bin| fs::read_dir(bin).unwrap()) {
+            remove_recursive_safe(&entry.unwrap().path()).unwrap();
+        }
         Ok(())
     }
 }
@@ -62,8 +67,14 @@ impl Delete for Sinks {
             return Err(denied);
         }
         self.record(format!("delete {}", name(path)));
-        Ok(())
+        // Only the tests' own fixtures reach this sink.
+        remove_recursive_safe(path)
     }
+}
+
+/// The allocated blocks of one test file.
+pub(super) fn allocated(path: &Path) -> u64 {
+    fs::symlink_metadata(path).unwrap().blocks() * 512
 }
 
 /// The run trusts only what is left on disk, so unless the dialog was
@@ -162,6 +173,7 @@ fn permanent_items_are_deleted_and_your_files_still_go_to_the_trash() {
         planned("rust-targets", &root, "b", Removal::Delete),
         planned("downloads-old", &root, "c", Removal::MoveToTrash),
     ];
+    let block = allocated(&root.join("a"));
     let sinks = Sinks::default();
     let report = run_sinks(&TempStore::new(), &plan, &MockChecker::none(), &sinks);
     assert_eq!(
@@ -173,7 +185,17 @@ fn permanent_items_are_deleted_and_your_files_still_go_to_the_trash() {
         ]
     );
     assert_eq!(sinks.log(), ["delete a", "delete b", "trash c"]);
-    assert_eq!(report.bytes_freed, 8, "deleted bytes are freed");
+    assert_eq!(report.bytes_freed, 2 * block, "deleted bytes, as measured");
+    let extents: Vec<RemovalExtent> = report.results.iter().map(|r| r.extent).collect();
+    assert_eq!(
+        extents,
+        [
+            RemovalExtent::Removed,
+            RemovalExtent::Removed,
+            RemovalExtent::MovedToTrash
+        ]
+    );
+    assert_eq!(report.results[2].bytes_freed, 0, "a move frees nothing");
     assert_eq!(report.bytes_moved_to_trash(), 4, "moved bytes are not");
     assert!(!report.freed_is_upper_bound);
     assert_eq!(report.count(ItemOutcome::frees_space), 2);
@@ -184,12 +206,16 @@ fn permanent_items_are_deleted_and_your_files_still_go_to_the_trash() {
 fn permanent_removals_run_before_any_move_to_the_trash() {
     let root = fixture_root("order", &["a", "c"]);
     let row = trash_row(&root);
+    let block = allocated(&root.join("a"));
     let plan = [
         planned("downloads-old", &root, "c", Removal::MoveToTrash),
         row,
         planned("user-logs", &root, "a", Removal::Delete),
     ];
-    let sinks = Sinks::default();
+    let sinks = Sinks {
+        bin: Some(root.join(".Trash")),
+        ..Default::default()
+    };
     let report = run_sinks(&TempStore::new(), &plan, &MockChecker::none(), &sinks);
     assert_eq!(
         outcomes(&report),
@@ -205,7 +231,11 @@ fn permanent_removals_run_before_any_move_to_the_trash() {
         ["delete a", "empty", "trash c"],
         "emptying the Trash never takes what this run moved there"
     );
-    assert_eq!(report.bytes_freed, 8, "the deleted item and the Trash row");
+    assert_eq!(
+        report.bytes_freed,
+        2 * block,
+        "the deleted item and the Trash row"
+    );
     let _ = remove_recursive_safe(&root);
 }
 
@@ -217,6 +247,7 @@ fn a_failed_emptying_moves_nothing_into_the_trash_while_other_removals_go_on() {
         trash_row(&root),
         planned("user-logs", &root, "a", Removal::Delete),
     ];
+    let block = allocated(&root.join("a"));
     let sinks = Sinks {
         fail_empty: Some(TrashError::Failed("-1712 timed out".into())),
         ..Default::default()
@@ -240,7 +271,7 @@ fn a_failed_emptying_moves_nothing_into_the_trash_while_other_removals_go_on() {
         ["delete a"],
         "Finder may still be emptying: nothing goes into the Trash after it"
     );
-    assert_eq!(report.bytes_freed, 4, "only the deleted item");
+    assert_eq!(report.bytes_freed, block, "only the deleted item");
     assert_eq!(
         report.stopped, None,
         "a failure other than a denial goes on"
@@ -303,6 +334,7 @@ fn a_failed_deletion_is_never_moved_to_the_trash_or_retried() {
         planned("user-logs", &root, "a", Removal::Delete),
         planned("rust-targets", &root, "b", Removal::Delete),
     ];
+    let block = allocated(&root.join("b"));
     let sinks = Sinks {
         fail_delete: Some("a"),
         ..Default::default()
@@ -325,7 +357,9 @@ fn a_failed_deletion_is_never_moved_to_the_trash_or_retried() {
         "no Trash, no administrator rights, no second attempt"
     );
     assert_eq!(report.stopped, None);
-    assert_eq!(report.bytes_freed, 4, "only what was deleted");
+    assert_eq!(report.bytes_freed, block, "only what was deleted");
+    assert_eq!(report.results[0].extent, RemovalExtent::NotRemoved);
+    assert_eq!(report.results[0].bytes_left, block);
     let _ = remove_recursive_safe(&root);
 }
 
@@ -484,8 +518,10 @@ fn measured(category: &str, root: &Path, name: &str) -> PlannedItem {
     planned
 }
 
-#[test]
-fn a_hard_link_split_between_deleted_items_is_freed_once_both_are_gone() {
+/// Two items, `a` and `b`, each holding one link of a 50 kB file; `a` also
+/// holds 20 kB of its own. Returns the root, the plan, `a`'s own bytes and
+/// the linked file's bytes.
+fn split_link() -> (PathBuf, [PlannedItem; 2], u64, u64) {
     let root = fixture_root("split", &[]);
     for dir in ["a", "b"] {
         fs::create_dir(root.join(dir)).unwrap();
@@ -493,17 +529,19 @@ fn a_hard_link_split_between_deleted_items_is_freed_once_both_are_gone() {
     fs::write(root.join("a/own"), vec![1u8; 20_000]).unwrap();
     fs::write(root.join("a/linked"), vec![2u8; 50_000]).unwrap();
     fs::hard_link(root.join("a/linked"), root.join("b/linked")).unwrap();
-    let linked = fs::symlink_metadata(root.join("a/linked"))
-        .unwrap()
-        .blocks()
-        * 512;
+    let linked = allocated(&root.join("a/linked"));
     let plan = [
         measured("user-logs", &root, "a"),
         measured("rust-targets", &root, "b"),
     ];
     let own = plan[0].item.size;
     assert_eq!(plan[1].item.size, 0, "each item alone leaves the inode out");
+    (root, plan, own, linked)
+}
 
+#[test]
+fn a_hard_link_split_between_deleted_items_is_freed_once_both_are_gone() {
+    let (root, plan, own, linked) = split_link();
     let report = run_sinks(
         &TempStore::new(),
         &plan,
@@ -511,9 +549,15 @@ fn a_hard_link_split_between_deleted_items_is_freed_once_both_are_gone() {
         &Sinks::default(),
     );
     assert_eq!(report.bytes_freed, own + linked, "counted once");
+    assert_eq!(
+        report.results[1].bytes_freed, linked,
+        "freed with b, the last link"
+    );
     // Only macOS can tell which blocks other files share.
     assert_eq!(report.freed_is_upper_bound, cfg!(not(target_os = "macos")));
+    let _ = remove_recursive_safe(&root);
 
+    let (root, plan, own, _) = split_link();
     let one_left = Sinks {
         fail_delete: Some("b"),
         ..Default::default()

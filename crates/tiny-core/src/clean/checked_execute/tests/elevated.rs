@@ -5,7 +5,7 @@
 
 use std::sync::atomic::AtomicUsize;
 
-use super::removal::{planned, trash_row, Sinks};
+use super::removal::{allocated, planned, trash_row, Sinks};
 use super::*;
 
 const CACHES: &str = "system-simulator-caches";
@@ -79,6 +79,7 @@ fn deletions_as_administrator_run_first_in_one_call() {
         planned("downloads-old", &root, "c", Removal::MoveToTrash),
         as_admin(&root, "y"),
     ];
+    let block = allocated(&root.join("a"));
     let sinks = Sinks::default();
     let report = run_admin(&TempStore::new(), &plan, &MockChecker::none(), &sinks);
     assert_eq!(
@@ -95,7 +96,11 @@ fn deletions_as_administrator_run_first_in_one_call() {
         ["elevate x y", "delete a", "trash c"],
         "one dialog, before anything else changes"
     );
-    assert_eq!(report.bytes_freed, 12, "both caches and the deleted log");
+    assert_eq!(
+        report.bytes_freed,
+        3 * block,
+        "both caches and the deleted log"
+    );
     assert_eq!(report.count(ItemOutcome::frees_space), 3);
     assert_eq!(report.stopped, None);
     let _ = remove_recursive_safe(&root);
@@ -109,6 +114,7 @@ fn each_path_of_a_failed_batch_is_judged_by_what_is_left() {
         as_admin(&root, "y"),
         planned("user-logs", &root, "a", Removal::Delete),
     ];
+    let block = allocated(&root.join("a"));
     let sinks = Sinks {
         fail_elevate: Some(ElevatedError::Failed(
             "rm: y: Operation not permitted".into(),
@@ -133,7 +139,9 @@ fn each_path_of_a_failed_batch_is_judged_by_what_is_left() {
         ["elevate x y", "delete a"],
         "the path left behind is never retried, deleted or moved"
     );
-    assert_eq!(report.bytes_freed, 8);
+    assert_eq!(report.bytes_freed, 2 * block);
+    assert_eq!(report.results[1].extent, RemovalExtent::NotRemoved);
+    assert_eq!(report.results[1].bytes_left, block);
     assert!(root.join("y").exists());
 
     // Reported done, but the path is still there: trust the disk.

@@ -6,7 +6,7 @@ use crate::clean::protection::{ProtectionRule, RuleScope, RulesDocument};
 use crate::clean::protection_store::ProtectionStore;
 use crate::clean::scan_context::ScanContext;
 use crate::clean::trash_plan::Removal;
-use crate::clean::types::{ExecAction, ExecReport, RiskLevel};
+use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 use crate::error::Result;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 static FIXTURE_SEQ: AtomicU64 = AtomicU64::new(0);
 
 mod elevated;
+mod measured;
 mod protection;
 mod races;
 mod removal;

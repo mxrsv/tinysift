@@ -162,10 +162,12 @@ impl ProgressListener for Progress {
 }
 
 /// Records moves, Empty Trash, deletions and batches deleted as
-/// administrator in memory and changes nothing. `deny` answers like a Finder
-/// Automation denial; `fail_on` fails one move, `fail_delete_on` one
-/// deletion, `elevate_answer` every batch; `panic_on` panics. `steps` keeps
-/// every call in order ("trash a", "empty", "delete b", "elevate c d").
+/// administrator in memory. Moves and batches change nothing; with
+/// `deletes` a deletion removes the test's own fixture, and Empty Trash
+/// empties `bin`, so the run measures real freed bytes. `deny` answers like a Finder Automation
+/// denial; `fail_on` fails one move, `fail_delete_on` one deletion,
+/// `elevate_answer` every batch; `panic_on` panics. `steps` keeps every call
+/// in order ("trash a", "empty", "delete b", "elevate c d").
 #[derive(Default)]
 pub(super) struct FakeTrash {
     pub(super) moved: Mutex<Vec<PathBuf>>,
@@ -175,6 +177,10 @@ pub(super) struct FakeTrash {
     pub(super) fail_delete_on: Option<&'static str>,
     pub(super) elevate_answer: Option<ElevatedError>,
     pub(super) panic_on: Option<&'static str>,
+    /// The test's own Trash folder, emptied by Empty Trash.
+    pub(super) bin: Option<PathBuf>,
+    /// A deletion removes the (test-owned) path.
+    pub(super) deletes: bool,
 }
 
 impl FakeTrash {
@@ -213,6 +219,13 @@ impl Trash for FakeTrash {
             return Err(TrashError::AutomationDenied("(-1743)".into()));
         }
         self.step("empty", None);
+        for entry in self
+            .bin
+            .iter()
+            .flat_map(|bin| std::fs::read_dir(bin).unwrap())
+        {
+            tiny_core::clean::fs_safe::remove_recursive_safe(&entry.unwrap().path()).unwrap();
+        }
         Ok(())
     }
 }
@@ -223,7 +236,10 @@ impl Delete for FakeTrash {
             return Err(std::io::Error::other("busy"));
         }
         self.step("delete", Some(path));
-        Ok(())
+        match self.deletes {
+            true => tiny_core::clean::fs_safe::remove_recursive_safe(path),
+            false => Ok(()),
+        }
     }
 }
 

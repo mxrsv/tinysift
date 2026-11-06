@@ -180,12 +180,17 @@ The ordinary permanent-delete [walker](../../crates/tiny-core/src/clean/fs_safe/
 opens each ancestor and directory relative to a pinned parent descriptor with `O_NOFOLLOW`.
 It checks the opened directory's identity and device before reading its entries; child mutations
 use single names with `unlinkat`, so replacing a directory with a symlink cannot redirect the
-walk to its target. Read and mutation errors propagate as failures, with no pathname fallback.
+walk to its target. There is no pathname fallback. Clean's `Delete` is best effort
+(`remove_recursive_one_device_each`, `Delete::delete_each`): an entry that fails (locked, denied,
+replaced, on another device) stays, is recorded with its error, and its siblings are still removed;
+the folders holding it then stay with `ENOTEMPTY`, which is not recorded as a second failure.
+Failures at the item's ancestors or the item itself leave everything. Uninstall and the CLI keep
+the fail-fast form (`remove_recursive_*`, `Delete::delete`), which stops at the first error.
 This is not an atomic filesystem transaction: a real directory substituted before the initial
 identity read can still be selected; an opened directory renamed elsewhere remains the same
 object and can still be traversed. The final identity check and `unlinkat` are separate calls,
 so a last-moment replacement entry can be unlinked, but its symlink target is never followed.
-Concurrent additions can leave a partial deletion and `ENOTEMPTY`.
+Concurrent additions leave their folder with `ENOTEMPTY`, recorded as a failure.
 
 `gated_items` rechecks the table at run time against the providers, so a plan can never delete what
 only goes to the Trash, never delete a tool's store, and never give a `needs_admin` category any
@@ -203,17 +208,24 @@ report a large Trash as failed while Finder keeps going.
 item. It is the only place that builds the real `OsascriptDelete`, and it panics under
 `cfg!(test)`; tests call `remove_clean` with fakes.
 
-**Freed, moved and requested are three numbers.** Bytes freed are deleted items, the emptied Trash
-and what each prune measured; bytes moved to the Trash free nothing until the Trash is emptied;
-bytes requested belong to a tool that finishes in the background (simulator runtimes). A removal
-counts as freed only when it ended `Deleted`, `TrashEmptied` or `Pruned`; a partial deletion is
-`Failed` with `DeleteFailed` (`source_still_present`) and counts nothing, and a failed prune
-(`ToolFailed`) counts nothing even if the tool pruned part of the cache. The selection total is the union of the
-selected items: [`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs) counts a hard
+**Freed, moved and requested are three numbers.** Bytes freed are measured, never discovery
+sizes: right before each removal that frees space (`Delete`, `DeleteAsAdministrator`, `EmptyTrash`,
+`RunTool(Prune)`), among the slow checks, the item's freed bytes are measured by the
+[`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs) rule, and once more right after
+it ([`measure.rs`](../../crates/tiny-core/src/clean/checked_execute/measure.rs)); the item freed
+`before - after` (saturating), and the run's `bytes_freed` is the sum. Items are measured one after
+another, so a hard link or clone family split between two removed items counts with the second,
+once. Bytes moved to the Trash free nothing until the Trash is emptied; bytes requested belong to a
+tool that finishes in the background (simulator runtimes). Each result carries a `RemovalExtent`:
+`Removed`, `PartlyRemoved` (a failed removal that freed bytes or removed an entry; its
+`bytes_left` is what is still there), `NotRemoved`, `MovedToTrash` or `Requested`. A partly removed
+item is still `DeleteFailed`, `Failed` or `ToolFailed`, and counts what was measured as freed.
+
+The preview's selection total is the union of the selected items: `freed_size.rs` counts a hard
 link or clone family only when it lies wholly inside an item, so an inode split between two items
 counts in neither. Discovery therefore keeps those `SharedBlocks` (`retain_completable` drops what
 no selection could complete), and `freed_together` adds back the blocks that items share only with
-each other. A prune frees at most its cache, so it makes the total an upper bound.
+each other.
 
 **Tool commands** need `tool_commands` in the options; without it every tool row stays
 `ReportOnly{NotPerPathTrash}`, so an app that does not know the option cannot preselect uv into a
@@ -223,9 +235,8 @@ stdin closed, no shell, never elevated, killed after ten minutes. The app's runn
 starts each tool in its own process group and kills the whole group, because Corepack's pnpm runs the
 real `pnpm-native` as a child that a plain kill would leave pruning; the CLI's runner keeps the
 terminal's group so Ctrl-C reaches the tool. A prune is measured among the
-slow checks, before the rules are read again, so those checks also cover the time the walk takes,
-and once more afterwards. Freed bytes are `before - after` (saturating), outside the union. A
-prune walks the cache twice. A tool that cannot be found keeps the row report only; the app never deletes a tool's store
+slow checks like every removal that frees space, and once more afterwards. A prune walks the
+cache twice. A tool that cannot be found keeps the row report only; the app never deletes a tool's store
 by hand. `ToolLookup::app()` searches `PATH`, then the nvm `bin` folder for pnpm, then
 `/opt/homebrew/bin` and `/usr/local/bin`, then per-user folders (uv in `~/.local/bin` and
 `~/.cargo/bin`; pnpm in `~/Library/pnpm`, `~/.local/share/pnpm`, `~/.volta/bin`), because a

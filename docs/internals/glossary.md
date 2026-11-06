@@ -110,7 +110,8 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 - **Trash row** — The `trash` category as the app offers it (`include_trash`): one `Destructive`
   item for `~/.Trash`, never preselected, emptied through Finder when explicitly selected.
 - **Freed, moved, requested** — The three results the app reports apart: freed (`bytes_freed`:
-  deleted, emptied or pruned), moved to the Trash (`bytes_moved_to_trash`: still on disk) and
+  measured before minus after each deletion, emptying or prune, partly removed items included),
+  moved to the Trash (`bytes_moved_to_trash`: still on disk) and
   requested (`bytes_requested`: a tool finishes it in the background). Not: one total.
 - **Deletion as administrator** — Root deleting `needs_admin` items through one `osascript`
   authentication dialog per Clean, with nothing installed

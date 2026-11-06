@@ -22,24 +22,27 @@ Things that are not obvious from reading one file.
   categories there.
 - **`category_family` panics** on an unknown id. Register a new category in every registry
   function and the `SECTIONS` test ([clean.md](clean.md#the-provider-registry)).
-- **Finder's Empty Trash empties every volume's Trash**, but the Trash row counts and fingerprints
-  only `~/.Trash`, so the bytes it reports can be lower than what disappears, and it also takes
-  anything put there while Finder waits for the Automation prompt
-  ([clean.md](clean.md#the-desktops-checked-removal)). After a success, nothing re-measures the
-  Trash: a locked item Finder skips still counts as freed.
-- **A partial deletion is `Failed` and counts nothing.** The descriptor-relative
-  [walker](../../crates/tiny-core/src/clean/fs_safe/remove_tree.rs) propagates child errors;
-  earlier entries may already be gone. Re-check the path rather than trusting the count.
+- **Finder's Empty Trash empties every volume's Trash**, but the Trash row counts, fingerprints and
+  measures only `~/.Trash`, so the bytes it reports can be lower than what disappears, and it also
+  takes anything put there while Finder waits for the Automation prompt
+  ([clean.md](clean.md#the-desktops-checked-removal)).
+- **Clean's deletion is best effort per entry; uninstall's is not.** Clean's `Delete` goes on past
+  an entry that fails and ends `PartlyRemoved` with measured freed and left bytes
+  ([`measure.rs`](../../crates/tiny-core/src/clean/checked_execute/measure.rs)). Uninstall and the
+  CLI use the fail-fast [walker](../../crates/tiny-core/src/clean/fs_safe/remove_tree.rs) form,
+  where earlier entries may already be gone when it stops.
+- **Freed bytes cost a walk before and after each removal.** A partly removed item, a pruned cache
+  and the emptied Trash are walked twice; a fully deleted item only before, since a missing path
+  measures 0 without a walk.
 - **Permanent deletion rejects symlinked ancestors.** The
   [walker](../../crates/tiny-core/src/clean/fs_safe/remove_tree.rs) opens one component at a time;
   a path through `/var` on a Mac where it aliases `/private/var` is refused. Tests must canonicalize
   their own temporary fixture roots, never production cleanup targets. Pinned descriptors prevent
   symlink redirection, not concurrent renames or an atomic compare-and-unlink
   ([limits](clean.md#the-desktops-checked-removal)).
-- **A prune walks the cache twice** (measured before and after), and a failed prune may have
-  pruned part of the cache while counting nothing. A folder the walk after cannot read makes the
-  freed bytes an upper bound (`Pruned.upper_bound`), since the size after is then too low; one the
-  walk before could not read only understates them.
+- **A folder the walk after a removal cannot read makes its freed bytes an upper bound**
+  (`ItemResult::freed_is_upper_bound`, `Pruned.upper_bound`), since the size after is then too
+  low; one the walk before could not read only understates them.
 - **The app and the shell can run different pnpm.** An older Homebrew pnpm and a newer nvm or
   Corepack pnpm use different stores (`store/v10` against `store/v11` on the maintainer's Mac). The app's lookup puts nvm's pnpm before Homebrew's
   (`ToolLookup::app`); when a prune frees less than the sized store, check which pnpm resolved.

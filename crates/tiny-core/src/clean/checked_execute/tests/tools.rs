@@ -156,9 +156,7 @@ fn runtime(size: u64) -> PlannedItem {
     }
 }
 
-fn allocated(path: &Path) -> u64 {
-    fs::symlink_metadata(path).unwrap().blocks() * 512
-}
+use super::removal::allocated;
 
 fn pruned_outcome(report: &CheckedExecReport) -> (u64, bool) {
     match &outcomes(report)[0] {
@@ -245,6 +243,7 @@ fn a_prune_runs_the_tool_and_counts_only_what_it_freed() {
         planned("user-logs", &root, "gone", Removal::Delete),
     ];
     let one = allocated(&root.join("cache/one"));
+    let gone = allocated(&root.join("gone"));
     let report = run_tools(
         &TempStore::new(),
         &root,
@@ -263,7 +262,7 @@ fn a_prune_runs_the_tool_and_counts_only_what_it_freed() {
     assert_eq!(outcomes[1], ItemOutcome::Deleted);
     assert_eq!(
         report.bytes_freed,
-        pruned + 4,
+        pruned + gone,
         "measured, not the discovery size"
     );
     assert_eq!(sinks.log(), ["delete gone", "run cache"]);

@@ -28,11 +28,128 @@ enum Stage {
 // Private synchronization seam; production supplies only a no-op observer.
 type Observer<'a> = &'a mut dyn FnMut(Stage, &Path);
 
+/// The first failures a best-effort removal keeps; the rest are only counted.
+const KEPT_FAILURES: usize = 16;
+
+/// What a best-effort removal ([`remove_each`]) did. Every guard of the
+/// fail-fast removal still holds per entry: an entry that fails one stays,
+/// and its siblings are still removed.
+#[derive(Debug, Default)]
+pub struct TreeRemoval {
+    /// The first failures, in walk order (at most 16).
+    pub failures: Vec<EntryFailure>,
+    /// Every entry that could not be removed, past `failures` too. A folder
+    /// left only because something inside it stayed is not counted.
+    pub failed_entries: u64,
+    /// Entries unlinked, folders included.
+    pub removed_entries: u64,
+}
+
+impl TreeRemoval {
+    /// Nothing failed: the whole tree is gone (or was already).
+    pub fn is_complete(&self) -> bool {
+        self.failed_entries == 0
+    }
+
+    /// One failure at `path`, nothing removed: what a route that cannot
+    /// continue past an entry reports.
+    pub fn failed_at(path: &Path, error: io::Error) -> Self {
+        let mut removal = Self::default();
+        removal.record(path, error);
+        removal
+    }
+
+    fn record(&mut self, path: &Path, error: io::Error) {
+        self.failed_entries += 1;
+        if self.failures.len() < KEPT_FAILURES {
+            self.failures.push(EntryFailure {
+                path: path.to_path_buf(),
+                error,
+            });
+        }
+    }
+}
+
+/// One entry a best-effort removal left, with the error that kept it.
+#[derive(Debug)]
+pub struct EntryFailure {
+    pub path: PathBuf,
+    pub error: io::Error,
+}
+
+/// The error for an entry replaced or edited during deletion, which is
+/// refused (left as it is).
+#[derive(Debug)]
+struct EntryChanged;
+
+impl std::fmt::Display for EntryChanged {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("directory entry changed during deletion")
+    }
+}
+
+impl std::error::Error for EntryChanged {}
+
+/// True when `error` refused an entry replaced during deletion.
+pub fn is_entry_changed(error: &io::Error) -> bool {
+    error
+        .get_ref()
+        .is_some_and(|inner| inner.is::<EntryChanged>())
+}
+
+/// Fail fast stops at the first entry that fails; best effort records it
+/// and goes on with the rest of the tree.
+struct Sink {
+    best_effort: bool,
+    removal: TreeRemoval,
+}
+
+impl Sink {
+    fn fail(&mut self, path: &Path, error: io::Error) -> io::Result<()> {
+        if !self.best_effort {
+            return Err(error);
+        }
+        self.removal.record(path, error);
+        Ok(())
+    }
+}
+
 pub(super) fn remove(root: &Path, one_device: bool) -> io::Result<()> {
     remove_observed(root, one_device, &mut |_, _| {})
 }
 
+/// `remove`, but an entry that fails stays and the rest of the tree is
+/// still removed. Failures above `root`'s children (its ancestors, `root`
+/// itself) leave everything.
+pub(super) fn remove_each(root: &Path, one_device: bool) -> TreeRemoval {
+    remove_each_observed(root, one_device, &mut |_, _| {})
+}
+
 fn remove_observed(root: &Path, one_device: bool, observer: Observer<'_>) -> io::Result<()> {
+    let mut sink = Sink {
+        best_effort: false,
+        removal: TreeRemoval::default(),
+    };
+    remove_with(root, one_device, observer, &mut sink)
+}
+
+fn remove_each_observed(root: &Path, one_device: bool, observer: Observer<'_>) -> TreeRemoval {
+    let mut sink = Sink {
+        best_effort: true,
+        removal: TreeRemoval::default(),
+    };
+    if let Err(error) = remove_with(root, one_device, observer, &mut sink) {
+        sink.removal.record(root, error);
+    }
+    sink.removal
+}
+
+fn remove_with(
+    root: &Path,
+    one_device: bool,
+    observer: Observer<'_>,
+    sink: &mut Sink,
+) -> io::Result<()> {
     let mut names = Vec::new();
     for component in root.components() {
         match component {
@@ -74,6 +191,7 @@ fn remove_observed(root: &Path, one_device: bool, observer: Observer<'_>) -> io:
         one_device.then_some(expected.st_dev),
         root,
         observer,
+        sink,
     )
 }
 
@@ -83,7 +201,7 @@ fn name(value: &OsStr) -> io::Result<CString> {
 }
 
 fn changed() -> io::Error {
-    io::Error::other("directory entry changed during deletion")
+    io::Error::other(EntryChanged)
 }
 
 fn same_entry(a: &libc::stat, b: &libc::stat) -> bool {
@@ -130,6 +248,10 @@ fn open_directory(parent: RawFd, name: &CStr, access: libc::c_int) -> io::Result
     Ok(unsafe { OwnedFd::from_raw_fd(fd) })
 }
 
+/// Removes one entry. With a best-effort `sink`, a child that fails is
+/// recorded and its siblings still go; the folder holding it then stays
+/// (`ENOTEMPTY`) without a failure of its own. `Err` is always this entry's
+/// own failure.
 fn remove_entry(
     parent: RawFd,
     name: &CStr,
@@ -137,6 +259,7 @@ fn remove_entry(
     device: Option<libc::dev_t>,
     shown: &Path,
     observer: Observer<'_>,
+    sink: &mut Sink,
 ) -> io::Result<()> {
     let directory = expected.st_mode & libc::S_IFMT == libc::S_IFDIR;
     if !directory
@@ -150,6 +273,7 @@ fn remove_entry(
             "not a regular file, link or directory",
         ));
     }
+    let failed_before = sink.removal.failed_entries;
     let mut opened_stream = None;
     if directory {
         observer(Stage::BeforeDirectoryOpen, shown);
@@ -161,21 +285,36 @@ fn remove_entry(
         check_device(device, &opened)?;
         observer(Stage::AfterDirectoryOpen, shown);
         let mut stream = Directory::new(fd)?;
-        while let Some(child) = stream.next()? {
+        loop {
+            let child = match stream.next() {
+                Ok(Some(child)) => child,
+                Ok(None) => break,
+                // The listing cannot go on; what it did not reach stays.
+                Err(error) => {
+                    sink.fail(shown, error)?;
+                    break;
+                }
+            };
+            let child_path = shown.join(OsStr::from_bytes(child.to_bytes()));
             let child_stat = match stat_at(stream.fd(), &child) {
                 Ok(stat) => stat,
                 Err(error) if error.kind() == io::ErrorKind::NotFound => continue,
-                Err(error) => return Err(error),
+                Err(error) => {
+                    sink.fail(&child_path, error)?;
+                    continue;
+                }
             };
-            let child_path = shown.join(OsStr::from_bytes(child.to_bytes()));
-            remove_entry(
+            if let Err(error) = remove_entry(
                 stream.fd(),
                 &child,
                 &child_stat,
                 device,
                 &child_path,
                 observer,
-            )?;
+                sink,
+            ) {
+                sink.fail(&child_path, error)?;
+            }
         }
         opened_stream = Some(stream);
     }
@@ -195,16 +334,19 @@ fn remove_entry(
         )
     };
     if rc == 0 {
+        sink.removal.removed_entries += 1;
         return match opened_stream {
             Some(stream) => stream.close(),
             None => Ok(()),
         };
     }
     let error = io::Error::last_os_error();
-    if error.kind() == io::ErrorKind::NotFound {
-        Ok(())
-    } else {
-        Err(error)
+    let left_inside = sink.removal.failed_entries > failed_before;
+    match error.raw_os_error() {
+        Some(libc::ENOENT) => Ok(()),
+        // Kept only because a recorded entry inside it stayed.
+        Some(libc::ENOTEMPTY) if left_inside => Ok(()),
+        _ => Err(error),
     }
 }
 

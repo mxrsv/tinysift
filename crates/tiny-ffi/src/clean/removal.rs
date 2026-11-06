@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime};
 
 use tiny_core::clean::checked_execute::{
-    execute_checked, CheckedExecReport, ExecContext, ItemOutcome, StopReason,
+    execute_checked, CheckedExecReport, ExecContext, ItemOutcome, RemovalExtent, StopReason,
 };
 use tiny_core::clean::elevated_delete::{ElevatedDelete, ElevatedError, OsascriptDelete};
 use tiny_core::clean::finder_trash::{FinderTrash, Trash, TrashError};
@@ -86,13 +86,45 @@ pub enum FfiRemovalOutcome {
     NotAttempted,
 }
 
+/// How much of an item is gone, whatever its outcome says about the route.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiRemovalExtent {
+    /// Deleted, pruned or emptied as planned.
+    Removed,
+    /// The removal failed part way (`outcome` is `Failed`): `bytes_freed`
+    /// went, `bytes_left` stays.
+    PartlyRemoved,
+    /// Skipped, not attempted, or failed with nothing removed.
+    NotRemoved,
+    /// Moved to the Trash: still on disk, never freed.
+    MovedToTrash,
+    /// A tool accepted the removal and finishes it in the background.
+    Requested,
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct FfiRemovalResult {
     pub candidate_id: String,
     pub category_id: String,
     pub path: String,
+    /// Discovery-time size: what was planned, not what was freed.
     pub size_bytes: u64,
     pub outcome: FfiRemovalOutcome,
+    /// Always set by the core; `None` only in a record built elsewhere.
+    #[uniffi(default = None)]
+    pub extent: Option<FfiRemovalExtent>,
+    /// Measured: the item's freed bytes right before its removal minus what
+    /// is still there right after. 0 for moves, requests and items left as
+    /// they were.
+    #[uniffi(default = 0)]
+    pub bytes_freed: u64,
+    /// Measured right after a failed removal: what of the item stays.
+    #[uniffi(default = 0)]
+    pub bytes_left: u64,
+    /// `bytes_freed` may be high (shared blocks the volume could not show,
+    /// or a walk after the removal that could not read everything).
+    #[uniffi(default = false)]
+    pub bytes_freed_is_upper_bound: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -101,9 +133,8 @@ pub struct FfiRemovalReport {
     pub results: Vec<FfiRemovalResult>,
     /// Discovery-time sizes of every preview item.
     pub bytes_selected: u64,
-    /// What the deleted items and the emptied Trash freed (their sizes plus
-    /// blocks shared only between them, counted once), plus what each prune
-    /// freed as measured around it.
+    /// Measured: the sum of every result's `bytes_freed` (deleted, pruned,
+    /// emptied and partly removed items). Never a discovery-time size.
     pub bytes_freed: u64,
     /// `bytes_freed` counts blocks the volume could not show as unshared.
     pub bytes_freed_is_upper_bound: bool,
@@ -126,6 +157,13 @@ pub struct FfiRemovalReport {
     /// is `Cancelled`.
     #[uniffi(default = false)]
     pub authentication_cancelled: bool,
+    /// Items whose removal failed part way (`FfiRemovalExtent::PartlyRemoved`);
+    /// they also count in `failed_count`.
+    #[uniffi(default = 0)]
+    pub partly_removed_count: u64,
+    /// Measured: what the failed removals left, summed.
+    #[uniffi(default = 0)]
+    pub bytes_left: u64,
 }
 
 impl From<FfiDeleteMode> for DeleteMode {
@@ -477,6 +515,8 @@ fn removal_report(
         stopped: executed.stopped.clone().map(Into::into),
         bytes_requested: executed.bytes_requested(),
         authentication_cancelled: executed.stopped == Some(StopReason::AuthenticationCancelled),
+        partly_removed_count: executed.extent_count(RemovalExtent::PartlyRemoved) as u64,
+        bytes_left: executed.bytes_left(),
     };
     let results = items
         .iter()
@@ -487,6 +527,10 @@ fn removal_report(
             path: result.item.path.to_string_lossy().into_owned(),
             size_bytes: result.item.size,
             outcome: result.outcome.into(),
+            extent: Some(result.extent.into()),
+            bytes_freed: result.bytes_freed,
+            bytes_left: result.bytes_left,
+            bytes_freed_is_upper_bound: result.freed_is_upper_bound,
         })
         .collect();
     FfiRemovalReport { results, ..summary }
@@ -501,6 +545,18 @@ impl ElevatedDelete for NoElevation {
         Err(ElevatedError::Failed(
             "clean_execute never deletes as administrator".into(),
         ))
+    }
+}
+
+impl From<RemovalExtent> for FfiRemovalExtent {
+    fn from(extent: RemovalExtent) -> Self {
+        match extent {
+            RemovalExtent::Removed => Self::Removed,
+            RemovalExtent::PartlyRemoved => Self::PartlyRemoved,
+            RemovalExtent::NotRemoved => Self::NotRemoved,
+            RemovalExtent::MovedToTrash => Self::MovedToTrash,
+            RemovalExtent::Requested => Self::Requested,
+        }
     }
 }
 

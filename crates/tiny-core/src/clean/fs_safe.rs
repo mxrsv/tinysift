@@ -15,6 +15,8 @@ use super::scan_context::ScanContext;
 
 mod remove_tree;
 
+pub use remove_tree::{is_entry_changed, EntryFailure, TreeRemoval};
+
 /// Yields every entry under `root` without descending into symlinks. Symlink
 /// entries themselves are yielded (so callers can remove them), but their
 /// targets are not walked.
@@ -303,19 +305,40 @@ pub fn remove_recursive_one_device(root: &Path) -> std::io::Result<()> {
     remove_tree::remove(root, true)
 }
 
-/// The desktop's permanent deletion, a seam so tests can make it fail.
-pub trait Delete: Send + Sync {
-    /// Deletes `path` and everything in it for good. On `Err`, part of it
-    /// may already be gone.
-    fn delete(&self, path: &Path) -> std::io::Result<()>;
+/// `remove_recursive_one_device`, best effort: an entry that fails stays
+/// (every guard still applies to it) and the rest of `root` is removed.
+/// Clean's permanent deletion only; uninstall and the CLI stop at the first
+/// failure.
+pub fn remove_recursive_one_device_each(root: &Path) -> TreeRemoval {
+    remove_tree::remove_each(root, true)
 }
 
-/// The real route: `remove_recursive_one_device`.
+/// Permanent deletion, a seam so tests can make it fail.
+pub trait Delete: Send + Sync {
+    /// Deletes `path` and everything in it for good, stopping at the first
+    /// failure. On `Err`, part of it may already be gone.
+    fn delete(&self, path: &Path) -> std::io::Result<()>;
+
+    /// Deletes `path` for good, going on past entries that fail. A route
+    /// that cannot reports its one failure at `path`.
+    fn delete_each(&self, path: &Path) -> TreeRemoval {
+        match self.delete(path) {
+            Ok(()) => TreeRemoval::default(),
+            Err(error) => TreeRemoval::failed_at(path, error),
+        }
+    }
+}
+
+/// The real route: `remove_recursive_one_device`, and its best-effort form.
 pub struct SafeDelete;
 
 impl Delete for SafeDelete {
     fn delete(&self, path: &Path) -> std::io::Result<()> {
         remove_recursive_one_device(path)
+    }
+
+    fn delete_each(&self, path: &Path) -> TreeRemoval {
+        remove_recursive_one_device_each(path)
     }
 }
 

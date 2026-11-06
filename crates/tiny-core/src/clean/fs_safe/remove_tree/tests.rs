@@ -99,6 +99,10 @@ fn permanent_deletion_never_enters_a_directory_on_another_device() {
         Some(expected.st_dev.wrapping_add(1)),
         &base.join("item"),
         &mut |_, _| {},
+        &mut Sink {
+            best_effort: false,
+            removal: TreeRemoval::default(),
+        },
     );
     assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EXDEV));
     assert_eq!(fs::read(base.join("item/sub/file")).unwrap(), b"selected");
@@ -207,4 +211,118 @@ fn enumerated_directories_still_need_read_permission() {
     fs::set_permissions(&item, fs::Permissions::from_mode(0o700)).unwrap();
     assert_eq!(result.unwrap_err().kind(), io::ErrorKind::PermissionDenied);
     assert_eq!(fs::read(item.join("sub/file")).unwrap(), b"selected");
+}
+
+/// Clears `chflags` on drop, so a failed assert never leaves a locked file
+/// in the temp folder.
+struct Locked(PathBuf);
+
+impl Locked {
+    fn new(path: PathBuf) -> Self {
+        set_flags(&path, libc::UF_IMMUTABLE);
+        Self(path)
+    }
+}
+
+impl Drop for Locked {
+    fn drop(&mut self) {
+        set_flags(&self.0, 0);
+    }
+}
+
+fn set_flags(path: &Path, flags: u32) {
+    let encoded = name(path.as_os_str()).unwrap();
+    // SAFETY: a NUL-terminated path inside the test-owned temp tree.
+    let rc = unsafe { libc::chflags(encoded.as_ptr(), flags as _) };
+    assert_eq!(rc, 0, "chflags: {}", io::Error::last_os_error());
+}
+
+#[test]
+fn best_effort_removes_the_rest_of_the_item_past_a_locked_file() {
+    let (_temp, base) = fixture();
+    let item = base.join("item");
+    fs::create_dir(item.join("other")).unwrap();
+    fs::write(item.join("other/a"), b"a").unwrap();
+    fs::write(item.join("b"), b"b").unwrap();
+    let _lock = Locked::new(item.join("sub/file"));
+
+    let removal = remove_each(&item, true);
+
+    assert_eq!(removal.failed_entries, 1, "{removal:?}");
+    assert_eq!(removal.failures[0].path, item.join("sub/file"));
+    assert_eq!(removal.failures[0].error.raw_os_error(), Some(libc::EPERM));
+    assert!(!removal.is_complete());
+    assert_eq!(removal.removed_entries, 3, "other/a, other and b");
+    assert!(!item.join("other").exists() && !item.join("b").exists());
+    assert_eq!(fs::read(item.join("sub/file")).unwrap(), b"selected");
+    assert_eq!(fs::read(base.join("outside/precious")).unwrap(), b"keep");
+}
+
+#[test]
+fn best_effort_records_an_unreadable_folder_and_removes_its_siblings() {
+    if unsafe { libc::geteuid() } == 0 {
+        return; // root reads any folder
+    }
+    let (_temp, base) = fixture();
+    let item = base.join("item");
+    fs::write(item.join("b"), b"b").unwrap();
+    fs::set_permissions(item.join("sub"), fs::Permissions::from_mode(0o000)).unwrap();
+    let removal = remove_each(&item, true);
+    fs::set_permissions(item.join("sub"), fs::Permissions::from_mode(0o700)).unwrap();
+
+    assert_eq!(removal.failed_entries, 1, "{removal:?}");
+    assert_eq!(
+        removal.failures[0].error.kind(),
+        io::ErrorKind::PermissionDenied
+    );
+    assert!(!item.join("b").exists());
+    assert_eq!(fs::read(item.join("sub/file")).unwrap(), b"selected");
+}
+
+#[test]
+fn best_effort_keeps_every_guard_for_the_entry_that_fails() {
+    let (_temp, base) = fixture();
+    let item = base.join("item");
+    let sub = item.join("sub");
+    fs::write(item.join("b"), b"b").unwrap();
+    let removal = remove_each_observed(&item, true, &mut |stage, path| {
+        if matches!(stage, Stage::AfterDirectoryOpen) && path == sub {
+            fs::rename(&sub, base.join("retired")).unwrap();
+            symlink(base.join("outside"), &sub).unwrap();
+        }
+    });
+    assert_eq!(removal.failed_entries, 1, "{removal:?}");
+    assert!(is_entry_changed(&removal.failures[0].error));
+    assert!(fs::symlink_metadata(&sub).unwrap().is_symlink());
+    assert_eq!(fs::read(base.join("outside/precious")).unwrap(), b"keep");
+    assert!(!item.join("b").exists(), "the sibling still goes");
+}
+
+#[test]
+fn best_effort_reports_entries_that_arrived_and_failures_at_the_root() {
+    let (_temp, base) = fixture();
+    let item = base.join("item");
+    let removal = remove_each_observed(&item, true, &mut |stage, path| {
+        if matches!(stage, Stage::BeforeUnlink) && path == item {
+            fs::write(item.join("arrived-late"), b"keep").unwrap();
+        }
+    });
+    assert_eq!(removal.failed_entries, 1);
+    assert_eq!(
+        removal.failures[0].error.raw_os_error(),
+        Some(libc::ENOTEMPTY)
+    );
+    assert_eq!(fs::read(item.join("arrived-late")).unwrap(), b"keep");
+
+    assert!(remove_each(&base.join("missing"), true).is_complete());
+    let root = remove_each(Path::new("/"), true);
+    assert_eq!((root.failed_entries, root.removed_entries), (1, 0));
+    let changed = remove_each_observed(&item, true, &mut |stage, path| {
+        if matches!(stage, Stage::BeforeDirectoryOpen) && path == item {
+            fs::rename(&item, base.join("retired")).unwrap();
+            fs::create_dir(&item).unwrap();
+        }
+    });
+    assert!(is_entry_changed(&changed.failures[0].error));
+    assert_eq!(changed.removed_entries, 0, "a replaced root is left whole");
 }
