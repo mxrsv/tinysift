@@ -264,8 +264,10 @@ impl DfKind {
 }
 
 /// Parses one line of `docker system df --format '{{json .}}'`. The JSON
-/// shape is `{"Type":"Images","Size":"1.234GB",...}`; we only need Type +
-/// Size. Returns None for non-cleanable types (Containers).
+/// shape is `{"Type":"Images","Size":"2.7GB","Reclaimable":"1.234GB (45%)",...}`;
+/// we only need Type + Reclaimable, what a prune can free. `Size` also
+/// counts what running containers still use, so it is never the figure.
+/// Returns None for non-cleanable types (Containers).
 ///
 /// Hand-rolled to avoid adding a serde_json dep just for this.
 fn parse_df_line(line: &str) -> Option<(DfKind, u64)> {
@@ -278,8 +280,9 @@ fn parse_df_line(line: &str) -> Option<(DfKind, u64)> {
     } else {
         return None;
     };
-    let size_str = extract_quoted(line, "Size")?;
-    let size = parse_human_size(size_str)?;
+    let reclaimable = extract_quoted(line, "Reclaimable")?;
+    // "1.234GB (45%)": the share of Size in parentheses is not a size.
+    let size = parse_human_size(reclaimable.split(" (").next()?)?;
     Some((kind, size))
 }
 
@@ -332,11 +335,15 @@ mod tests {
     }
 
     #[test]
-    fn parse_df_line_extracts_images_and_size() {
-        let line = r#"{"Type":"Images","TotalCount":"5","Active":"3","Size":"2.5GB","Reclaimable":"1.2GB"}"#;
+    fn parse_df_line_reads_reclaimable_not_size() {
+        let line = r#"{"Active":"3","Reclaimable":"1.234GB (45%)","Size":"2.5GB","TotalCount":"5","Type":"Images"}"#;
         let (kind, size) = parse_df_line(line).unwrap();
         assert_eq!(kind, DfKind::Images);
-        assert_eq!(size, 2_500_000_000);
+        assert_eq!(size, 1_234_000_000, "Reclaimable, without its share");
+        let bare = r#"{"Type":"Build Cache","Size":"2GB","Reclaimable":"512MB"}"#;
+        assert_eq!(parse_df_line(bare), Some((DfKind::BuildCache, 512_000_000)));
+        let no_reclaimable = r#"{"Type":"Images","Size":"2.5GB"}"#;
+        assert_eq!(parse_df_line(no_reclaimable), None, "never Size");
     }
 
     #[test]
@@ -379,10 +386,10 @@ mod tests {
 
     const DF_ARGS: &[&str] = &["system", "df", "--format", "{{json .}}"];
     const DF_OUT: &str = "\
-{\"Type\":\"Images\",\"Size\":\"1GB\"}
-{\"Type\":\"Containers\",\"Size\":\"0B\"}
-{\"Type\":\"Local Volumes\",\"Size\":\"500MB\"}
-{\"Type\":\"Build Cache\",\"Size\":\"2GB\"}
+{\"Type\":\"Images\",\"Size\":\"3GB\",\"Reclaimable\":\"1GB (33%)\"}
+{\"Type\":\"Containers\",\"Size\":\"0B\",\"Reclaimable\":\"0B\"}
+{\"Type\":\"Local Volumes\",\"Size\":\"900MB\",\"Reclaimable\":\"500MB (55%)\"}
+{\"Type\":\"Build Cache\",\"Size\":\"2GB\",\"Reclaimable\":\"2GB\"}
 ";
 
     fn df_runner() -> MockRunner {

@@ -116,7 +116,8 @@ private-looking downloads and never ticks them for you.
 - **`-y` needs `--category`**, so an unattended run always names its scope.
 - **The Trash can only be emptied**, with Hard delete. With `trash` selected, Move to Trash
   is refused and nothing is changed.
-- **Some cleanup has no Trash.** `docker` prunes unused images and build cache;
+- **Some cleanup has no Trash.** `docker` prunes unused images and build cache, and its size is
+  what Docker calls reclaimable, not the images' whole size;
   `docker-volumes` prunes unused volumes, which hold container data such as databases;
   `time-machine-local` deletes local snapshots; `simulator-devices` deletes simulators that
   Xcode reports unavailable; `simulator-runtimes` deletes runtimes no simulator uses (`simctl`
