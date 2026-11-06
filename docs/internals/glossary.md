@@ -143,6 +143,11 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   `llw*`); loopback, tunnels and bridges stay out so bytes are not counted twice. The first
   sample only sets the baseline (`network_warming_up`); no readable interface means `None`,
   never zero. Not: per-process bytes, which macOS has no public API for.
+- **CPU time** (`cpu_time_ns` on `ProcessInfo` and `FfiProcessInfo`) — User plus system time a
+  process has used since it started, including the children it has reaped, in nanoseconds, read
+  with the footprint in one `proc_pid_rusage` call
+  ([`footprint.rs`](../../crates/tiny-core/src/processes/footprint.rs)). Native app only;
+  `None` exactly when the footprint is. Not: `cpu_percent`, a rate over the last sample interval.
 
 ## Uninstall
 

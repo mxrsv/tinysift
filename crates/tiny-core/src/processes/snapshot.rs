@@ -37,6 +37,11 @@ pub struct ProcessInfo {
     /// preserve the existing CLI JSON contract.
     #[serde(skip)]
     pub footprint_bytes: Option<u64>,
+    /// User plus system CPU time since the process started, including its reaped
+    /// children's, in nanoseconds. Read with the footprint and `None` exactly when it is.
+    /// Native app only; preserve the existing CLI JSON contract.
+    #[serde(skip)]
+    pub cpu_time_ns: Option<u64>,
     #[serde(skip)]
     pub exe: Option<PathBuf>,
 }
@@ -192,6 +197,7 @@ pub(crate) fn to_info(raw: RawProcess, cpu_measured: bool, current_uid: u32) -> 
         cpu_measured: measured,
         memory_bytes: readable.then_some(raw.memory),
         footprint_bytes: None,
+        cpu_time_ns: None,
         exe: raw.exe,
     }
 }
@@ -358,12 +364,15 @@ impl Sampler {
                 }
                 let count = seen.map_or(0, |s| s.count);
                 let info = to_info(raw, count >= REFRESHES_FOR_CPU, self.current_uid);
-                // Only a process `to_info` could read gets a footprint, so a missing memory
-                // reading keeps meaning "unreadable" across the boundary.
+                // Only a process `to_info` could read gets a footprint and CPU time, so a
+                // missing memory reading keeps meaning "unreadable" across the boundary.
+                let usage = info
+                    .memory_bytes
+                    .map(|_| super::footprint::read(info.pid))
+                    .unwrap_or_default();
                 ProcessInfo {
-                    footprint_bytes: info
-                        .memory_bytes
-                        .and_then(|_| super::footprint::phys_footprint(info.pid)),
+                    footprint_bytes: usage.footprint_bytes,
+                    cpu_time_ns: usage.cpu_time_ns,
                     ..info
                 }
             })
@@ -756,6 +765,7 @@ mod tests {
     fn cli_json_keeps_resident_memory_and_hides_the_footprint() {
         let info = ProcessInfo {
             footprint_bytes: Some(1024),
+            cpu_time_ns: Some(2048),
             ..to_info(raw(4096, 501), true, 501)
         };
         let snapshot = ProcessSnapshot {
@@ -768,6 +778,7 @@ mod tests {
         let process = &json["processes"][0];
         assert_eq!(process["memoryBytes"], 4096);
         assert!(process.get("footprintBytes").is_none());
+        assert!(process.get("cpuTimeNs").is_none());
     }
 
     #[test]

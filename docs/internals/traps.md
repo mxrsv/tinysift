@@ -160,6 +160,15 @@ Things that are not obvious from reading one file.
   bound and set `incomplete`; `omitted_*` only hides entries that are still in the totals.
   An entry that vanishes mid-scan is ignored, not reported.
 
+## Process readings
+
+- **`proc_pid_rusage` times are Mach ticks, not nanoseconds.** `ri_user_time`,
+  `ri_system_time` and their `ri_child_*` sums count Mach absolute-time units: 1 ns on Intel,
+  125/3 ns on Apple silicon, so a raw read is 41 times too small there.
+  [`footprint.rs`](../../crates/tiny-core/src/processes/footprint.rs) converts through
+  `mach_timebase_info`; its macOS tests compare a busy child against `ps -o time=` and the
+  child's own `getrusage`.
+
 ## Native integration
 
 Bindings and the linked archive must come from the same core revision.

@@ -141,6 +141,7 @@ mod tests {
             cpu_measured: true,
             memory_bytes: Some(u64::from(pid)),
             footprint_bytes: None,
+            cpu_time_ns: None,
             exe: None,
         }
     }

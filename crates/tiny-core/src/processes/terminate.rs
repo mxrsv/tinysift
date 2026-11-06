@@ -248,6 +248,7 @@ mod tests {
             cpu_measured: false,
             memory_bytes: None,
             footprint_bytes: None,
+            cpu_time_ns: None,
             exe: None,
         }
     }
