@@ -26,6 +26,9 @@ const APPLE_FOLDERS: &[&str] = &[
     "GeoServices",
     "PassKit",
 ];
+/// Caches another category owns because its tool cleans them (`pip-cache`),
+/// so one path never belongs to a tool and to a plain move at once.
+const TOOL_FOLDERS: &[&str] = &["pip"];
 /// Folders named after a vendor, not a bundle id, and the app that owns them.
 const VENDOR_APPS: &[(&str, &str)] = &[
     ("Google", "Google Chrome"),
@@ -200,7 +203,8 @@ impl UserCaches {
             .into_iter()
             .filter_map(|path| {
                 let name = path.file_name()?.to_str()?.to_string();
-                (!is_apple_cache(&name)).then_some((path, name))
+                let owned = TOOL_FOLDERS.contains(&name.as_str());
+                (!is_apple_cache(&name) && !owned).then_some((path, name))
             })
             .collect();
         let ids: Vec<&str> = paths
@@ -515,6 +519,16 @@ mod tests {
             caches.item_apps(Path::new("/c/com.apple.Safari")),
             vec!["Safari"]
         );
+    }
+
+    #[test]
+    fn a_cache_a_tool_category_owns_is_left_to_it() {
+        let root = fixture("tool-owned", &["pip", "Homebrew"]);
+        let caches = UserCaches::with_runner(Arc::new(MockRunner::new()));
+        let items = caches
+            .list_caches(&ScanContext::unchecked(), &root)
+            .unwrap();
+        assert_eq!(names(&items), vec!["Homebrew"]);
     }
 
     #[test]

@@ -68,7 +68,9 @@ mod tests {
             MockRunner::new()
                 .with_which("uv")
                 .with_which("pnpm")
-                .with_which("brew"),
+                .with_which("brew")
+                .with_which("bun")
+                .with_which("/opt/homebrew/bin/pip3"),
         );
         let options = crate::options::CleanOptions::default();
         let tools: Vec<(&str, DesktopTool)> = all_providers_with(&options, runner)
@@ -80,6 +82,8 @@ mod tests {
             [
                 ("pnpm", DesktopTool::Prune),
                 ("uv", DesktopTool::Prune),
+                ("bun-cache", DesktopTool::Prune),
+                ("pip-cache", DesktopTool::Prune),
                 ("simulator-runtimes", DesktopTool::Request),
                 ("homebrew", DesktopTool::Remove { sure: true }),
             ],

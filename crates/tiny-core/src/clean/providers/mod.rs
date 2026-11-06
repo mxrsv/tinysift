@@ -30,6 +30,7 @@ pub mod jetbrains;
 pub mod mail_attachments;
 pub mod node_modules;
 pub mod project_activity;
+pub mod purged_caches;
 pub mod python_caches;
 pub mod quarantine;
 pub mod rust_targets;
@@ -81,7 +82,7 @@ impl Family {
 pub fn category_family(category_id: &str) -> Family {
     match category_id {
         // Dev family
-        "cargo" | "npm" | "pnpm" | "yarn" | "uv" => Family::Dev,
+        "cargo" | "npm" | "pnpm" | "yarn" | "uv" | "bun-cache" | "pip-cache" => Family::Dev,
         "puppeteer" | "huggingface" | "codex-runtimes" | "codex-releases" => Family::Dev,
         "node-modules" | "python-caches" | "rust-targets" => Family::Dev,
         "gradle-maven" | "jetbrains" | "vscode" => Family::Dev,
@@ -113,7 +114,8 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
         "cargo" | "npm" | "pnpm" | "yarn" | "gradle-maven" | "android-sdk" | "docker"
         | "homebrew" => Some(ComesBack::Redownload),
         "streaming-caches" | "chat-caches" => Some(ComesBack::Redownload),
-        "uv" | "huggingface" | "codex-runtimes" | "codex-releases" => Some(ComesBack::Redownload),
+        "uv" | "bun-cache" | "pip-cache" => Some(ComesBack::Redownload),
+        "huggingface" | "codex-runtimes" | "codex-releases" => Some(ComesBack::Redownload),
         "simulator-runtimes" | "simulator-runtime-images" => Some(ComesBack::Redownload),
         "puppeteer" => rebuild("npx puppeteer browsers install"),
         "node-modules" => rebuild("npm, pnpm or yarn install"),
@@ -346,6 +348,8 @@ pub fn all_providers_with(
         Box::new(dev_caches::PnpmStore::with_runner(runner.clone())),
         Box::new(dev_caches::YarnCache::with_runner(runner.clone())),
         Box::new(dev_caches::UvCache::with_runner(runner.clone())),
+        Box::new(purged_caches::BunCache::with_runner(runner.clone())),
+        Box::new(purged_caches::PipCache::with_runner(runner.clone())),
         Box::new(dot_cache::Puppeteer),
         Box::new(dot_cache::HuggingFace),
         Box::new(dot_cache::CodexRuntimes),
@@ -420,6 +424,8 @@ pub fn known_category_ids() -> &'static [&'static str] {
         "pnpm",
         "yarn",
         "uv",
+        "bun-cache",
+        "pip-cache",
         "puppeteer",
         "huggingface",
         "codex-runtimes",

@@ -18,7 +18,11 @@ fn home() -> Option<PathBuf> {
 
 /// Cache directory printed by a package manager. A tool that cannot run is
 /// an error; a non-zero exit or empty output means "no cache".
-fn tool_path(runner: &dyn CommandRunner, bin: &str, args: &[&str]) -> Result<Option<PathBuf>> {
+pub(super) fn tool_path(
+    runner: &dyn CommandRunner,
+    bin: &str,
+    args: &[&str],
+) -> Result<Option<PathBuf>> {
     let output = run_tool(runner, bin, args)?;
     let s = output.stdout.trim();
     if !output.success() || s.is_empty() {
@@ -29,7 +33,7 @@ fn tool_path(runner: &dyn CommandRunner, bin: &str, args: &[&str]) -> Result<Opt
 
 /// Refuses unless the tool still names `path` as its cache, so its prune
 /// acts on the cache that was reviewed.
-fn still_tool_path(
+pub(super) fn still_tool_path(
     runner: &dyn CommandRunner,
     bin: &str,
     args: &[&str],
@@ -45,7 +49,7 @@ fn still_tool_path(
 
 /// A cache that its tool prunes: listed with its full size, which the prune
 /// frees at most, so the size is only an upper bound.
-fn prunable_cache(
+pub(super) fn prunable_cache(
     ctx: &ScanContext<'_>,
     path: &Path,
     id: &str,

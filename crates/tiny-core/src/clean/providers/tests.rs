@@ -34,6 +34,9 @@ const DESKTOP_TRASH: &[(&str, Option<ReportOnly>)] = &[
     ("yarn", None),
     // Runs `uv cache prune`, not a per-path move.
     ("uv", Some(ReportOnly::NotPerPathTrash)),
+    // Run `bun pm cache rm` / `pip3 cache purge`, not a per-path move.
+    ("bun-cache", Some(ReportOnly::NotPerPathTrash)),
+    ("pip-cache", Some(ReportOnly::NotPerPathTrash)),
     ("puppeteer", None),
     ("huggingface", None),
     ("codex-runtimes", None),
@@ -276,6 +279,8 @@ const SECTIONS: &[(&str, Section)] = &[
     ("pnpm", Section::Rebuilt),
     ("yarn", Section::Rebuilt),
     ("uv", Section::Rebuilt),
+    ("bun-cache", Section::Rebuilt),
+    ("pip-cache", Section::Rebuilt),
     ("puppeteer", Section::Rebuilt),
     ("huggingface", Section::Rebuilt),
     ("codex-runtimes", Section::Rebuilt),
