@@ -571,3 +571,63 @@ fn a_tool_removal_of_a_path_measures_the_path_and_keeps_every_guard() {
     assert!(root.join("device").exists());
     let _ = remove_recursive_safe(&root);
 }
+
+/// PH5: the desktop deletes only the devices the run names, one by one with
+/// `simctl delete <udid>`; a device left unticked is never passed to simctl,
+/// though it is unavailable too, and `delete unavailable` never runs.
+#[test]
+fn only_the_ticked_simulator_device_is_passed_to_simctl() {
+    use crate::clean::providers::simulator_devices::SimulatorDevices;
+    use crate::runner::test_support::MockRunner;
+    const TICKED: &str = "01DADBA3-1A21-4914-A093-29B4D0D7B9C8";
+    const UNTICKED: &str = "6F1C0E52-7A0B-4C1D-9E2F-3A4B5C6D7E8F";
+    const XCRUN: &str = "/usr/bin/xcrun";
+    let home = fixture_root("sim-devices-home", &[]);
+    let devices = home.join("Library/Developer/CoreSimulator/Devices");
+    fs::create_dir_all(&devices).unwrap();
+    for udid in [TICKED, UNTICKED] {
+        fs::write(devices.join(udid), b"device").unwrap();
+    }
+    let listing = format!(
+        r#"{{"devices": {{"com.apple.CoreSimulator.SimRuntime.iOS-17-0": [
+    {{"udid": "{TICKED}", "name": "iPhone 15", "isAvailable": false}},
+    {{"udid": "{UNTICKED}", "name": "iPhone 14", "isAvailable": false}}
+]}}}}"#
+    );
+    let runner = Arc::new(
+        MockRunner::new()
+            .with_exit(XCRUN, &["--find", "simctl"], 0, "/x/simctl\n")
+            .with_exit(XCRUN, &["simctl", "list", "devices", "-j"], 0, &listing)
+            .with_exit(XCRUN, &["simctl", "delete", TICKED], 0, "")
+            .with_exit(XCRUN, &["simctl", "delete", UNTICKED], 0, ""),
+    );
+    let provider = SimulatorDevices::at_home(runner.clone(), &home);
+    let removal = Removal::RunTool(DesktopTool::Remove { sure: true });
+    let sinks = Sinks::default();
+    let report = run_tools(
+        &TempStore::new(),
+        &home,
+        &[planned("simulator-devices", &devices, TICKED, removal)],
+        vec![Box::new(provider)],
+        &MockChecker::none(),
+        &sinks,
+    );
+    assert!(
+        matches!(outcomes(&report)[0], ItemOutcome::Pruned { .. }),
+        "{:?}",
+        outcomes(&report)
+    );
+    let calls = runner.output_calls.lock().unwrap().clone();
+    let deletes: Vec<&String> = calls.iter().filter(|c| c.contains(" delete ")).collect();
+    assert_eq!(
+        deletes,
+        [&format!("{XCRUN} simctl delete {TICKED}")],
+        "{calls:?}"
+    );
+    assert!(!calls
+        .iter()
+        .any(|c| c.contains(UNTICKED) || c.contains("unavailable")));
+    assert!(runner.run_calls.lock().unwrap().is_empty());
+    assert!(sinks.log().is_empty(), "no move, no file deletion");
+    let _ = remove_recursive_safe(&home);
+}

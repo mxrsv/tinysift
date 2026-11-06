@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use super::purged_caches::{real_pip, PIP_FOLDER};
 use super::{execute_per_item, run_tool, CleanProvider};
 use crate::clean::fs_safe::{dir_size_checked, list_children};
 use crate::clean::scan_context::ScanContext;
@@ -26,9 +27,6 @@ const APPLE_FOLDERS: &[&str] = &[
     "GeoServices",
     "PassKit",
 ];
-/// Caches another category owns because its tool cleans them (`pip-cache`),
-/// so one path never belongs to a tool and to a plain move at once.
-const TOOL_FOLDERS: &[&str] = &["pip"];
 /// Folders named after a vendor, not a bundle id, and the app that owns them.
 const VENDOR_APPS: &[(&str, &str)] = &[
     ("Google", "Google Chrome"),
@@ -199,12 +197,15 @@ impl UserCaches {
     }
 
     fn list_caches(&self, ctx: &ScanContext<'_>, root: &Path) -> Result<Vec<CleanItem>> {
+        // pip's folder is `pip-cache`'s when a real pip3 can empty it, so
+        // one path never belongs to a tool and to a plain move at once.
+        let pip_owned = real_pip(self.runner.as_ref()).is_some();
+        let owned = |name: &str| pip_owned && name == PIP_FOLDER;
         let paths: Vec<(PathBuf, String)> = list_children(root, ctx)
             .into_iter()
             .filter_map(|path| {
                 let name = path.file_name()?.to_str()?.to_string();
-                let owned = TOOL_FOLDERS.contains(&name.as_str());
-                (!is_apple_cache(&name) && !owned).then_some((path, name))
+                (!is_apple_cache(&name) && !owned(&name)).then_some((path, name))
             })
             .collect();
         let ids: Vec<&str> = paths
@@ -522,13 +523,26 @@ mod tests {
     }
 
     #[test]
-    fn a_cache_a_tool_category_owns_is_left_to_it() {
+    fn pips_folder_is_left_to_pip_cache_only_when_a_real_pip3_empties_it() {
         let root = fixture("tool-owned", &["pip", "Homebrew"]);
-        let caches = UserCaches::with_runner(Arc::new(MockRunner::new()));
+        let found = MockRunner::new().with_which("/opt/homebrew/bin/pip3");
+        let caches = UserCaches::with_runner(Arc::new(found));
         let items = caches
             .list_caches(&ScanContext::unchecked(), &root)
             .unwrap();
-        assert_eq!(names(&items), vec!["Homebrew"]);
+        assert_eq!(names(&items), vec!["Homebrew"], "pip-cache owns it");
+        // pyenv, conda or python.org: no real pip3, so it stays a plain cache.
+        let shim_only = MockRunner::new()
+            .with_which("pip3")
+            .with_which("/usr/bin/pip3");
+        let caches = UserCaches::with_runner(Arc::new(shim_only));
+        let mut listed = names(
+            &caches
+                .list_caches(&ScanContext::unchecked(), &root)
+                .unwrap(),
+        );
+        listed.sort();
+        assert_eq!(listed, vec!["Homebrew", "pip"]);
     }
 
     #[test]

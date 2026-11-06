@@ -138,7 +138,7 @@ private-looking downloads and never ticks them for you.
   `pnpm store prune`, which remove only entries nothing references; `bun-cache` runs
   `bun pm cache rm` and `pip-cache` runs `pip3 cache purge`, which empty the whole cache
   (`pip-cache` only through a Homebrew or Command Line Tools `pip3`, and only when
-  `~/Library/Caches/pip` exists). These are permanent
+  `~/Library/Caches/pip` exists; otherwise that folder is part of `user-caches`). These are permanent
   whichever action you choose, and `tiny` warns you when you pick Move to Trash. These are
   Review for that reason, so plain `tiny clean` leaves them unticked. `pnpm` used to move its
   store to the Trash, so a script with `--category pnpm` now prunes instead.

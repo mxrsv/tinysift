@@ -72,7 +72,9 @@ Things that are not obvious from reading one file.
   reading may not rise ([`docker.rs`](../../crates/tiny-core/src/clean/providers/docker.rs)).
 - **`/usr/bin/pip3` is a shim.** Without the Command Line Tools it asks to install them, so
   `pip-cache` runs only Homebrew's or the Command Line Tools' `pip3` by absolute path and spawns
-  nothing unless `~/Library/Caches/pip` exists; `user-caches` leaves that folder to it
+  nothing unless `~/Library/Caches/pip` exists. Only with such a `pip3` does `pip-cache` list that
+  folder and `user-caches` leave it out; without one (pyenv, conda, python.org) it stays a
+  `user-caches` folder, so it is never counted twice or left uncleanable
   ([`purged_caches.rs`](../../crates/tiny-core/src/clean/providers/purged_caches.rs)).
 
 ## Cleanup sizes

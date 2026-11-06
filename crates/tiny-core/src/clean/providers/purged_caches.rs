@@ -1,7 +1,9 @@
 //! Package caches whose own tool empties them: Bun (`bun pm cache rm`) and
 //! pip (`pip3 cache purge`). Neither has a dry run, so like a uv or pnpm
 //! prune the cache's size is only a ceiling ("up to"), never part of a sure
-//! figure, and in Trash mode the folder moves to the Trash instead.
+//! figure, and in Trash mode the folder moves to the Trash instead. pip's
+//! cache is this category's only when a real `pip3` can empty it
+//! ([`real_pip`]); otherwise it stays one of `user-caches`' folders.
 
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -119,9 +121,18 @@ impl PipCache {
     }
 
     fn pip(&self) -> Option<&'static str> {
-        PIPS.iter().copied().find(|pip| self.runner.which(pip))
+        real_pip(self.runner.as_ref())
     }
 }
+
+/// The first real `pip3` of `PIPS` the runner finds. Only then does
+/// `pip-cache` own `~/Library/Caches/pip`, and `user-caches` leave it out.
+pub(super) fn real_pip(runner: &dyn CommandRunner) -> Option<&'static str> {
+    PIPS.iter().copied().find(|pip| runner.which(pip))
+}
+
+/// The cache folder name `pip-cache` owns inside `~/Library/Caches`.
+pub(super) const PIP_FOLDER: &str = "pip";
 
 impl CleanProvider for PipCache {
     fn id(&self) -> &'static str {
@@ -139,10 +150,10 @@ impl CleanProvider for PipCache {
     fn risk(&self) -> RiskLevel {
         RiskLevel::Review
     }
-    /// Only when the default cache exists, so nothing is spawned otherwise.
-    /// Without a `pip3` it is still reported; it cannot be purged then.
+    /// Only when the default cache exists and a real `pip3` can empty it;
+    /// otherwise `user-caches` lists the folder, so it is never counted twice.
     fn available(&self) -> bool {
-        home().is_some_and(|h| is_dir_safe(&h.join(PIP_DEFAULT_DIR)))
+        home().is_some_and(|h| is_dir_safe(&h.join(PIP_DEFAULT_DIR))) && self.pip().is_some()
     }
     fn roots_from_tool_output(&self) -> bool {
         true
@@ -157,7 +168,7 @@ impl CleanProvider for PipCache {
         let pip = self.pip().unwrap_or(PIPS[0]);
         execute_tool_command(self.runner.as_ref(), items, action, PIP_ID, pip, PIP_PURGE)
     }
-    /// Never without a real `pip3`: the default cache alone stays report only.
+    /// Never without a real `pip3`, which also lists nothing then.
     fn desktop_tool(&self) -> Option<DesktopTool> {
         self.pip().map(|_| DesktopTool::Prune)
     }
@@ -171,8 +182,8 @@ impl CleanProvider for PipCache {
     }
 }
 
-/// The cache `pip` names, which must be absolute, or the default cache
-/// under `home` when no `pip3` is found. Nothing when the default is absent.
+/// The cache `pip` names, which must be absolute. Nothing when the default
+/// is absent or no real `pip3` is found: `user-caches` lists it then.
 fn pip_cache(
     ctx: &ScanContext<'_>,
     runner: &dyn CommandRunner,
@@ -183,12 +194,12 @@ fn pip_cache(
     if !is_dir_safe(&default) {
         return Ok(Vec::new());
     }
-    let path = match pip {
-        Some(pip) => match tool_path(runner, pip, PIP_CACHE_DIR)? {
-            Some(path) if path.is_absolute() => path,
-            _ => return Ok(Vec::new()),
-        },
-        None => default,
+    let Some(pip) = pip else {
+        return Ok(Vec::new());
+    };
+    let path = match tool_path(runner, pip, PIP_CACHE_DIR)? {
+        Some(path) if path.is_absolute() => path,
+        _ => return Ok(Vec::new()),
     };
     Ok(prunable_cache(
         ctx,
@@ -308,7 +319,7 @@ mod tests {
     }
 
     #[test]
-    fn pip_never_runs_the_system_shim_and_without_a_real_pip_stays_report_only() {
+    fn pip_never_runs_the_system_shim_and_without_a_real_pip_lists_nothing() {
         let home = tempfile::tempdir().unwrap();
         let cache = home.path().join(PIP_DEFAULT_DIR);
         cache_with_a_file(&cache);
@@ -327,7 +338,8 @@ mod tests {
             home.path(),
         )
         .unwrap();
-        assert_eq!(items[0].path, cache, "reported, never purged");
+        assert!(items.is_empty(), "user-caches lists it instead");
+        assert!(!pip.available());
         assert!(pip.check_item(&cache).is_err());
         assert!(pip.run_desktop_tool(&item(PIP_ID, &cache)).is_err());
         assert!(runner.output_calls.lock().unwrap().is_empty());

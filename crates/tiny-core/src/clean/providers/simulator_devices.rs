@@ -58,11 +58,32 @@ fn home() -> Option<PathBuf> {
 
 pub struct SimulatorDevices {
     runner: Arc<dyn CommandRunner>,
+    /// The home whose Devices folder is read: `HOME`, or a test's folder.
+    home: Option<PathBuf>,
 }
 
 impl SimulatorDevices {
     pub fn with_runner(runner: Arc<dyn CommandRunner>) -> Self {
-        Self { runner }
+        Self {
+            runner,
+            home: home(),
+        }
+    }
+
+    /// The same provider over `home`'s Devices folder, so tests never read
+    /// the machine's own simulators.
+    #[cfg(test)]
+    pub(crate) fn at_home(runner: Arc<dyn CommandRunner>, home: &Path) -> Self {
+        Self {
+            runner,
+            home: Some(home.to_path_buf()),
+        }
+    }
+
+    /// `home`'s Devices folder, when it is a real folder.
+    fn devices_root(&self) -> Option<PathBuf> {
+        let root = self.home.as_ref()?.join(DEVICES_DIR);
+        is_dir_safe(&root).then_some(root)
     }
 
     fn simctl_found(&self) -> bool {
@@ -143,24 +164,24 @@ impl CleanProvider for SimulatorDevices {
     /// spawns nothing; with one, `simctl` must exist (a Mac with only the
     /// Command Line Tools has `xcrun` but not `simctl`).
     fn available(&self) -> bool {
-        match home() {
-            Some(h) if is_dir_safe(&h.join(DEVICES_DIR)) => self.simctl_found(),
-            _ => true,
+        match self.devices_root() {
+            Some(_) => self.simctl_found(),
+            None => true,
         }
     }
     fn required_tool(&self) -> Option<&'static str> {
         Some("simctl")
     }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
-        match home() {
+        match &self.home {
             Some(h) => self.unavailable_devices(ctx, &h.join(DEVICES_DIR)),
             None => Ok(Vec::new()),
         }
     }
     /// Only with a Devices folder, so a Mac without one spawns no `xcrun`.
     fn desktop_tool(&self) -> Option<DesktopTool> {
-        let has_devices = home().is_some_and(|h| is_dir_safe(&h.join(DEVICES_DIR)));
-        (has_devices && self.simctl_found()).then_some(DesktopTool::Remove { sure: true })
+        (self.devices_root().is_some() && self.simctl_found())
+            .then_some(DesktopTool::Remove { sure: true })
     }
     fn run_desktop_tool(&self, item: &CleanItem) -> std::result::Result<(), String> {
         let udid = udid_of(&item.path).ok_or("not a simulator device folder")?;
@@ -541,18 +562,23 @@ mod desktop_tests {
 
     #[test]
     fn the_desktop_tool_needs_a_devices_folder_and_a_found_simctl() {
-        let found = MockRunner::new().with_exit(XCRUN, FIND_ARGS, 0, "/x/simctl\n");
-        let devices = SimulatorDevices::with_runner(Arc::new(found));
-        // `desktop_tool` reads `HOME`; only the answer for this Mac's folder
-        // is checked here, so the test holds on any machine.
-        let has_folder = std::env::var_os("HOME")
-            .map(PathBuf::from)
-            .is_some_and(|h| is_dir_safe(&h.join(DEVICES_DIR)));
-        let expected = has_folder.then_some(DesktopTool::Remove { sure: true });
-        assert_eq!(devices.desktop_tool(), expected);
-        let absent = SimulatorDevices::with_runner(Arc::new(
-            MockRunner::new().with_exit(XCRUN, FIND_ARGS, 72, ""),
-        ));
+        let home = tempfile::tempdir().unwrap();
+        let found = Arc::new(MockRunner::new().with_exit(XCRUN, FIND_ARGS, 0, "/x/simctl\n"));
+        let devices = SimulatorDevices::at_home(found.clone(), home.path());
+        assert_eq!(devices.desktop_tool(), None, "no Devices folder: no tool");
+        assert!(
+            found.output_calls.lock().unwrap().is_empty(),
+            "and no xcrun"
+        );
+        std::fs::create_dir_all(home.path().join(DEVICES_DIR)).unwrap();
+        assert_eq!(
+            devices.desktop_tool(),
+            Some(DesktopTool::Remove { sure: true })
+        );
+        let absent = SimulatorDevices::at_home(
+            Arc::new(MockRunner::new().with_exit(XCRUN, FIND_ARGS, 72, "")),
+            home.path(),
+        );
         assert_eq!(absent.desktop_tool(), None);
     }
 }
