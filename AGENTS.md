@@ -32,7 +32,8 @@ directory. See the [repository names](docs/operations/development.md#repository-
   otherwise only through `desktop_empties_trash()` (the Trash row) or `desktop_tool()` (a tool
   command). `needs_admin()` categories are report-only: macOS denies the administrator route.
 - In cleanup, discovered paths use `symlink_metadata`; deletion goes through
-  [`fs_safe.rs`](crates/tiny-core/src/clean/fs_safe.rs), [`FinderTrash`](crates/tiny-core/src/clean/finder_trash.rs),
+  [`fs_safe.rs`](crates/tiny-core/src/clean/fs_safe.rs), [`FinderTrash`](crates/tiny-core/src/clean/finder_trash.rs)
+  (the app's Clean moves through [`NativeTrash`](crates/tiny-core/src/clean/native_trash.rs)),
   a category's tool command ([`tool_command.rs`](crates/tiny-core/src/clean/providers/tool_command.rs))
   or [`elevated_delete.rs`](crates/tiny-core/src/clean/elevated_delete.rs). Never call
   `fs::remove_*` or `is_dir()` on discovered paths, and never run a bundled binary or a shell

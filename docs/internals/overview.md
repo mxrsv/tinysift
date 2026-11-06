@@ -25,10 +25,13 @@ the bindings with [`build-ffi.sh`](../../scripts/build-ffi.sh), and consume the 
 by contract. `clean` and `uninstall` remove data and `processes quit` sends signals; each shows
 what it will do, asks, then acts.
 
-- **Move to Trash** asks Finder through `osascript` with the path as an argument, never
-  interpolated, so Put Back works and quoting cannot break. The app, CLI clean and
-  `uninstall` all go through [`FinderTrash`](../../crates/tiny-core/src/clean/finder_trash.rs),
-  which refuses a symlink because Finder would trash its target.
+- **Move to Trash** has two routes, both refusing a symlink. CLI clean and `uninstall` ask
+  Finder through `osascript` with the path as an argument, never interpolated, so Put Back works
+  and quoting cannot break ([`FinderTrash`](../../crates/tiny-core/src/clean/finder_trash.rs)).
+  The app's Clean moves from its own process through `NSFileManager trashItemAtURL`
+  ([`NativeTrash`](../../crates/tiny-core/src/clean/native_trash.rs)), so its Full Disk Access
+  applies and no Automation permission is asked; Put Back does not know those items. Emptying
+  the Trash always goes through Finder.
 - **Permanent deletion** has two front ends. The CLI's Hard delete and `uninstall --hard` remove
   through [`remove_recursive_safe`](../../crates/tiny-core/src/clean/fs_safe.rs), bottom-up and never
   following a symlink; tool-backed categories run their tool instead. In the app, the client's

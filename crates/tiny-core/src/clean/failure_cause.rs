@@ -144,10 +144,11 @@ pub fn skip_failure(reason: &SkipReason) -> Option<Failure> {
     Some(Failure::new(cause, format!("skipped: {reason:?}")))
 }
 
-/// The failure of a refused move to the Trash or Empty Trash.
-pub fn trash_failure(error: &TrashError) -> Failure {
+/// The failure of a refused move of `path` to the Trash, or Empty Trash.
+pub fn trash_failure(path: &Path, error: &TrashError) -> Failure {
     let cause = match error {
         TrashError::AutomationDenied(_) => FailureCause::NoPermission,
+        TrashError::Os { code, .. } => cause_of_io(path, &io::Error::from_raw_os_error(*code)),
         TrashError::Failed(_) => FailureCause::Other,
     };
     Failure::new(cause, error.to_string())

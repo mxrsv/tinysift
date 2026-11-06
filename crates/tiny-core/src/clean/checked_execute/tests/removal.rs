@@ -4,6 +4,7 @@
 //! removes files, and only the ones these tests created.
 
 use super::*;
+use crate::clean::failure_cause::FailureCause;
 use crate::clean::fs_safe::dir_size_checked;
 
 /// Records every Trash move, Empty Trash, deletion and batch deleted as
@@ -364,11 +365,33 @@ fn a_failed_deletion_is_never_moved_to_the_trash_or_retried() {
 }
 
 #[test]
-fn a_denied_empty_trash_stops_the_run_like_a_denied_move() {
-    let root = fixture_root("empty-denied", &["c"]);
+fn a_denied_empty_trash_leaves_the_moves_alone_and_a_denied_move_stops() {
+    let root = fixture_root("empty-denied", &["c", "d"]);
     let plan = [
         trash_row(&root),
         planned("downloads-old", &root, "c", Removal::MoveToTrash),
+    ];
+    let sinks = Sinks {
+        fail_empty: Some(TrashError::AutomationDenied("(-1743)".into())),
+        ..Default::default()
+    };
+    let report = run_sinks(&TempStore::new(), &plan, &MockChecker::none(), &sinks);
+    assert_eq!(
+        report.stopped, None,
+        "nothing was emptied: moves still work"
+    );
+    assert!(matches!(outcomes(&report)[0], ItemOutcome::Failed { .. }));
+    assert_eq!(
+        report.results[0].failure.as_ref().map(|f| f.cause),
+        Some(FailureCause::NoPermission)
+    );
+    assert_eq!(outcomes(&report)[1], ItemOutcome::MovedToTrash);
+    assert_eq!(sinks.log(), ["trash c"]);
+
+    // A Finder move route (uninstall's) still stops at a denial.
+    let plan = [
+        planned("downloads-old", &root, "d", Removal::MoveToTrash),
+        planned("user-logs", &root, "d", Removal::MoveToTrash),
     ];
     let sinks = Sinks {
         fail_trash: Some(TrashError::AutomationDenied("(-1743)".into())),
@@ -376,9 +399,7 @@ fn a_denied_empty_trash_stops_the_run_like_a_denied_move() {
     };
     let report = run_sinks(&TempStore::new(), &plan, &MockChecker::none(), &sinks);
     assert_eq!(report.stopped, Some(StopReason::AutomationDenied));
-    assert!(matches!(outcomes(&report)[0], ItemOutcome::Failed { .. }));
     assert_eq!(outcomes(&report)[1], ItemOutcome::NotAttempted);
-    assert!(sinks.log().is_empty());
     let _ = remove_recursive_safe(&root);
 }
 

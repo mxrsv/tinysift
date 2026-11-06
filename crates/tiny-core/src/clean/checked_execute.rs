@@ -77,9 +77,10 @@ impl ExecContext<'_> {
 /// moves are skipped. A permanent deletion goes on past entries that fail.
 /// Each removal that frees space is measured right before and right after
 /// it (`ItemResult::bytes_freed`). Results stay in plan order. Stops on
-/// cancellation (of the run or the dialog), an Automation denial or a
-/// change in the saved rules; the remaining paths are reported as not
-/// attempted.
+/// cancellation (of the run or the dialog), an Automation denial of a move
+/// or a change in the saved rules; the remaining paths are reported as not
+/// attempted. A denied Empty Trash stays with its item: nothing was emptied,
+/// so the moves go on.
 pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedExecReport {
     let total = plan.len() as u64;
     let mut stopped = None;
@@ -110,8 +111,12 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
             continue;
         }
         let acted = act_on(planned, ctx, &mut stopped);
+        // A denial means Finder never started emptying.
         emptying_failed |= planned.removal == Removal::EmptyTrash
-            && matches!(acted.outcome, ItemOutcome::Failed { .. });
+            && matches!(
+                &acted.outcome,
+                ItemOutcome::Failed { error, .. } if !matches!(error, TrashError::AutomationDenied(_))
+            );
         done[index] = acted.settle(&planned.item.path);
     }
     if stopped.is_none() {
@@ -122,7 +127,7 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
         .zip(done)
         .map(|(planned, (outcome, settled, failure))| ItemResult {
             item: planned.item.clone(),
-            failure: failure.or_else(|| failure_of(&outcome)),
+            failure: failure.or_else(|| failure_of(&planned.item.path, &outcome)),
             outcome,
             extent: settled.extent,
             bytes_freed: settled.freed,
@@ -146,10 +151,10 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
 
 /// The failure an outcome names by itself; a deletion's comes from its
 /// route (`Acted::failure`), with this as the fallback.
-fn failure_of(outcome: &ItemOutcome) -> Option<Failure> {
+fn failure_of(path: &Path, outcome: &ItemOutcome) -> Option<Failure> {
     match outcome {
         ItemOutcome::Skipped(reason) => skip_failure(reason),
-        ItemOutcome::Failed { error, .. } => Some(trash_failure(error)),
+        ItemOutcome::Failed { error, .. } => Some(trash_failure(path, error)),
         ItemOutcome::DeleteFailed { detail, .. } | ItemOutcome::ToolFailed { detail } => {
             Some(Failure::new(FailureCause::Other, detail.clone()))
         }
@@ -365,7 +370,11 @@ fn act_on(planned: &PlannedItem, ctx: &ExecContext<'_>, stopped: &mut Option<Sto
         Removal::DeleteAsAdministrator => return Acted::untouched(ItemOutcome::NotAttempted),
     };
     acted(finder.unwrap_or_else(|error| {
-        if matches!(error, TrashError::AutomationDenied(_)) {
+        // Only a denied move stops the run (a Finder route, as uninstall's):
+        // after a denied Empty Trash nothing was emptied and moves still work.
+        if matches!(error, TrashError::AutomationDenied(_))
+            && planned.removal == Removal::MoveToTrash
+        {
             *stopped = Some(StopReason::AutomationDenied);
         }
         ItemOutcome::Failed {

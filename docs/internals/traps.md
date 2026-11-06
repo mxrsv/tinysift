@@ -95,10 +95,15 @@ Things that are not obvious from reading one file.
   [`clean_smoke.rs`](../../crates/tiny/tests/clean_smoke.rs) is limited to those.
 - **The dry-run smoke test is slow on a populated home folder**: it walks every
   category on the real disk ([smoke test](../../crates/tiny/tests/clean_smoke.rs)).
-- **The first Trash action prompts for Automation access** to Finder. After a denial the CLI
-  fails every path and carries on, while the app recognises error -1743 and stops with
-  `AutomationDenied` ([`finder_trash.rs`](../../crates/tiny-core/src/clean/finder_trash.rs)).
-  Grant access in System Settings → Privacy & Security → Automation.
+- **The first Finder action prompts for Automation access**: a CLI move, an uninstall move or the
+  app's Empty Trash. After a denial the CLI fails every path and carries on; uninstall recognises
+  error -1743 and stops with `AutomationDenied`; Clean only fails its Trash row
+  ([`finder_trash.rs`](../../crates/tiny-core/src/clean/finder_trash.rs)), since its moves never
+  ask Finder ([`native_trash.rs`](../../crates/tiny-core/src/clean/native_trash.rs)). Grant access
+  in System Settings → Privacy & Security → Automation.
+- **Clean's moves have no Put Back.** `NSFileManager trashItemAtURL` moves without telling Finder
+  where an item came from; drag it back out of the Trash instead. The native-move test that touches
+  the real Trash is `#[ignore]`d; run it by hand with `--ignored`.
 - **The port smoke test is macOS-only and needs `/usr/sbin/lsof`.** It skips without
   `python3` ([`processes_smoke.rs`](../../crates/tiny/tests/processes_smoke.rs)); the
   platform-independent port fixture tests run everywhere.

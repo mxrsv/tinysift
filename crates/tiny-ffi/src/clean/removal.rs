@@ -13,8 +13,9 @@ use tiny_core::clean::checked_execute::{
 };
 use tiny_core::clean::elevated_delete::{ElevatedDelete, ElevatedError, OsascriptDelete};
 use tiny_core::clean::failure_cause::FailureCause;
-use tiny_core::clean::finder_trash::{FinderTrash, Trash, TrashError};
+use tiny_core::clean::finder_trash::{Trash, TrashError};
 use tiny_core::clean::fs_safe::{Delete, SafeDelete};
+use tiny_core::clean::native_trash::NativeTrash;
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::PolicySnapshot;
 use tiny_core::clean::providers::{all_providers_with, CleanProvider};
@@ -43,9 +44,10 @@ pub enum FfiDeleteMode {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
 pub enum FfiRemovalFailure {
-    /// Finder Automation was denied; the run stops.
+    /// Finder Automation was denied for Empty Trash; moves go on.
     AutomationDenied,
-    /// Finder could not move the item or empty the Trash.
+    /// The item could not be moved to the Trash, or Finder could not empty
+    /// it.
     TrashFailed,
     /// Permanent deletion failed part way or not at all.
     DeleteFailed,
@@ -227,8 +229,11 @@ impl TinySession {
     /// first, in one batch behind one macOS authentication dialog; cancelling
     /// it stops the run with nothing changed (`authentication_cancelled`).
     /// Other permanent removals and tools come next, so emptying the Trash
-    /// never takes what this run moves there. A Finder Automation denial or
-    /// cancellation stops the run; any other failure stays with its item.
+    /// never takes what this run moves there. Moves go through
+    /// `NSFileManager` (`NativeTrash`), never Finder, so they need no
+    /// Automation permission; only Empty Trash goes through Finder. A
+    /// cancellation stops the run; any other failure, a denied Empty Trash
+    /// included, stays with its item.
     pub fn clean_remove(
         &self,
         preview_id: String,
@@ -246,7 +251,7 @@ impl TinySession {
             &preview_id,
             &providers,
             &probe,
-            &FinderTrash,
+            &NativeTrash::default(),
             &SafeDelete,
             &OsascriptDelete,
             &token,
@@ -618,7 +623,9 @@ impl From<ItemOutcome> for FfiRemovalOutcome {
             } => {
                 let (reason, detail) = match error {
                     TrashError::AutomationDenied(d) => (FfiRemovalFailure::AutomationDenied, d),
-                    TrashError::Failed(d) => (FfiRemovalFailure::TrashFailed, d),
+                    TrashError::Failed(d) | TrashError::Os { detail: d, .. } => {
+                        (FfiRemovalFailure::TrashFailed, d)
+                    }
                 };
                 Self::Failed {
                     reason,

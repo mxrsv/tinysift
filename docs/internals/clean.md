@@ -158,8 +158,8 @@ excludes any that would carry an unselected Review candidate along (the explicit
 contract) and fixes how each item will be removed. A preview is single-use and expires.
 [`execute_checked`](../../crates/tiny-core/src/clean/checked_execute.rs) revalidates each path, and
 everything it covers, just before acting, through the
-[`Trash`](../../crates/tiny-core/src/clean/finder_trash.rs) seam and the other sinks below. An
-Automation denial or cancellation stops the run. Scan and execute refuse to start when `HOME` is not
+[`Trash`](../../crates/tiny-core/src/clean/finder_trash.rs) seam and the other sinks below.
+Cancellation, and an Automation denial of a move (a Finder route, as uninstall's), stops the run. Scan and execute refuse to start when `HOME` is not
 the account's home folder (`FfiError::UntrustedHome`).
 
 **The delete mode is frozen in the preview.** `removal_for` in
@@ -169,7 +169,7 @@ widens: a cache folder that holds a path which only goes to the Trash goes to th
 
 | `Removal` | Chosen when | Sink |
 | --- | --- | --- |
-| `MoveToTrash` | Trash mode; Your files always; a uv or pnpm cache in Trash mode | `FinderTrash` |
+| `MoveToTrash` | Trash mode; Your files always; a uv or pnpm cache in Trash mode | [`NativeTrash`](../../crates/tiny-core/src/clean/native_trash.rs): `NSFileManager trashItemAtURL`, no Finder, no Put Back |
 | `Delete` | Permanent mode and the item and all it covers are Rebuilt or Project build output | `SafeDelete` ([`fs_safe.rs`](../../crates/tiny-core/src/clean/fs_safe.rs)): no symlinks, no other volume |
 | `RunTool(Prune)` | uv, pnpm in Permanent mode, tool found | the category's tool |
 | `RunTool(Request)` | simulator runtimes, both modes (no Trash route) | `simctl runtime delete` |
@@ -199,7 +199,8 @@ other removal. `execution_order` runs the administrator batch first, then `Delet
 there. Results stay in plan order. Nothing is retried another way: a failed move is not deleted, a
 failed deletion is not moved or escalated. A failed `EmptyTrash` (a timeout included) skips every
 `MoveToTrash` after it with `SafetyCheckFailed`, because Finder may still be emptying and would take
-what the run moves in; an Automation denial stops the run as before. The empty script runs under
+what the run moves in. A denied Empty Trash only fails its row: Finder never started, and moves need
+no Automation, so they go on. The empty script runs under
 `with timeout of 540 seconds`, below the runner's 600, since AppleScript's default two minutes would
 report a large Trash as failed while Finder keeps going.
 

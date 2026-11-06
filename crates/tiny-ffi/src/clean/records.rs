@@ -533,7 +533,9 @@ impl From<ItemOutcome> for FfiItemOutcome {
             } => {
                 let (reason, detail) = match error {
                     TrashError::AutomationDenied(d) => (FfiTrashFailure::AutomationDenied, d),
-                    TrashError::Failed(d) => (FfiTrashFailure::TrashFailed, d),
+                    TrashError::Failed(d) | TrashError::Os { detail: d, .. } => {
+                        (FfiTrashFailure::TrashFailed, d)
+                    }
                 };
                 Self::Failed {
                     reason,

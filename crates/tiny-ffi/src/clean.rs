@@ -17,9 +17,9 @@ use std::time::{Duration, Instant, SystemTime};
 use tiny_core::clean::discover::{
     discover_checked, select_providers_with, validate_options, CategoryOutcome, CheckedCategory,
 };
-use tiny_core::clean::finder_trash::FinderTrash;
 use tiny_core::clean::freed_size::SharedBlocks;
 use tiny_core::clean::fs_safe::PathFingerprint;
+use tiny_core::clean::native_trash::NativeTrash;
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::PolicySnapshot;
 use tiny_core::clean::protection_store::ProtectionStore;
@@ -172,11 +172,11 @@ impl TinySession {
         self.preview_clean(candidate_ids, mode.into())
     }
 
-    /// Moves the preview's paths to Trash through Finder. The preview is
-    /// consumed before the first move, so it can never run twice, even
-    /// after a panic. Always returns the per-item report once execution
-    /// starts; a Finder Automation denial stops it with
-    /// `stopped = AutomationDenied`. A preview that removes anything for good
+    /// Moves the preview's paths to Trash through `NSFileManager`
+    /// (`NativeTrash`), never Finder, so no Automation permission is asked.
+    /// The preview is consumed before the first move, so it can never run
+    /// twice, even after a panic. Always returns the per-item report once
+    /// execution starts. A preview that removes anything for good
     /// is refused unspent (`InvalidInput`): run it with `clean_remove`.
     pub fn clean_execute(
         &self,
@@ -192,7 +192,7 @@ impl TinySession {
             &preview_id,
             &providers,
             &probe,
-            &FinderTrash,
+            &NativeTrash::default(),
             &token,
             progress.as_ref(),
         )

@@ -126,10 +126,23 @@ fn skip_reasons_map_to_causes_and_kept_paths_are_no_failure() {
 }
 
 #[test]
-fn a_denied_trash_route_is_no_permission_with_its_raw_text() {
-    let denied = trash_failure(&TrashError::AutomationDenied("(-1743)".into()));
+fn a_refused_trash_route_maps_to_its_cause_with_its_raw_text() {
+    let (_temp, file) = own_file();
+    let denied = trash_failure(&file, &TrashError::AutomationDenied("(-1743)".into()));
     assert_eq!(denied.cause, FailureCause::NoPermission);
     assert!(denied.raw_error.contains("-1743"));
-    let failed = trash_failure(&TrashError::Failed("Finder error".into()));
+    let failed = trash_failure(&file, &TrashError::Failed("Finder error".into()));
     assert_eq!(failed.cause, FailureCause::Other);
+    let os = |code| TrashError::Os {
+        code,
+        detail: "refused".into(),
+    };
+    assert_eq!(
+        trash_failure(&file, &os(libc::EBUSY)).cause,
+        FailureCause::InUse
+    );
+    assert_eq!(
+        trash_failure(&file.with_file_name("gone"), &os(libc::ENOENT)).cause,
+        FailureCause::AlreadyGone
+    );
 }

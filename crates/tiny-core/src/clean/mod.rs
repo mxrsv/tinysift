@@ -6,6 +6,7 @@ pub mod failure_cause;
 pub mod finder_trash;
 pub mod freed_size;
 pub mod fs_safe;
+pub mod native_trash;
 pub mod process;
 pub mod protection;
 pub mod protection_store;

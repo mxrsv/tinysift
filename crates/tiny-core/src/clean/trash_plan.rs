@@ -36,7 +36,7 @@ pub struct PlannedItem {
 /// How the desktop removes one planned path.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Removal {
-    /// Through Finder, so Put Back works.
+    /// To the Trash, from TinySift's own process (`NativeTrash`).
     #[default]
     MoveToTrash,
     /// For good, through `fs_safe`'s guarded removal.

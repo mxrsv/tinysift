@@ -1,6 +1,9 @@
-//! Move to Trash through Finder, so Finder's Put Back works. From the app
-//! this needs Automation (Apple Events) permission for Finder; a denial is
-//! its own error and never falls back to deletion.
+//! Move to Trash and Empty Trash through Finder, so Finder's Put Back works.
+//! This needs Automation (Apple Events) permission for Finder; a denial is
+//! its own error and never falls back to deletion. The CLI and uninstall
+//! move this way; Clean moves through [`NativeTrash`] and only empties here.
+//!
+//! [`NativeTrash`]: super::native_trash::NativeTrash
 
 use std::path::Path;
 use std::time::Duration;
@@ -43,6 +46,9 @@ pub enum TrashError {
     AutomationDenied(String),
     #[error("move to Trash failed: {0}")]
     Failed(String),
+    /// Refused with a POSIX error (`code`), as the native route reports it.
+    #[error("move to Trash failed: {detail}")]
+    Os { code: i32, detail: String },
 }
 
 pub trait Trash: Send + Sync {
@@ -62,11 +68,25 @@ pub struct FinderTrash;
 
 impl Trash for FinderTrash {
     fn move_to_trash(&self, path: &Path) -> Result<(), TrashError> {
+        FinderTrashWith(RealRunner).move_to_trash(path)
+    }
+
+    fn empty_trash(&self) -> Result<(), TrashError> {
+        FinderTrashWith(RealRunner).empty_trash()
+    }
+}
+
+/// `FinderTrash` through any runner, so tests can see every `osascript`.
+pub struct FinderTrashWith<R: CommandRunner>(pub R);
+
+impl<R: CommandRunner> Trash for FinderTrashWith<R> {
+    fn move_to_trash(&self, path: &Path) -> Result<(), TrashError> {
         refuse_symlink(path)?;
         let posix = path
             .to_str()
             .ok_or_else(|| TrashError::Failed(format!("non-UTF-8 path: {}", path.display())))?;
-        let outcome = RealRunner
+        let outcome = self
+            .0
             .output(
                 OSASCRIPT,
                 &["-e", FINDER_DELETE_SCRIPT, posix],
@@ -83,7 +103,8 @@ impl Trash for FinderTrash {
     /// volumes and anything put there while it waits for the Automation
     /// prompt; it needs the same Automation permission as a move.
     fn empty_trash(&self) -> Result<(), TrashError> {
-        let outcome = RealRunner
+        let outcome = self
+            .0
             .output(OSASCRIPT, &["-e", &empty_script()], TRASH_TIMEOUT)
             .map_err(|e| TrashError::Failed(e.to_string()))?;
         if outcome.success() {
@@ -93,8 +114,9 @@ impl Trash for FinderTrash {
     }
 }
 
-/// Finder would trash a link's target, never the link itself.
-fn refuse_symlink(path: &Path) -> Result<(), TrashError> {
+/// Finder would trash a link's target, never the link itself; no route
+/// moves a link.
+pub(crate) fn refuse_symlink(path: &Path) -> Result<(), TrashError> {
     match std::fs::symlink_metadata(path) {
         Ok(meta) if meta.file_type().is_symlink() => Err(TrashError::Failed(format!(
             "refusing to move a symlink: {}",
