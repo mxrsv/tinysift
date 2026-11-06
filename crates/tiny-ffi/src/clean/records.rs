@@ -15,7 +15,8 @@ pub struct FfiCleanOptions {
     pub include_review: bool,
     pub include_destructive: bool,
     pub idle_days: u64,
-    /// List every project's build output (`node-modules`, `rust-targets`),
+    /// List every project's build output (`node-modules`, `rust-targets`,
+    /// `build-folders`),
     /// not only projects idle for `idle_days`: a candidate is Safe when its
     /// project is in a git work tree and has no edits, commits or uncommitted
     /// changes for 7 days, every fact checked, and Review otherwise (outside
@@ -197,8 +198,8 @@ pub enum FfiComesBack {
 pub enum FfiCleanSection {
     /// A tool or app recreates them ("Rebuilt automatically").
     Rebuilt,
-    /// Build output inside projects: `rust-targets`, `node-modules`
-    /// ("Project build output").
+    /// Build output inside projects: `rust-targets`, `node-modules`,
+    /// `build-folders` ("Project build output").
     BuildOutput,
     /// Nothing recreates them ("Your files").
     YourFiles,

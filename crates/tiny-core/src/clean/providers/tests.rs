@@ -44,6 +44,7 @@ const DESKTOP_TRASH: &[(&str, Option<ReportOnly>)] = &[
     ("node-modules", None),
     ("python-caches", None),
     ("rust-targets", None),
+    ("build-folders", None),
     ("gradle-maven", None),
     ("jetbrains", None),
     ("vscode", None),
@@ -290,6 +291,7 @@ const SECTIONS: &[(&str, Section)] = &[
     // reach it), so it is not listed per project like build output.
     ("python-caches", Section::Rebuilt),
     ("rust-targets", Section::BuildOutput),
+    ("build-folders", Section::BuildOutput),
     ("gradle-maven", Section::Rebuilt),
     ("jetbrains", Section::Rebuilt),
     ("vscode", Section::Rebuilt),
@@ -341,7 +343,7 @@ fn only_the_desktop_option_lists_every_projects_build_output() {
         };
         all_providers_with(&opts, runner.clone())
             .into_iter()
-            .filter(|p| matches!(p.id(), "node-modules" | "rust-targets"))
+            .filter(|p| matches!(p.id(), "node-modules" | "rust-targets" | "build-folders"))
             .map(|p| (p.label(), p.risk()))
             .collect::<Vec<_>>()
     };
@@ -349,14 +351,16 @@ fn only_the_desktop_option_lists_every_projects_build_output() {
         labels(false),
         [
             ("node_modules (idle)", RiskLevel::Review),
-            ("Rust target/ (idle)", RiskLevel::Review)
+            ("Rust target/ (idle)", RiskLevel::Review),
+            ("Build folders (idle)", RiskLevel::Review)
         ]
     );
     assert_eq!(
         labels(true),
         [
             ("node_modules", RiskLevel::Review),
-            ("Rust target/", RiskLevel::Review)
+            ("Rust target/", RiskLevel::Review),
+            ("Build folders", RiskLevel::Review)
         ]
     );
 }

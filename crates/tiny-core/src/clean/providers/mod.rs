@@ -14,6 +14,7 @@ pub use tool_command::DesktopTool;
 pub mod android_sdk;
 pub mod app_orphans;
 pub mod browser_caches;
+pub mod build_folders;
 pub mod chat_caches;
 pub mod codex_releases;
 pub mod crash_reports;
@@ -84,7 +85,7 @@ pub fn category_family(category_id: &str) -> Family {
         // Dev family
         "cargo" | "npm" | "pnpm" | "yarn" | "uv" | "bun-cache" | "pip-cache" => Family::Dev,
         "puppeteer" | "huggingface" | "codex-runtimes" | "codex-releases" => Family::Dev,
-        "node-modules" | "python-caches" | "rust-targets" => Family::Dev,
+        "node-modules" | "python-caches" | "rust-targets" | "build-folders" => Family::Dev,
         "gradle-maven" | "jetbrains" | "vscode" => Family::Dev,
         "ios-simulators" | "simulator-devices" | "android-sdk" => Family::Dev,
         "system-simulator-caches" | "simulator-runtimes" | "simulator-runtime-images" => {
@@ -121,6 +122,7 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
         "node-modules" => rebuild("npm, pnpm or yarn install"),
         "python-caches" => rebuild("python -m venv, then pip install"),
         "rust-targets" => rebuild("cargo build"),
+        "build-folders" => rebuild("Build the project again"),
         "go-cache" => rebuild("go build"),
         "xcode-derived" => rebuild("Build in Xcode"),
         "user-logs" | "user-caches" | "jetbrains" | "vscode" | "ios-simulators" => {
@@ -160,7 +162,10 @@ pub enum Section {
 /// `None` for an id outside `known_category_ids()`. Project build output
 /// has its own section; otherwise `comes_back` decides.
 pub fn category_section(category_id: &str) -> Option<Section> {
-    if matches!(category_id, "node-modules" | "rust-targets") {
+    if matches!(
+        category_id,
+        "node-modules" | "rust-targets" | "build-folders"
+    ) {
         return Some(Section::BuildOutput);
     }
     comes_back(category_id).map(|back| match back {
@@ -367,6 +372,10 @@ pub fn all_providers_with(
             opts,
             runner.clone(),
         )),
+        Box::new(build_folders::BuildFolders::with_options(
+            opts,
+            runner.clone(),
+        )),
         Box::new(gradle_maven::GradleMaven),
         Box::new(jetbrains::JetBrains),
         Box::new(vscode::VsCode),
@@ -434,6 +443,7 @@ pub fn known_category_ids() -> &'static [&'static str] {
         "node-modules",
         "python-caches",
         "rust-targets",
+        "build-folders",
         "gradle-maven",
         "jetbrains",
         "vscode",
