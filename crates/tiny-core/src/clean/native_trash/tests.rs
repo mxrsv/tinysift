@@ -63,7 +63,9 @@ fn a_move_lands_in_the_trash_without_finder() {
         .unwrap()
         .join("tinysift-native-trash-test");
     fs::write(&file, b"test").unwrap();
-    let moved = trash_item(&file).unwrap();
+    let moved = trash_item(&file)
+        .unwrap()
+        .expect("Foundation names the location");
     assert!(fs::symlink_metadata(&file).is_err(), "moved away");
     assert_eq!(fs::read(&moved).unwrap(), b"test");
     assert!(

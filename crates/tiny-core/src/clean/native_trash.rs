@@ -30,9 +30,10 @@ impl<E: Trash> Trash for NativeTrash<E> {
     }
 }
 
-/// Moves `path` to the Trash of its volume and returns where it went.
+/// Moves `path` to the Trash of its volume and returns where it went, when
+/// Foundation says. A move without a location still succeeded.
 #[cfg(target_os = "macos")]
-fn trash_item(path: &Path) -> Result<std::path::PathBuf, TrashError> {
+fn trash_item(path: &Path) -> Result<Option<std::path::PathBuf>, TrashError> {
     use objc2::rc::{autoreleasepool, Retained};
     use objc2_foundation::{NSFileManager, NSString, NSURL};
 
@@ -45,15 +46,14 @@ fn trash_item(path: &Path) -> Result<std::path::PathBuf, TrashError> {
         NSFileManager::defaultManager()
             .trashItemAtURL_resultingItemURL_error(&url, Some(&mut moved))
             .map_err(|error| ns_error(&error))?;
-        let moved = moved
+        Ok(moved
             .and_then(|url| url.path())
-            .map(|path| std::path::PathBuf::from(path.to_string()));
-        moved.ok_or_else(|| TrashError::Failed("the Trash gave no location".into()))
+            .map(|path| std::path::PathBuf::from(path.to_string())))
     })
 }
 
 #[cfg(not(target_os = "macos"))]
-fn trash_item(_: &Path) -> Result<std::path::PathBuf, TrashError> {
+fn trash_item(_: &Path) -> Result<Option<std::path::PathBuf>, TrashError> {
     Err(TrashError::Failed("no native Trash on this system".into()))
 }
 
