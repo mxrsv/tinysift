@@ -90,7 +90,9 @@ pub fn category_family(category_id: &str) -> Family {
             Family::Dev
         }
         "go-cache" | "homebrew" | "docker" | "docker-volumes" => Family::Dev,
-        "xcode-derived" | "xcode-archives" | "xcode-devicesupport" => Family::Dev,
+        "xcode-derived" | "xcode-archives" | "xcode-devicesupport" | "xcode-previews" => {
+            Family::Dev
+        }
         // UserStorage family
         "downloads-old" | "screenshots-old" | "mail-attachments" => Family::UserStorage,
         "streaming-caches" | "chat-caches" | "browser-caches" => Family::UserStorage,
@@ -125,7 +127,9 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
         "xcode-devicesupport" | "browser-caches" | "quarantine" | "crash-reports" => {
             Some(ComesBack::AppRecreates)
         }
-        "font-quicklook-caches" | "system-simulator-caches" => Some(ComesBack::AppRecreates),
+        "font-quicklook-caches" | "system-simulator-caches" | "xcode-previews" => {
+            Some(ComesBack::AppRecreates)
+        }
         "xcode-archives" | "downloads-old" | "screenshots-old" | "mail-attachments" => {
             Some(ComesBack::TrashOnly)
         }
@@ -336,6 +340,7 @@ pub fn all_providers_with(
         Box::new(user_caches::UserCaches::with_runner(runner.clone())),
         Box::new(xcode::XcodeArchives),
         Box::new(xcode::XcodeDeviceSupport),
+        Box::new(xcode::XcodePreviews),
         Box::new(dev_caches::CargoCache),
         Box::new(dev_caches::NpmCache::with_runner(runner.clone())),
         Box::new(dev_caches::PnpmStore::with_runner(runner.clone())),
@@ -409,6 +414,7 @@ pub fn known_category_ids() -> &'static [&'static str] {
         "user-caches",
         "xcode-archives",
         "xcode-devicesupport",
+        "xcode-previews",
         "cargo",
         "npm",
         "pnpm",

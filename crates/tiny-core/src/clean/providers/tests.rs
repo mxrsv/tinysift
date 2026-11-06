@@ -26,6 +26,7 @@ const DESKTOP_TRASH: &[(&str, Option<ReportOnly>)] = &[
     ("user-caches", None),
     ("xcode-archives", None),
     ("xcode-devicesupport", None),
+    ("xcode-previews", None),
     ("cargo", None),
     ("npm", None),
     // Runs `pnpm store prune`, not a per-path move.
@@ -269,6 +270,7 @@ const SECTIONS: &[(&str, Section)] = &[
     ("user-caches", Section::Rebuilt),
     ("xcode-archives", Section::YourFiles),
     ("xcode-devicesupport", Section::Rebuilt),
+    ("xcode-previews", Section::Rebuilt),
     ("cargo", Section::Rebuilt),
     ("npm", Section::Rebuilt),
     ("pnpm", Section::Rebuilt),
