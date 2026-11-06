@@ -84,6 +84,14 @@ every browser. `codex-releases` and `codex-runtimes` gate on the Codex processes
 
 ## Project build output
 
+The project providers (`node-modules`, `rust-targets`, `python-caches`, `build-folders`) share one
+walk of each dev root per scan ([`project_walk.rs`](../../crates/tiny-core/src/clean/providers/project_walk.rs),
+kept in the `ScanContext`): each walker keeps its own rule of what it records and where it stops,
+the walk goes into a folder while any walker wants it, and unreadable entries count only for the
+walkers that read them. A rule changes there, never in a provider's own walk. A project's git
+activity is asked once per scan too, so a `package.json` judged for `node_modules` is not asked
+again for `.next` or `dist`.
+
 `node-modules`, `rust-targets` and `build-folders` list build output inside projects.
 `build-folders` offers `.next`, `Pods`, `build` and `dist` only beside the manifest that proves
 them generated, and its `check_item` repeats that proof

@@ -110,7 +110,7 @@ where
 
 /// Lists `dir`'s immediate children with their `symlink_metadata`. Read
 /// failures are recorded in `ctx` under `walk_root` instead of being dropped.
-fn read_entries(
+pub(crate) fn read_entries(
     walk_root: &Path,
     dir: &Path,
     ctx: &ScanContext<'_>,

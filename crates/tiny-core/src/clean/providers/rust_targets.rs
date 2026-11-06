@@ -4,8 +4,9 @@ use std::sync::Arc;
 use crate::error::Result;
 
 use super::project_activity::{assess_build_output, refuse_tracked, BUILD_OUTPUT_SAFE_DAYS};
-use super::{dev_search_roots, execute_per_item, is_idle, is_node_modules, CleanProvider};
-use crate::clean::fs_safe::{dir_size_checked, walk_with};
+use super::project_walk::{project_walk, Walker};
+use super::{dev_search_roots, execute_per_item, is_idle, CleanProvider};
+use crate::clean::fs_safe::dir_size_checked;
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 use crate::options::CleanOptions;
@@ -121,25 +122,14 @@ pub fn find_rust_targets(
     root: &Path,
     idle_days: Option<u64>,
 ) -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = Vec::new();
-    walk_with(root, ctx, |path, meta| {
-        if !meta.file_type().is_dir() || is_node_modules(path) {
-            return false;
-        }
-        let is_target = path.file_name().and_then(|n| n.to_str()) == Some("target");
-        if is_target {
-            if let Some(parent) = path.parent() {
-                let manifest = parent.join("Cargo.toml");
-                if manifest.is_file() && idle_days.is_none_or(|days| is_idle(&manifest, days)) {
-                    found.push(path.to_path_buf());
-                }
-            }
-            // Never recurse into target/.
-            return false;
-        }
-        true
-    });
-    found
+    // The walk's rule lives in `project_walk`'s `Walker::RustTargets`.
+    project_walk(ctx, root, Walker::RustTargets)
+        .into_iter()
+        .filter(|path| {
+            let manifest = path.with_file_name("Cargo.toml");
+            idle_days.is_none_or(|days| is_idle(&manifest, days))
+        })
+        .collect()
 }
 
 #[cfg(test)]

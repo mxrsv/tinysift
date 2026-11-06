@@ -74,6 +74,10 @@ Things that are not obvious from reading one file.
   executable file is there; before, any absolute path "resolved", so probing fixed locations
   always took the first ([`runner.rs`](../../crates/tiny-core/src/runner.rs)). `MockRunner::which`
   checks a set, not the disk, so only a real `ToolRunner` test catches this.
+- **A project provider scanned alone pays the whole shared walk.** The walk of the dev roots
+  serves every project walker at once, so scanning only `build-folders` also walks hidden folders
+  and Rust `target/` that only the others need; a full scan walks each root once instead of five
+  times ([`project_walk.rs`](../../crates/tiny-core/src/clean/providers/project_walk.rs)).
 - **`/usr/bin/pip3` is a shim.** Without the Command Line Tools it asks to install them, so
   `pip-cache` runs only Homebrew's or the Command Line Tools' `pip3` by absolute path and spawns
   nothing unless `~/Library/Caches/pip` exists. Only with such a `pip3` does `pip-cache` list that

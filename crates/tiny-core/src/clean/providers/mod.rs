@@ -31,6 +31,7 @@ pub mod jetbrains;
 pub mod mail_attachments;
 pub mod node_modules;
 pub mod project_activity;
+pub mod project_walk;
 pub mod purged_caches;
 pub mod python_caches;
 pub mod quarantine;

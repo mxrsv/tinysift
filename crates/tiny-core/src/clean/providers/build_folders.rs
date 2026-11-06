@@ -14,8 +14,9 @@ use std::sync::Arc;
 use crate::error::Result;
 
 use super::project_activity::{assess_build_output, refuse_tracked, BUILD_OUTPUT_SAFE_DAYS};
-use super::{dev_search_roots, execute_per_item, is_idle, is_node_modules, CleanProvider};
-use crate::clean::fs_safe::{dir_size_checked, walk_with};
+use super::project_walk::{project_walk, Walker};
+use super::{dev_search_roots, execute_per_item, is_idle, CleanProvider};
+use crate::clean::fs_safe::dir_size_checked;
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 use crate::options::CleanOptions;
@@ -126,31 +127,21 @@ impl CleanProvider for BuildFolders {
 /// the manifest modified more than `idle_days` ago unless that is `None`.
 /// Never descends into a found folder, `node_modules`, a Rust `target`
 /// (`rust-targets` lists it) or a hidden folder.
+/// The rule lives in [`project_walk`]'s `Walker::BuildFolders`.
 pub fn find_build_folders(
     ctx: &ScanContext<'_>,
     root: &Path,
     idle_days: Option<u64>,
 ) -> Vec<(PathBuf, PathBuf)> {
-    let mut found = Vec::new();
-    walk_with(root, ctx, |path, meta| {
-        if !meta.file_type().is_dir() || is_node_modules(path) {
-            return false;
-        }
-        if let Some(manifest) = manifest_of(path) {
-            if idle_days.is_none_or(|days| is_idle(&manifest, days)) {
-                found.push((path.to_path_buf(), manifest));
-            }
-            return false;
-        }
-        let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        let rust_target = name == "target" && path.with_file_name("Cargo.toml").is_file();
-        path == root || !(name.starts_with('.') || rust_target)
-    });
-    found
+    project_walk(ctx, root, Walker::BuildFolders)
+        .into_iter()
+        .filter_map(|path| manifest_of(&path).map(|manifest| (path, manifest)))
+        .filter(|(_, manifest)| idle_days.is_none_or(|days| is_idle(manifest, days)))
+        .collect()
 }
 
 /// The manifest that proves `folder` is build output, or `None`.
-fn manifest_of(folder: &Path) -> Option<PathBuf> {
+pub(crate) fn manifest_of(folder: &Path) -> Option<PathBuf> {
     let name = folder.file_name()?.to_str()?;
     let project = folder.parent()?;
     let file = |name: &str| Some(project.join(name)).filter(|p| p.is_file());

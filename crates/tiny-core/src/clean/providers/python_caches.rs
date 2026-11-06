@@ -4,8 +4,9 @@ use std::sync::Arc;
 use crate::error::Result;
 
 use super::project_activity::assess;
-use super::{dev_search_roots, execute_per_item, is_idle, is_node_modules, CleanProvider};
-use crate::clean::fs_safe::{dir_size_checked, walk_with};
+use super::project_walk::{project_walk, Walker};
+use super::{dev_search_roots, execute_per_item, is_idle, CleanProvider};
+use crate::clean::fs_safe::dir_size_checked;
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, Evidence, ExecAction, ExecReport, RiskLevel};
 use crate::runner::{CommandRunner, RealRunner};
@@ -106,18 +107,8 @@ impl CleanProvider for PythonCaches {
 /// not descended: their caches go with the venv, not as separate items.
 /// `node_modules` is skipped: it is most of the tree and is listed whole.
 pub fn find_pycache(ctx: &ScanContext<'_>, root: &Path) -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = Vec::new();
-    walk_with(root, ctx, |path, meta| {
-        if !meta.file_type().is_dir() || is_node_modules(path) || is_named_venv(path) {
-            return false;
-        }
-        if path.file_name().and_then(|n| n.to_str()) == Some("__pycache__") {
-            found.push(path.to_path_buf());
-            return false; // never recurse into pycache
-        }
-        true
-    });
-    found
+    // The walk's rule lives in `project_walk`'s `Walker::Pycache`.
+    project_walk(ctx, root, Walker::Pycache)
 }
 
 /// Walks `root` symlink-safe and returns every venv-style dir that holds a
@@ -126,29 +117,19 @@ pub fn find_pycache(ctx: &ScanContext<'_>, root: &Path) -> Vec<PathBuf> {
 /// not enough: a package folder called `env/` is source code. `node_modules`
 /// is skipped: it is most of the tree and is listed whole.
 pub fn find_orphan_venv(ctx: &ScanContext<'_>, root: &Path, idle_days: u64) -> Vec<PathBuf> {
-    let mut found: Vec<PathBuf> = Vec::new();
-    walk_with(root, ctx, |path, meta| {
-        if !meta.file_type().is_dir() || is_node_modules(path) {
-            return false;
-        }
-        if is_named_venv(path) {
-            if let Some(parent) = path.parent() {
-                if let Some(manifest) = python_manifest(parent) {
-                    if is_idle(&manifest, idle_days) {
-                        found.push(path.to_path_buf());
-                    }
-                }
-            }
-            return false; // never recurse into venv
-        }
-        true
-    });
-    found
+    // The walk's rule lives in `project_walk`'s `Walker::Venvs`.
+    project_walk(ctx, root, Walker::Venvs)
+        .into_iter()
+        .filter(|path| {
+            let manifest = path.parent().and_then(python_manifest);
+            manifest.is_some_and(|manifest| is_idle(&manifest, idle_days))
+        })
+        .collect()
 }
 
 /// True when `dir` has a venv name and is a virtualenv: `python -m venv`
 /// and virtualenv both write `pyvenv.cfg` at its top level.
-fn is_named_venv(dir: &Path) -> bool {
+pub(crate) fn is_named_venv(dir: &Path) -> bool {
     let named =
         matches!(dir.file_name().and_then(|n| n.to_str()), Some(n) if VENV_NAMES.contains(&n));
     named
