@@ -420,3 +420,91 @@ fn the_scan_figure_counts_only_what_a_clean_surely_frees() {
     );
     remove(&layout.dir);
 }
+
+/// A category whose tool removes a placeholder now (Homebrew's cleanup, a
+/// Docker prune), sure of its size or not.
+struct Removing {
+    id: &'static str,
+    sure: bool,
+    size: u64,
+}
+
+impl CleanProvider for Removing {
+    fn id(&self) -> &'static str {
+        self.id
+    }
+    fn label(&self) -> &'static str {
+        self.id
+    }
+    fn risk(&self) -> RiskLevel {
+        RiskLevel::Review
+    }
+    fn inclusion_reason(&self) -> String {
+        "fixture".into()
+    }
+    fn discover(&self, _: &ScanContext<'_>) -> CoreResult<Vec<CleanItem>> {
+        Ok(vec![CleanItem {
+            category_id: self.id.into(),
+            category_label: self.id.into(),
+            path: PathBuf::from(format!("<{}:all>", self.id)),
+            size: self.size,
+            risk: RiskLevel::Review,
+            evidence: Vec::new(),
+        }])
+    }
+    fn execute(&self, _: &[CleanItem], _: ExecAction) -> CoreResult<ExecReport> {
+        panic!("the desktop path must never call provider.execute");
+    }
+    fn desktop_tool(&self) -> Option<DesktopTool> {
+        Some(DesktopTool::Remove { sure: self.sure })
+    }
+}
+
+#[test]
+fn a_tool_removal_counts_when_sure_and_is_a_ceiling_otherwise_in_both_modes() {
+    let session = TestSession::new();
+    let providers: Vec<Box<dyn CleanProvider>> = vec![
+        Box::new(Removing {
+            id: "homebrew",
+            sure: true,
+            size: 300,
+        }),
+        Box::new(Removing {
+            id: "docker",
+            sure: false,
+            size: 5_000,
+        }),
+    ];
+    let off = discover(&session, &providers).unwrap();
+    assert!(off
+        .categories
+        .iter()
+        .all(|c| matches!(c.desktop_action, FfiDesktopAction::ReportOnly { .. })));
+    let discovery = discover_with(&session, &providers, with_tools()).unwrap();
+    assert_eq!(
+        actions(&discovery),
+        [
+            ("homebrew", FfiDesktopAction::RemoveWithTool),
+            ("docker", FfiDesktopAction::RemoveWithTool),
+        ]
+    );
+    let prunes: Vec<(&str, bool)> = discovery
+        .categories
+        .iter()
+        .map(|c| (c.id.as_str(), c.prunes))
+        .collect();
+    assert_eq!(prunes, [("homebrew", false), ("docker", true)]);
+    for mode in [FfiDeleteMode::Permanent, FfiDeleteMode::Trash] {
+        let preview = session
+            .clean_preview_with_mode(ids(&discovery), mode)
+            .unwrap();
+        assert!(preview.items.iter().all(|i| i.permanent), "no Trash route");
+        assert_eq!(
+            preview.bytes_to_free, 300,
+            "{mode:?}: the dry run's estimate"
+        );
+        assert_eq!(preview.bytes_prune_up_to, 5_000, "{mode:?}: only a ceiling");
+        assert_eq!(preview.bytes_to_trash, 0);
+        assert_eq!(preview.bytes_requested, 0);
+    }
+}

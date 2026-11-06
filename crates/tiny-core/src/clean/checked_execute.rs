@@ -34,7 +34,7 @@ use super::trash_plan::{
 mod measure;
 mod report;
 
-use measure::{frees_space, measure, settle, Measured, Settled};
+use measure::{frees_space, measure, measure_planned, settle, Measured, Settled};
 pub use report::{
     CheckedExecReport, ItemOutcome, ItemResult, RemovalExtent, SkipReason, StopReason,
 };
@@ -117,7 +117,7 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
                 &acted.outcome,
                 ItemOutcome::Failed { error, .. } if !matches!(error, TrashError::AutomationDenied(_))
             );
-        done[index] = acted.settle(&planned.item.path);
+        done[index] = acted.settle(|| measure_planned(planned, ctx.providers, true));
     }
     if stopped.is_none() {
         crate::progress::report(ctx.progress, "trash", total, Some(total), "Done");
@@ -255,7 +255,7 @@ fn delete_as_administrator(
             removed_some: false,
             failure,
         };
-        done[index] = acted.settle(path);
+        done[index] = acted.settle(|| measure(path, true));
     }
 }
 
@@ -276,7 +276,8 @@ fn prepare(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<Option<Measur
     validate(planned, ctx).map_err(Halt::Skip)?;
     // Measured among the slow checks, so the checks below also cover the
     // time its walk takes.
-    let before = frees_space(planned.removal).then(|| measure(&planned.item.path, false));
+    let before =
+        frees_space(planned.removal).then(|| measure_planned(planned, ctx.providers, false));
     #[cfg(test)]
     measure::AFTER_MEASURE.with(|hook| {
         if let (Some(hook), Some(_)) = (hook.borrow_mut().as_mut(), before) {
@@ -321,10 +322,10 @@ impl Acted {
         }
     }
 
-    /// Measures `path` again, right after the action, and puts a prune's
-    /// measured bytes into its outcome.
-    fn settle(self, path: &Path) -> Done {
-        let settled = settle(path, &self.outcome, self.before, self.removed_some);
+    /// Measures again (`measure_again`), right after the action, and puts a
+    /// prune's or tool removal's measured bytes into its outcome.
+    fn settle(self, measure_again: impl FnOnce() -> Measured) -> Done {
+        let settled = settle(measure_again, &self.outcome, self.before, self.removed_some);
         let outcome = match self.outcome {
             ItemOutcome::Pruned { .. } => ItemOutcome::Pruned {
                 bytes_freed: settled.freed,
@@ -503,7 +504,10 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
     let on_disk = names_a_file(planned);
     if on_disk {
         protection_skip(ctx.policy, &item.path)?;
-    } else if planned.removal != Removal::RunTool(DesktopTool::Request) {
+    } else if !matches!(
+        planned.removal,
+        Removal::RunTool(DesktopTool::Request | DesktopTool::Remove { .. })
+    ) {
         return Err(SkipReason::Missing);
     }
     let gated = gated_items(planned, ctx)?;

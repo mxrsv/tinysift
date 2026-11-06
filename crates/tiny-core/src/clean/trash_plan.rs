@@ -66,7 +66,7 @@ pub enum DeleteMode {
 /// go to the Trash (OC1, OC2). Merging never widens: a cache folder holding
 /// a path that only goes to the Trash goes to the Trash with it. A category
 /// with a `tool` runs it instead of deleting: a prune in Permanent mode only,
-/// a requested removal in both, since it has no Trash route. The Trash
+/// a requested or tool removal in both, since they have no Trash route. The Trash
 /// row's `EmptyTrash` and `DeleteAsAdministrator` come from their providers
 /// (`desktop_empties_trash`, `needs_admin`), not from here.
 pub fn removal_for(
@@ -83,7 +83,7 @@ pub fn removal_for(
         )
     };
     match tool {
-        Some(DesktopTool::Request) => Removal::RunTool(DesktopTool::Request),
+        Some(tool @ (DesktopTool::Request | DesktopTool::Remove { .. })) => Removal::RunTool(tool),
         Some(DesktopTool::Prune) if permanent => Removal::RunTool(DesktopTool::Prune),
         None if permanent && std::iter::once(item).chain(covers).all(rebuilt) => Removal::Delete,
         Some(DesktopTool::Prune) | None => Removal::MoveToTrash,

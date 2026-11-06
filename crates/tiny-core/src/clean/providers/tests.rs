@@ -62,6 +62,8 @@ const DESKTOP_TRASH: &[(&str, Option<ReportOnly>)] = &[
     ),
     ("android-sdk", None),
     ("go-cache", None),
+    // Runs `brew cleanup --prune=30`, not a per-path move.
+    ("homebrew", Some(ReportOnly::NotPerPathTrash)),
     // Runs `docker image prune` / `docker builder prune`, not a per-path move.
     ("docker", Some(ReportOnly::NotPerPathTrash)),
     // Destructive: `docker volume prune` deletes container data.
@@ -291,6 +293,7 @@ const SECTIONS: &[(&str, Section)] = &[
     ("simulator-runtime-images", Section::Rebuilt),
     ("android-sdk", Section::Rebuilt),
     ("go-cache", Section::Rebuilt),
+    ("homebrew", Section::Rebuilt),
     ("docker", Section::Rebuilt),
     ("docker-volumes", Section::YourFiles),
     ("downloads-old", Section::YourFiles),
@@ -365,6 +368,7 @@ fn tool_ids_are_owned_by_exactly_the_expected_provider() {
     );
     for (owner, path) in [
         ("docker", "<docker:images>"),
+        ("homebrew", "<homebrew:cleanup>"),
         ("docker-volumes", "<docker:volumes>"),
         (
             "time-machine-local",

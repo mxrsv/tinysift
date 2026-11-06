@@ -85,6 +85,13 @@ pub const APP_TOOL_ENV: &[(&str, &str)] = &[
     ("COREPACK_ENABLE_DOWNLOAD_PROMPT", "0"),
 ];
 
+/// Set for a tool whoever runs it, the CLI or the app, unless its lookup is
+/// isolated (Apps' own `brew`, which sets every variable). TinySift's Homebrew
+/// cleanup removes old versions and old downloads only: `brew cleanup` would
+/// otherwise also uninstall dependencies nothing needs any more, which its
+/// dry run lists by name without a size, so no figure could include them.
+pub const TOOL_ENV: &[(&str, &[(&str, &str)])] = &[("brew", &[("HOMEBREW_NO_AUTOREMOVE", "1")])];
+
 /// Where a bare tool name is searched.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ToolLookup {
@@ -203,6 +210,12 @@ impl ToolLookup {
             command.env("PATH", path);
         }
         command.envs(self.env.iter().copied());
+        // An isolated lookup sets its tool's whole environment itself.
+        let name = Path::new(bin).file_name().and_then(|n| n.to_str());
+        let shared = TOOL_ENV.iter().filter(|(tool, _)| Some(*tool) == name);
+        for (_, env) in shared.filter(|_| self.isolation.is_none()) {
+            command.envs(env.iter().copied());
+        }
         Some(command)
     }
 }

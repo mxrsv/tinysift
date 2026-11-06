@@ -24,6 +24,7 @@ pub mod downloads_old;
 pub mod font_quicklook_caches;
 pub mod go_cache;
 pub mod gradle_maven;
+pub mod homebrew;
 pub mod ios_simulators;
 pub mod jetbrains;
 pub mod mail_attachments;
@@ -88,7 +89,7 @@ pub fn category_family(category_id: &str) -> Family {
         "system-simulator-caches" | "simulator-runtimes" | "simulator-runtime-images" => {
             Family::Dev
         }
-        "go-cache" | "docker" | "docker-volumes" => Family::Dev,
+        "go-cache" | "homebrew" | "docker" | "docker-volumes" => Family::Dev,
         "xcode-derived" | "xcode-archives" | "xcode-devicesupport" => Family::Dev,
         // UserStorage family
         "downloads-old" | "screenshots-old" | "mail-attachments" => Family::UserStorage,
@@ -107,9 +108,8 @@ pub fn category_family(category_id: &str) -> Family {
 pub fn comes_back(category_id: &str) -> Option<ComesBack> {
     let rebuild = |command| Some(ComesBack::Rebuild { command });
     match category_id {
-        "cargo" | "npm" | "pnpm" | "yarn" | "gradle-maven" | "android-sdk" | "docker" => {
-            Some(ComesBack::Redownload)
-        }
+        "cargo" | "npm" | "pnpm" | "yarn" | "gradle-maven" | "android-sdk" | "docker"
+        | "homebrew" => Some(ComesBack::Redownload),
         "streaming-caches" | "chat-caches" => Some(ComesBack::Redownload),
         "uv" | "huggingface" | "codex-runtimes" | "codex-releases" => Some(ComesBack::Redownload),
         "simulator-runtimes" | "simulator-runtime-images" => Some(ComesBack::Redownload),
@@ -260,6 +260,16 @@ pub trait CleanProvider {
         Err(format!("{} has no tool command", self.id()))
     }
 
+    /// For a `DesktopTool::Remove` item that names no file (Homebrew's
+    /// cleanup, a Docker prune): what its tool would free right now, by the
+    /// same rule as its discovery size. Measured right before and right
+    /// after the tool runs, so the freed bytes are the difference. `None`
+    /// measures the item's path instead; `Err` says why it could not be
+    /// measured.
+    fn tool_freeable(&self, _item: &CleanItem) -> Option<std::result::Result<u64, String>> {
+        None
+    }
+
     /// True when acting on the items needs administrator rights. The
     /// desktop never moves or deletes them unprivileged
     /// (`desktop_report_only`), only as administrator
@@ -363,6 +373,7 @@ pub fn all_providers_with(
         Box::new(simulator_runtime_images::SimulatorRuntimeImages::with_runner(runner.clone())),
         Box::new(android_sdk::AndroidSdk::new(opts.idle_days)),
         Box::new(go_cache::GoCache::with_runner(runner.clone())),
+        Box::new(homebrew::Homebrew::with_runner(runner.clone())),
         Box::new(docker::Docker::with_runner(runner.clone())),
         Box::new(docker::DockerVolumes::with_runner(runner.clone())),
         Box::new(downloads_old::DownloadsOld::with_runner(
@@ -420,6 +431,7 @@ pub fn known_category_ids() -> &'static [&'static str] {
         "simulator-runtime-images",
         "android-sdk",
         "go-cache",
+        "homebrew",
         "docker",
         "docker-volumes",
         "downloads-old",

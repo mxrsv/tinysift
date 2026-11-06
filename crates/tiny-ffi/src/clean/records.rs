@@ -28,9 +28,11 @@ pub struct FfiCleanOptions {
     #[uniffi(default = false)]
     pub include_trash: bool,
     /// Let the app act on categories cleaned by their own tool, when the
-    /// tool is found: uv and pnpm caches become `MoveToTrash` (pruned by the
-    /// tool with `FfiDeleteMode::Permanent`, moved to the Trash otherwise),
-    /// simulator runtimes `RequestRemoval`. Off, they stay report only.
+    /// tool is found: uv, pnpm, Bun and pip caches become `MoveToTrash`
+    /// (pruned by the tool with `FfiDeleteMode::Permanent`, moved to the
+    /// Trash otherwise), simulator runtimes `RequestRemoval`, Homebrew,
+    /// Docker and unavailable simulator devices `RemoveWithTool`. Off, they
+    /// stay report only.
     #[uniffi(default = false)]
     pub tool_commands: bool,
 }
@@ -73,7 +75,7 @@ pub enum FfiDesktopAction {
     /// The app may act on the candidates: a preview moves them to the Trash
     /// or, with `FfiDeleteMode::Permanent`, deletes Rebuilt automatically
     /// and Project build output for good, or has a cache's own tool prune it
-    /// (uv, pnpm with `tool_commands`).
+    /// (uv, pnpm, Bun, pip with `tool_commands`).
     MoveToTrash,
     /// The Trash row (`include_trash` only): a selected row is emptied for
     /// good through Finder, in either delete mode. Never preselected
@@ -83,6 +85,11 @@ pub enum FfiDesktopAction {
     /// removes each selected item for good in either delete mode, and
     /// finishes in the background, so the result says it was requested.
     RequestRemoval,
+    /// Homebrew's cleanup, Docker's prunes and unavailable simulator devices
+    /// (`tool_commands` only): the category's own tool removes each selected
+    /// item for good now, in either delete mode (no Trash route). It counts
+    /// in the figures unless `prunes` says its size is only a ceiling.
+    RemoveWithTool,
     /// Deleted for good as administrator, in either delete mode, after one
     /// macOS authentication dialog per Clean. No category is routed here any
     /// more: macOS denies that deletion even as root, so root-owned categories
@@ -226,9 +233,12 @@ pub struct FfiCleanCategory {
     /// with `FfiDesktopAction::DeleteAsAdministrator`, so never at present.
     #[uniffi(default = false)]
     pub needs_admin: bool,
-    /// The category's own tool prunes it when the run removes it for good
-    /// (a uv or pnpm cache). A prune keeps what is still referenced, so it
-    /// frees at most the candidates' sizes, often far less.
+    /// The category's own tool removes it when the run removes it for good,
+    /// and its size is only a ceiling: a prune keeps what is still
+    /// referenced (a uv or pnpm cache), a tool without a dry run purges a
+    /// cache (Bun, pip), Docker's Reclaimable also counts images its
+    /// filtered prune keeps. It frees at most the candidates' sizes, often
+    /// far less, and is never part of a sure figure.
     #[uniffi(default = false)]
     pub prunes: bool,
 }
@@ -329,9 +339,9 @@ pub struct FfiPreview {
     /// dialog once, before anything changes.
     #[uniffi(default = 0)]
     pub bytes_needing_admin: u64,
-    /// Sum of the sizes of the caches their own tool prunes (uv, pnpm). The
-    /// tools have no dry run, so a prune has no estimate: it frees "up to"
-    /// this, often far less, and is never part of `bytes_to_free`.
+    /// Sum of the sizes whose own tool removes them without an estimate
+    /// (`FfiCleanCategory::prunes`: uv, pnpm, Bun, pip, Docker). It frees
+    /// "up to" this, often far less, and is never part of `bytes_to_free`.
     #[uniffi(default = 0)]
     pub bytes_prune_up_to: u64,
 }

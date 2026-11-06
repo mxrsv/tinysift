@@ -7,9 +7,9 @@ use std::io;
 use std::path::Path;
 
 use crate::clean::fs_safe::dir_size_checked;
-use crate::clean::providers::DesktopTool;
+use crate::clean::providers::{CleanProvider, DesktopTool};
 use crate::clean::scan_context::ScanContext;
-use crate::clean::trash_plan::Removal;
+use crate::clean::trash_plan::{PlannedItem, Removal};
 
 use super::report::{ItemOutcome, RemovalExtent};
 
@@ -46,8 +46,40 @@ pub(super) fn frees_space(removal: Removal) -> bool {
         Removal::Delete
             | Removal::DeleteAsAdministrator
             | Removal::EmptyTrash
-            | Removal::RunTool(DesktopTool::Prune)
+            | Removal::RunTool(DesktopTool::Prune | DesktopTool::Remove { .. })
     )
+}
+
+/// `planned`'s freed bytes now: what its tool says it would still free
+/// (`CleanProvider::tool_freeable`) for a tool removal that answers, the
+/// item's path otherwise. A tool that cannot tell makes it 0 and a ceiling.
+pub(super) fn measure_planned(
+    planned: &PlannedItem,
+    providers: &[Box<dyn CleanProvider>],
+    unreadable_is_upper_bound: bool,
+) -> Measured {
+    if let Removal::RunTool(DesktopTool::Remove { .. }) = planned.removal {
+        let answer = providers
+            .iter()
+            .find(|p| p.id() == planned.item.category_id)
+            .and_then(|provider| provider.tool_freeable(&planned.item));
+        match answer {
+            Some(Ok(bytes)) => {
+                return Measured {
+                    bytes,
+                    upper_bound: false,
+                }
+            }
+            Some(Err(_)) => {
+                return Measured {
+                    bytes: 0,
+                    upper_bound: true,
+                }
+            }
+            None => {}
+        }
+    }
+    measure(&planned.item.path, unreadable_is_upper_bound)
 }
 
 /// `path`'s freed bytes now, and whether that is only an upper bound. A
@@ -69,12 +101,13 @@ pub(super) fn measure(path: &Path, unreadable_is_upper_bound: bool) -> Measured 
     }
 }
 
-/// Measures `path` right after `outcome`, given its measurement `before`
-/// (`None` when its removal frees nothing or never started). `removed_some`
-/// says the route removed at least one entry, which makes a failure partial
-/// even when no block was freed (a hard link whose data another link keeps).
+/// Measures again right after `outcome` (`measure_again`), given the
+/// measurement `before` (`None` when its removal frees nothing or never
+/// started). `removed_some` says the route removed at least one entry, which
+/// makes a failure partial even when no block was freed (a hard link whose
+/// data another link keeps).
 pub(super) fn settle(
-    path: &Path,
+    measure_again: impl FnOnce() -> Measured,
     outcome: &ItemOutcome,
     before: Option<Measured>,
     removed_some: bool,
@@ -104,7 +137,7 @@ pub(super) fn settle(
         };
         return unchanged(extent);
     };
-    let after = measure(path, true);
+    let after = measure_again();
     let freed = before.bytes.saturating_sub(after.bytes);
     let extent = match (succeeded, freed > 0 || removed_some) {
         (true, _) => RemovalExtent::Removed,

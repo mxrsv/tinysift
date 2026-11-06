@@ -1,6 +1,6 @@
 //! The desktop's tool commands: categories whose cleanup is their tool's own
 //! command (`uv cache prune`, `pnpm store prune`, `xcrun simctl runtime
-//! delete`). The CLI runs the same commands through `CleanProvider::execute`
+//! delete`, `brew cleanup`). The CLI runs the same commands through `CleanProvider::execute`
 //! with the unbounded `CommandRunner::run`; the desktop runs them through the
 //! bounded `CommandRunner::output`, one item at a time, after its checks.
 
@@ -18,6 +18,13 @@ pub enum DesktopTool {
     /// The tool removes the item in the background (`simctl runtime
     /// delete`), so the removal is only requested. There is no Trash route.
     Request,
+    /// The tool removes what the item names now, in either delete mode:
+    /// there is no Trash route (`brew cleanup`, a Docker prune, `simctl
+    /// delete`). Freed bytes are measured right before and after it
+    /// (`CleanProvider::tool_freeable`, else the item's path). `sure`: the
+    /// item's size is what the tool's dry run says it removes, so it counts
+    /// in every figure; otherwise it is a ceiling, shown as "up to".
+    Remove { sure: bool },
 }
 
 /// Bound for one desktop tool command: pruning a large cache can take
@@ -54,11 +61,15 @@ mod tests {
     use crate::runner::CommandError;
 
     #[test]
-    fn only_uv_pnpm_and_simulator_runtimes_have_a_desktop_tool() {
+    fn only_the_expected_categories_have_a_desktop_tool() {
         use crate::clean::providers::all_providers_with;
         use std::sync::Arc;
-        let runner: Arc<dyn CommandRunner> =
-            Arc::new(MockRunner::new().with_which("uv").with_which("pnpm"));
+        let runner: Arc<dyn CommandRunner> = Arc::new(
+            MockRunner::new()
+                .with_which("uv")
+                .with_which("pnpm")
+                .with_which("brew"),
+        );
         let options = crate::options::CleanOptions::default();
         let tools: Vec<(&str, DesktopTool)> = all_providers_with(&options, runner)
             .iter()
@@ -70,6 +81,7 @@ mod tests {
                 ("pnpm", DesktopTool::Prune),
                 ("uv", DesktopTool::Prune),
                 ("simulator-runtimes", DesktopTool::Request),
+                ("homebrew", DesktopTool::Remove { sure: true }),
             ],
             "simulator-runtime-images stays report only (XcodeNotInstalled)"
         );

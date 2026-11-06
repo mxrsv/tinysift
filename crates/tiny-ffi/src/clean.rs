@@ -278,14 +278,23 @@ impl TinySession {
         let with = |removal: Removal| move |plan: &&PlannedItem| plan.removal == removal;
         // A requested removal is neither freed nor moved when the run ends,
         // and a prune has no estimate of its own (`bytes_prune_up_to`).
+        // A tool removal counts when its size is its dry run's estimate.
         let frees = |plan: &&PlannedItem| {
             matches!(
                 plan.removal,
-                Removal::Delete | Removal::DeleteAsAdministrator | Removal::EmptyTrash
+                Removal::Delete
+                    | Removal::DeleteAsAdministrator
+                    | Removal::EmptyTrash
+                    | Removal::RunTool(DesktopTool::Remove { sure: true })
             )
         };
         let (bytes_to_free, bytes_to_free_is_upper_bound) = freed_together(plans().filter(frees));
-        let prune = Removal::RunTool(DesktopTool::Prune);
+        let up_to = |plan: &&PlannedItem| {
+            matches!(
+                plan.removal,
+                Removal::RunTool(DesktopTool::Prune | DesktopTool::Remove { sure: false })
+            )
+        };
         let request = Removal::RunTool(DesktopTool::Request);
         let as_admin = Removal::DeleteAsAdministrator;
         let preview_id = format!("p{}", state.next_id());
@@ -300,7 +309,7 @@ impl TinySession {
             bytes_to_trash: total_size(plans().filter(with(Removal::MoveToTrash)).map(|p| &p.item)),
             bytes_requested: total_size(plans().filter(with(request)).map(|p| &p.item)),
             bytes_needing_admin: total_size(plans().filter(with(as_admin)).map(|p| &p.item)),
-            bytes_prune_up_to: total_size(plans().filter(with(prune)).map(|p| &p.item)),
+            bytes_prune_up_to: total_size(plans().filter(up_to).map(|p| &p.item)),
         };
         state.preview = Some(StoredPreview {
             id: preview_id,
@@ -382,6 +391,9 @@ impl TinySession {
                 (
                     FfiDesktopAction::MoveToTrash | FfiDesktopAction::EmptyTrash,
                     None
+                ) | (
+                    FfiDesktopAction::RemoveWithTool,
+                    Some(DesktopTool::Remove { sure: true })
                 )
             )
         };
@@ -462,6 +474,7 @@ fn desktop_action(
     match tool.filter(|_| options.tool_commands) {
         Some(DesktopTool::Prune) => return (FfiDesktopAction::MoveToTrash, tool),
         Some(DesktopTool::Request) => return (FfiDesktopAction::RequestRemoval, tool),
+        Some(DesktopTool::Remove { .. }) => return (FfiDesktopAction::RemoveWithTool, tool),
         None => {}
     }
     let reason = match provider {
@@ -523,7 +536,10 @@ fn store_category(
         comes_back,
         section,
         needs_admin,
-        prunes: tool == Some(DesktopTool::Prune),
+        prunes: matches!(
+            tool,
+            Some(DesktopTool::Prune | DesktopTool::Remove { sure: false })
+        ),
     };
     match category.outcome {
         CategoryOutcome::Found {
@@ -679,10 +695,15 @@ fn plan_selection(
                     detail: format!("{path} is report-only on the desktop"),
                 });
             }
-            // Only a tool's placeholder may have no fingerprint.
+            // Only a tool's placeholder may have no fingerprint: a requested
+            // removal's, or one a tool removes that names no file.
             let fingerprint = candidate.fingerprint.clone();
-            if fingerprint.is_none() && candidate.desktop_action != FfiDesktopAction::RequestRemoval
-            {
+            let placeholder = match candidate.desktop_action {
+                FfiDesktopAction::RequestRemoval => true,
+                FfiDesktopAction::RemoveWithTool => !candidate.item.path.is_absolute(),
+                _ => false,
+            };
+            if fingerprint.is_none() && !placeholder {
                 return Err(FfiError::InvalidInput {
                     detail: format!("{path} could not be inspected at discovery"),
                 });

@@ -25,6 +25,8 @@ struct ToolFixture {
     writes: Option<(PathBuf, usize)>,
     app: Option<&'static str>,
     guard: Option<&'static str>,
+    /// What `tool_freeable` measures, as Homebrew sizes its dry run's paths.
+    freeable: Option<PathBuf>,
     log: Arc<Mutex<Vec<String>>>,
 }
 
@@ -38,6 +40,7 @@ fn tool(id: &'static str, tool: DesktopTool, sinks: &Sinks) -> ToolFixture {
         writes: None,
         app: None,
         guard: None,
+        freeable: None,
         log: sinks.log.clone(),
     }
 }
@@ -75,6 +78,10 @@ impl CleanProvider for ToolFixture {
     }
     fn desktop_tool(&self) -> Option<DesktopTool> {
         Some(self.tool)
+    }
+    fn tool_freeable(&self, _: &CleanItem) -> Option<std::result::Result<u64, String>> {
+        let dir = self.freeable.as_ref()?;
+        Some(Ok(dir_size_checked(dir, &ScanContext::unchecked())))
     }
     fn run_desktop_tool(&self, item: &CleanItem) -> std::result::Result<(), String> {
         let entry = match item.path.is_absolute() {
@@ -466,5 +473,101 @@ fn only_a_categorys_own_tool_runs_and_its_store_is_never_deleted() {
         "a prune's folder may only go to the Trash besides its tool"
     );
     assert_eq!(sinks.log(), ["trash cache"]);
+    let _ = remove_recursive_safe(&root);
+}
+
+/// Homebrew's cleanup: a placeholder whose tool says what it would free.
+fn cleanup(size: u64) -> PlannedItem {
+    PlannedItem {
+        item: CleanItem {
+            category_id: "homebrew".into(),
+            category_label: "homebrew".into(),
+            path: PathBuf::from("<homebrew:cleanup>"),
+            size,
+            risk: RiskLevel::Review,
+            evidence: Vec::new(),
+        },
+        removal: Removal::RunTool(DesktopTool::Remove { sure: true }),
+        size_is_upper_bound: false,
+        ..runtime(size)
+    }
+}
+
+#[test]
+fn a_tool_removal_of_a_placeholder_counts_what_its_tool_measures_before_and_after() {
+    let root = fixture_root("tool-remove", &[]);
+    let cellar = root.join("cellar");
+    fs::create_dir(&cellar).unwrap();
+    for file in ["old", "older"] {
+        fs::write(cellar.join(file), vec![7u8; 30_000]).unwrap();
+    }
+    let old = allocated(&cellar.join("old"));
+    let sinks = Sinks::default();
+    let mut brew = tool("homebrew", DesktopTool::Remove { sure: true }, &sinks);
+    brew.prunes = Some(cellar.join("old"));
+    brew.freeable = Some(cellar.clone());
+    let report = run_tools(
+        &TempStore::new(),
+        &root,
+        &[cleanup(60_000)],
+        vec![Box::new(brew)],
+        &MockChecker::none(),
+        &sinks,
+    );
+    assert_eq!(pruned_outcome(&report), (old, false), "before minus after");
+    assert_eq!(report.bytes_freed, old);
+    assert_eq!(report.bytes_moved_to_trash(), 0);
+    assert_eq!(report.bytes_requested(), 0);
+    assert_eq!(sinks.log(), ["run <homebrew:cleanup>"]);
+    let _ = remove_recursive_safe(&root);
+}
+
+#[test]
+fn a_tool_removal_of_a_path_measures_the_path_and_keeps_every_guard() {
+    let root = fixture_root("tool-remove-path", &["device"]);
+    let device = root.join("device");
+    let size = allocated(&device);
+    let sinks = Sinks::default();
+    let mut simctl = tool(
+        "simulator-devices",
+        DesktopTool::Remove { sure: true },
+        &sinks,
+    );
+    simctl.prunes = Some(device.clone());
+    let removal = Removal::RunTool(DesktopTool::Remove { sure: true });
+    let report = run_tools(
+        &TempStore::new(),
+        &root,
+        &[planned("simulator-devices", &root, "device", removal)],
+        vec![Box::new(simctl)],
+        &MockChecker::none(),
+        &sinks,
+    );
+    assert_eq!(pruned_outcome(&report).0, size);
+    assert_eq!(report.results[0].extent, RemovalExtent::Removed);
+
+    // A guard refuses it before the tool runs.
+    let root = fixture_root("tool-remove-guard", &["device"]);
+    let sinks = Sinks::default();
+    let mut simctl = tool(
+        "simulator-devices",
+        DesktopTool::Remove { sure: true },
+        &sinks,
+    );
+    simctl.guard = Some("device");
+    let report = run_tools(
+        &TempStore::new(),
+        &root,
+        &[planned("simulator-devices", &root, "device", removal)],
+        vec![Box::new(simctl)],
+        &MockChecker::none(),
+        &sinks,
+    );
+    assert!(matches!(
+        &outcomes(&report)[0],
+        ItemOutcome::Skipped(SkipReason::ProviderGuard(_))
+    ));
+    assert!(sinks.log().is_empty());
+    assert!(root.join("device").exists());
     let _ = remove_recursive_safe(&root);
 }
