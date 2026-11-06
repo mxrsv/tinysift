@@ -228,11 +228,16 @@ item. It is the only place that builds the real `OsascriptDelete`, and it panics
 `cfg!(test)`; tests call `remove_clean` with fakes.
 
 **Freed, moved and requested are three numbers.** Bytes freed are measured, never discovery
-sizes: right before each removal that frees space (`Delete`, `DeleteAsAdministrator`, `EmptyTrash`,
-`RunTool(Prune)`, `RunTool(Remove)`), among the slow checks, the item's freed bytes are measured by the
-[`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs) rule, and once more right after
-it ([`measure.rs`](../../crates/tiny-core/src/clean/checked_execute/measure.rs)); the item freed
-`before - after` (saturating), and the run's `bytes_freed` is the sum. A `RunTool(Remove)` item
+sizes. A `Delete` counts them itself: the best-effort walker applies the
+[`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs) rule to each regular file as it
+unlinks it (its `fstatat` blocks and links, one descriptor-relative `getattrlistat` for APFS
+sharing), so a hard-linked inode counts once its last link in the item goes and a clone family once
+every member goes (`TreeRemoval::freed`); only a failed deletion walks what it left. Removals done
+by another process (`DeleteAsAdministrator`, Finder's `EmptyTrash`, `RunTool(Prune)`,
+`RunTool(Remove)`) cannot be counted from here, so right before each, among the slow checks, the
+item is measured by the same rule and once more right after it
+([`measure.rs`](../../crates/tiny-core/src/clean/checked_execute/measure.rs)); the item freed
+`before - after` (saturating). The run's `bytes_freed` is the sum. A `RunTool(Remove)` item
 that names no file (Homebrew's `<homebrew:cleanup>`, Docker's placeholders) is measured by its
 provider instead (`CleanProvider::tool_freeable`): Homebrew sizes its dry run's paths again (the
 scan's list while it is fresh, so neither measurement spawns `brew`),

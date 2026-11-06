@@ -9,6 +9,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::ptr::NonNull;
 
+use crate::clean::freed_size::{sharing_at, FileFacts, FreedBytes};
+
 const DIRECTORY_FLAGS: libc::c_int = libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
 // Ancestors are searched, never enumerated: requiring read would refuse
 // otherwise accessible children of an execute-only directory.
@@ -43,6 +45,16 @@ pub struct TreeRemoval {
     pub failed_entries: u64,
     /// Entries unlinked, folders included.
     pub removed_entries: u64,
+    /// What the unlinked files freed, by the [`freed_size`] rule applied to
+    /// each file as it was unlinked: allocated blocks; a hard-linked inode
+    /// only once every link went in this removal; an APFS clone family only
+    /// once every member went; a partly shared file its private size. Counted
+    /// by the best-effort removal only.
+    ///
+    /// [`freed_size`]: crate::clean::freed_size
+    pub freed: u64,
+    /// `freed` counts blocks the volume could not show as unshared.
+    pub freed_is_upper_bound: bool,
 }
 
 impl TreeRemoval {
@@ -102,6 +114,8 @@ pub fn is_entry_changed(error: &io::Error) -> bool {
 struct Sink {
     best_effort: bool,
     removal: TreeRemoval,
+    /// The unlinked files, best effort only.
+    freed: FreedBytes,
 }
 
 impl Sink {
@@ -151,6 +165,7 @@ fn remove_observed(root: &Path, one_device: bool, observer: Observer<'_>) -> io:
     let mut sink = Sink {
         best_effort: false,
         removal: TreeRemoval::default(),
+        freed: FreedBytes::default(),
     };
     remove_with(root, one_device, None, observer, &mut sink)
 }
@@ -164,11 +179,18 @@ fn remove_each_observed(
     let mut sink = Sink {
         best_effort: true,
         removal: TreeRemoval::default(),
+        freed: FreedBytes::default(),
     };
     if let Err(error) = remove_with(root, one_device, identity, observer, &mut sink) {
         sink.removal.record(root, error);
     }
-    sink.removal
+    // Links and clone members outside the removal keep their blocks.
+    let (freed, upper_bound, _) = sink.freed.finish_shared();
+    TreeRemoval {
+        freed,
+        freed_is_upper_bound: upper_bound,
+        ..sink.removal
+    }
 }
 
 fn remove_with(
@@ -359,12 +381,16 @@ fn remove_entry(
         opened_stream = Some(stream);
     }
     observer(Stage::BeforeUnlink, shown);
-    match stat_at(parent, name) {
-        Ok(now) if same_entry(expected, &now) => {}
+    let now = match stat_at(parent, name) {
+        Ok(now) if same_entry(expected, &now) => now,
         Ok(_) => return Err(changed()),
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
-    }
+    };
+    // Asked before the unlink: afterwards there is no file to ask about.
+    let counted = (sink.best_effort && now.st_mode & libc::S_IFMT == libc::S_IFREG)
+        .then(|| file_facts(parent, name, &now))
+        .flatten();
     // SAFETY: parent is live; name is one entry. unlinkat never follows its final symlink.
     let rc = unsafe {
         libc::unlinkat(
@@ -375,6 +401,9 @@ fn remove_entry(
     };
     if rc == 0 {
         sink.removal.removed_entries += 1;
+        if let Some(file) = counted {
+            sink.freed.add(file);
+        }
         return match opened_stream {
             Some(stream) => stream.close(),
             None => Ok(()),
@@ -388,6 +417,23 @@ fn remove_entry(
         Some(libc::ENOTEMPTY) if left_inside => Ok(()),
         _ => Err(error),
     }
+}
+
+/// What the freed-size rule needs of the regular file `name`, from its
+/// stat `now`; `None` when it holds no blocks, so the volume need not be
+/// asked.
+// `st_dev`, `st_ino` and `st_nlink` have other widths on other platforms.
+#[allow(clippy::unnecessary_cast)]
+fn file_facts(parent: RawFd, name: &CStr, now: &libc::stat) -> Option<FileFacts> {
+    let allocated = u64::try_from(now.st_blocks).ok()?.saturating_mul(512);
+    (allocated > 0).then(|| FileFacts {
+        // As `MetadataExt::dev`, `ino` and `nlink` widen them.
+        dev: now.st_dev as u64,
+        ino: now.st_ino as u64,
+        nlink: now.st_nlink as u64,
+        allocated,
+        sharing: sharing_at(parent, name),
+    })
 }
 
 fn check_device(device: Option<libc::dev_t>, opened: &libc::stat) -> io::Result<()> {

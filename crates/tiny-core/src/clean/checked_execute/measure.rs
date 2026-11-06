@@ -39,12 +39,14 @@ pub(super) struct Settled {
     pub upper_bound: bool,
 }
 
-/// Removals that free space when they succeed, so they are measured.
-pub(super) fn frees_space(removal: Removal) -> bool {
+/// Removals measured by a walk before and after them: those that free space
+/// through another process (Finder, root, a tool). The best-effort deletion
+/// counts what it unlinks itself (`TreeRemoval::freed`), so it walks nothing
+/// before.
+pub(super) fn walked_around(removal: Removal) -> bool {
     matches!(
         removal,
-        Removal::Delete
-            | Removal::DeleteAsAdministrator
+        Removal::DeleteAsAdministrator
             | Removal::EmptyTrash
             | Removal::RunTool(DesktopTool::Prune | DesktopTool::Remove { .. })
     )
@@ -98,6 +100,28 @@ pub(super) fn measure(path: &Path, unreadable_is_upper_bound: bool) -> Measured 
         bytes,
         upper_bound: !findings.size_upper_bound.is_empty()
             || (unreadable_is_upper_bound && !findings.unreadable.is_empty()),
+    }
+}
+
+/// Settles a deletion that counted what it unlinked (`freed`). Only a
+/// failed one is measured again (`measure_left`), for what it left.
+pub(super) fn settle_counted(
+    measure_left: impl FnOnce() -> Measured,
+    outcome: &ItemOutcome,
+    freed: Measured,
+    removed_some: bool,
+) -> Settled {
+    let succeeded = matches!(outcome, ItemOutcome::Deleted);
+    let extent = match (succeeded, freed.bytes > 0 || removed_some) {
+        (true, _) => RemovalExtent::Removed,
+        (false, true) => RemovalExtent::PartlyRemoved,
+        (false, false) => RemovalExtent::NotRemoved,
+    };
+    Settled {
+        extent,
+        freed: freed.bytes,
+        left: if succeeded { 0 } else { measure_left().bytes },
+        upper_bound: freed.upper_bound,
     }
 }
 
