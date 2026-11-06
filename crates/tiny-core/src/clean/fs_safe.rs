@@ -17,7 +17,7 @@ mod remove_tree;
 
 #[cfg(test)]
 pub(crate) use remove_tree::changed as entry_changed;
-pub use remove_tree::{is_entry_changed, EntryFailure, TreeRemoval};
+pub use remove_tree::{is_entry_changed, EntryFailure, FileIdentity, TreeRemoval};
 
 /// Yields every entry under `root` without descending into symlinks. Symlink
 /// entries themselves are yielded (so callers can remove them), but their
@@ -195,6 +195,14 @@ impl PathFingerprint {
 }
 
 impl PathFingerprint {
+    /// The device and inode, which a removal pins its root to.
+    pub fn identity(&self) -> FileIdentity {
+        FileIdentity {
+            device: self.device,
+            inode: self.inode,
+        }
+    }
+
     /// `of`, plus a directory's mtime, which changes when an entry is added
     /// or removed. Emptying the Trash removes whatever it holds then, so it
     /// must still hold what discovery measured.
@@ -311,8 +319,14 @@ pub fn remove_recursive_one_device(root: &Path) -> std::io::Result<()> {
 /// (every guard still applies to it) and the rest of `root` is removed.
 /// Clean's permanent deletion only; uninstall and the CLI stop at the first
 /// failure.
-pub fn remove_recursive_one_device_each(root: &Path) -> TreeRemoval {
-    remove_tree::remove_each(root, true)
+/// `identity`, when given, must still be the file at `root`, checked on the
+/// descriptor the removal starts from, so a root replaced after the last
+/// check is refused whole.
+pub fn remove_recursive_one_device_each(
+    root: &Path,
+    identity: Option<FileIdentity>,
+) -> TreeRemoval {
+    remove_tree::remove_each(root, true, identity)
 }
 
 /// Permanent deletion, a seam so tests can make it fail.
@@ -321,9 +335,12 @@ pub trait Delete: Send + Sync {
     /// failure. On `Err`, part of it may already be gone.
     fn delete(&self, path: &Path) -> std::io::Result<()>;
 
-    /// Deletes `path` for good, going on past entries that fail. A route
-    /// that cannot reports its one failure at `path`.
-    fn delete_each(&self, path: &Path) -> TreeRemoval {
+    /// Deletes `path` for good, going on past entries that fail, starting
+    /// only from the file `identity` names when given. A route that cannot
+    /// go on past an entry reports its one failure at `path`; one that
+    /// cannot pin the root ignores `identity` (tests' fakes).
+    fn delete_each(&self, path: &Path, identity: Option<FileIdentity>) -> TreeRemoval {
+        let _ = identity;
         match self.delete(path) {
             Ok(()) => TreeRemoval::default(),
             Err(error) => TreeRemoval::failed_at(path, error),
@@ -339,8 +356,8 @@ impl Delete for SafeDelete {
         remove_recursive_one_device(path)
     }
 
-    fn delete_each(&self, path: &Path) -> TreeRemoval {
-        remove_recursive_one_device_each(path)
+    fn delete_each(&self, path: &Path, identity: Option<FileIdentity>) -> TreeRemoval {
+        remove_recursive_one_device_each(path, identity)
     }
 }
 

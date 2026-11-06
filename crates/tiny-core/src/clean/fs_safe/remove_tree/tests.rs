@@ -246,7 +246,7 @@ fn best_effort_removes_the_rest_of_the_item_past_a_locked_file() {
     fs::write(item.join("b"), b"b").unwrap();
     let _lock = Locked::new(item.join("sub/file"));
 
-    let removal = remove_each(&item, true);
+    let removal = remove_each(&item, true, None);
 
     assert_eq!(removal.failed_entries, 1, "{removal:?}");
     assert_eq!(removal.failures[0].path, item.join("sub/file"));
@@ -267,7 +267,7 @@ fn best_effort_records_an_unreadable_folder_and_removes_its_siblings() {
     let item = base.join("item");
     fs::write(item.join("b"), b"b").unwrap();
     fs::set_permissions(item.join("sub"), fs::Permissions::from_mode(0o000)).unwrap();
-    let removal = remove_each(&item, true);
+    let removal = remove_each(&item, true, None);
     fs::set_permissions(item.join("sub"), fs::Permissions::from_mode(0o700)).unwrap();
 
     assert_eq!(removal.failed_entries, 1, "{removal:?}");
@@ -285,7 +285,7 @@ fn best_effort_keeps_every_guard_for_the_entry_that_fails() {
     let item = base.join("item");
     let sub = item.join("sub");
     fs::write(item.join("b"), b"b").unwrap();
-    let removal = remove_each_observed(&item, true, &mut |stage, path| {
+    let removal = remove_each_observed(&item, true, None, &mut |stage, path| {
         if matches!(stage, Stage::AfterDirectoryOpen) && path == sub {
             fs::rename(&sub, base.join("retired")).unwrap();
             symlink(base.join("outside"), &sub).unwrap();
@@ -302,7 +302,7 @@ fn best_effort_keeps_every_guard_for_the_entry_that_fails() {
 fn best_effort_reports_entries_that_arrived_and_failures_at_the_root() {
     let (_temp, base) = fixture();
     let item = base.join("item");
-    let removal = remove_each_observed(&item, true, &mut |stage, path| {
+    let removal = remove_each_observed(&item, true, None, &mut |stage, path| {
         if matches!(stage, Stage::BeforeUnlink) && path == item {
             fs::write(item.join("arrived-late"), b"keep").unwrap();
         }
@@ -314,10 +314,10 @@ fn best_effort_reports_entries_that_arrived_and_failures_at_the_root() {
     );
     assert_eq!(fs::read(item.join("arrived-late")).unwrap(), b"keep");
 
-    assert!(remove_each(&base.join("missing"), true).is_complete());
-    let root = remove_each(Path::new("/"), true);
+    assert!(remove_each(&base.join("missing"), true, None).is_complete());
+    let root = remove_each(Path::new("/"), true, None);
     assert_eq!((root.failed_entries, root.removed_entries), (1, 0));
-    let changed = remove_each_observed(&item, true, &mut |stage, path| {
+    let changed = remove_each_observed(&item, true, None, &mut |stage, path| {
         if matches!(stage, Stage::BeforeDirectoryOpen) && path == item {
             fs::rename(&item, base.join("retired")).unwrap();
             fs::create_dir(&item).unwrap();
@@ -325,4 +325,53 @@ fn best_effort_reports_entries_that_arrived_and_failures_at_the_root() {
     });
     assert!(is_entry_changed(&changed.failures[0].error));
     assert_eq!(changed.removed_entries, 0, "a replaced root is left whole");
+}
+
+#[test]
+fn best_effort_starts_only_from_the_pinned_root() {
+    let (_temp, base) = fixture();
+    let item = base.join("item");
+    let meta = fs::symlink_metadata(&item).unwrap();
+    let pinned = FileIdentity {
+        device: std::os::unix::fs::MetadataExt::dev(&meta),
+        inode: std::os::unix::fs::MetadataExt::ino(&meta),
+    };
+    let other = FileIdentity {
+        inode: pinned.inode + 1,
+        ..pinned
+    };
+    let refused = remove_each(&item, true, Some(other));
+    assert!(is_entry_changed(&refused.failures[0].error));
+    assert_eq!(refused.removed_entries, 0);
+    assert_eq!(fs::read(item.join("sub/file")).unwrap(), b"selected");
+    assert!(remove_each(&item, true, Some(pinned)).is_complete());
+    assert!(!item.exists());
+}
+
+#[test]
+fn a_child_gone_before_its_open_is_removed_and_one_turned_into_a_link_is_changed() {
+    let (_temp, base) = fixture();
+    let item = base.join("item");
+    let sub = item.join("sub");
+    let removal = remove_each_observed(&item, true, None, &mut |stage, path| {
+        if matches!(stage, Stage::BeforeDirectoryOpen) && path == sub {
+            fs::remove_file(sub.join("file")).unwrap();
+            fs::remove_dir(&sub).unwrap();
+        }
+    });
+    assert!(removal.is_complete(), "{removal:?}");
+    assert!(!item.exists());
+
+    let (_temp, base) = fixture();
+    let item = base.join("item");
+    let sub = item.join("sub");
+    let removal = remove_each_observed(&item, true, None, &mut |stage, path| {
+        if matches!(stage, Stage::BeforeDirectoryOpen) && path == sub {
+            fs::rename(&sub, base.join("retired")).unwrap();
+            symlink(base.join("outside"), &sub).unwrap();
+        }
+    });
+    assert_eq!(removal.failed_entries, 1);
+    assert!(is_entry_changed(&removal.failures[0].error));
+    assert_eq!(fs::read(base.join("outside/precious")).unwrap(), b"keep");
 }

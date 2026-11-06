@@ -277,10 +277,21 @@ fn prepare(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<Option<Measur
     // Measured among the slow checks, so the checks below also cover the
     // time its walk takes.
     let before = frees_space(planned.removal).then(|| measure(&planned.item.path, false));
+    #[cfg(test)]
+    measure::AFTER_MEASURE.with(|hook| {
+        if let (Some(hook), Some(_)) = (hook.borrow_mut().as_mut(), before) {
+            hook(&planned.item.path);
+        }
+    });
     // After them, which can take long enough for the rules to change.
     policy_unchanged(ctx.policy).map_err(Halt::Stop)?;
     if names_a_file(planned) {
         protection_skip(ctx.policy, &planned.item.path).map_err(Halt::Skip)?;
+        // The walk takes time: the path must still be the file discovery
+        // fingerprinted, and the Trash must still hold only what it listed.
+        if before.is_some() {
+            same_file(planned, ctx).map_err(Halt::Skip)?;
+        }
     }
     // Last check before the mutation.
     if ctx.is_cancelled() {
@@ -349,7 +360,10 @@ fn act_on(planned: &PlannedItem, ctx: &ExecContext<'_>, stopped: &mut Option<Sto
             .map(|()| ItemOutcome::MovedToTrash),
         Removal::EmptyTrash => ctx.trash.empty_trash().map(|()| ItemOutcome::TrashEmptied),
         Removal::Delete => {
-            let removal = ctx.delete.delete_each(path);
+            // Pinned on the descriptor too: a root replaced after the last
+            // check is refused whole.
+            let identity = planned.fingerprint.as_ref().map(PathFingerprint::identity);
+            let removal = ctx.delete.delete_each(path, identity);
             let outcome = deletion_outcome(&removal, path);
             let failure = match (&outcome, removal.failures.first()) {
                 (ItemOutcome::DeleteFailed { detail, .. }, Some(first)) => Some(Failure::new(
@@ -517,7 +531,21 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
         // A tool's placeholder: only its tool, after the checks above, acts on it.
         return Ok(());
     }
-    let meta = fs::symlink_metadata(&item.path).map_err(|e| match e.kind() {
+    same_file(planned, ctx)?;
+    let tool_printed = gated.iter().any(|(p, _)| p.roots_from_tool_output());
+    if let Some(reason) = protected_reason(&item.path, ctx.home, tool_printed) {
+        return Err(SkipReason::ProtectedPath(reason));
+    }
+    Ok(())
+}
+
+/// The path is still the file discovery fingerprinted (with the listing for
+/// the Trash row), not a symlink, on the home volume and inside a discovery
+/// root through real folders. Run in `validate` and again right before a
+/// removal whose measuring walk took time.
+fn same_file(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), SkipReason> {
+    let path = &planned.item.path;
+    let meta = fs::symlink_metadata(path).map_err(|e| match e.kind() {
         io::ErrorKind::NotFound => SkipReason::Missing,
         _ => SkipReason::SafetyCheckFailed(e.to_string()),
     })?;
@@ -534,16 +562,8 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
     if meta.dev() != home_device(ctx.home)? {
         return Err(SkipReason::NotOnHomeVolume);
     }
-    if !planned
-        .roots
-        .iter()
-        .any(|root| inside_root(&item.path, root))
-    {
+    if !planned.roots.iter().any(|root| inside_root(path, root)) {
         return Err(SkipReason::OutsideRoots);
-    }
-    let tool_printed = gated.iter().any(|(p, _)| p.roots_from_tool_output());
-    if let Some(reason) = protected_reason(&item.path, ctx.home, tool_printed) {
-        return Err(SkipReason::ProtectedPath(reason));
     }
     Ok(())
 }

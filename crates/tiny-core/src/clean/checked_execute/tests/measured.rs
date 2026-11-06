@@ -181,3 +181,96 @@ fn an_unreadable_folder_is_no_permission_and_the_rest_still_goes() {
     assert!(!item.join("open").exists());
     let _ = remove_recursive_safe(&root);
 }
+
+/// Runs `swap` once, right after the item's measuring walk.
+fn after_measure(swap: impl FnMut(&Path) + 'static) {
+    super::super::measure::AFTER_MEASURE.with(|hook| *hook.borrow_mut() = Some(Box::new(swap)));
+}
+
+fn clear_hook() {
+    super::super::measure::AFTER_MEASURE.with(|hook| *hook.borrow_mut() = None);
+}
+
+#[test]
+fn a_root_replaced_during_the_measuring_walk_is_never_deleted() {
+    let root = fixture_root("swap-walk", &[]);
+    let item = root.join("cache");
+    fs::create_dir(&item).unwrap();
+    fs::write(item.join("a"), b"selected").unwrap();
+    let plan = [planned("user-logs", &root, "cache", Removal::Delete)];
+    let retired = root.join("retired");
+    after_measure(move |path| {
+        fs::rename(path, &retired).unwrap();
+        fs::create_dir(path).unwrap();
+        fs::write(path.join("precious"), b"keep").unwrap();
+    });
+    let report = run_real(&plan);
+    clear_hook();
+
+    let result = &report.results[0];
+    assert_eq!(result.outcome, ItemOutcome::Skipped(SkipReason::Changed));
+    assert_eq!(result.extent, RemovalExtent::NotRemoved);
+    assert_eq!(
+        result.failure.as_ref().map(|f| f.cause),
+        Some(FailureCause::ChangedSinceScan)
+    );
+    assert_eq!(fs::read(item.join("precious")).unwrap(), b"keep");
+    assert_eq!(fs::read(root.join("retired/a")).unwrap(), b"selected");
+    let _ = remove_recursive_safe(&root);
+}
+
+/// Swaps the root after every check, right before the deletion starts.
+struct SwapThenDelete;
+
+impl Delete for SwapThenDelete {
+    fn delete(&self, path: &Path) -> io::Result<()> {
+        panic!("{} must be deleted best effort", path.display());
+    }
+
+    fn delete_each(
+        &self,
+        path: &Path,
+        identity: Option<crate::clean::fs_safe::FileIdentity>,
+    ) -> crate::clean::fs_safe::TreeRemoval {
+        fs::rename(path, path.with_file_name("retired")).unwrap();
+        fs::create_dir(path).unwrap();
+        fs::write(path.join("precious"), b"keep").unwrap();
+        SafeDelete.delete_each(path, identity)
+    }
+}
+
+#[test]
+fn the_deletion_refuses_a_root_that_is_not_the_scanned_file() {
+    let root = fixture_root("swap-pin", &[]);
+    fs::create_dir(root.join("cache")).unwrap();
+    fs::write(root.join("cache/a"), b"selected").unwrap();
+    let plan = [planned("user-logs", &root, "cache", Removal::Delete)];
+    let providers: Vec<Box<dyn CleanProvider>> = vec![Box::new(fixture("user-logs"))];
+    let home = std::env::temp_dir();
+    let store = TempStore::new();
+    let lease = store.store.lease().unwrap();
+    let sinks = Sinks::default();
+    let ctx = ExecContext {
+        providers: &providers,
+        home: Some(&home),
+        probe: &MockChecker::none(),
+        trash: &sinks,
+        delete: &SwapThenDelete,
+        elevated: &NeverDelete,
+        cancel: None,
+        progress: None,
+        policy: &lease,
+    };
+    let report = execute_checked(&plan, &ctx);
+
+    let result = &report.results[0];
+    assert!(matches!(result.outcome, ItemOutcome::DeleteFailed { .. }));
+    assert_eq!(result.extent, RemovalExtent::NotRemoved);
+    assert_eq!(
+        result.failure.as_ref().map(|f| f.cause),
+        Some(FailureCause::ChangedSinceScan)
+    );
+    assert_eq!(fs::read(root.join("cache/precious")).unwrap(), b"keep");
+    assert_eq!(fs::read(root.join("retired/a")).unwrap(), b"selected");
+    let _ = remove_recursive_safe(&root);
+}

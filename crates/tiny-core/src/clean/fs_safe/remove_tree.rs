@@ -114,15 +114,37 @@ impl Sink {
     }
 }
 
+/// Which file a removal may start from: the device and inode discovery
+/// fingerprinted. A root that is another file now is refused whole.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FileIdentity {
+    pub device: u64,
+    pub inode: u64,
+}
+
+impl FileIdentity {
+    // `st_dev` and `st_ino` have other widths on other platforms.
+    #[allow(clippy::unnecessary_cast)]
+    fn matches(self, stat: &libc::stat) -> bool {
+        // As `MetadataExt::dev` and `ino` widen them.
+        self.device == stat.st_dev as u64 && self.inode == stat.st_ino as u64
+    }
+}
+
 pub(super) fn remove(root: &Path, one_device: bool) -> io::Result<()> {
     remove_observed(root, one_device, &mut |_, _| {})
 }
 
 /// `remove`, but an entry that fails stays and the rest of the tree is
 /// still removed. Failures above `root`'s children (its ancestors, `root`
-/// itself) leave everything.
-pub(super) fn remove_each(root: &Path, one_device: bool) -> TreeRemoval {
-    remove_each_observed(root, one_device, &mut |_, _| {})
+/// itself) leave everything, and so does a root that is not `identity`,
+/// compared on the descriptor-relative stat the removal starts from.
+pub(super) fn remove_each(
+    root: &Path,
+    one_device: bool,
+    identity: Option<FileIdentity>,
+) -> TreeRemoval {
+    remove_each_observed(root, one_device, identity, &mut |_, _| {})
 }
 
 fn remove_observed(root: &Path, one_device: bool, observer: Observer<'_>) -> io::Result<()> {
@@ -130,15 +152,20 @@ fn remove_observed(root: &Path, one_device: bool, observer: Observer<'_>) -> io:
         best_effort: false,
         removal: TreeRemoval::default(),
     };
-    remove_with(root, one_device, observer, &mut sink)
+    remove_with(root, one_device, None, observer, &mut sink)
 }
 
-fn remove_each_observed(root: &Path, one_device: bool, observer: Observer<'_>) -> TreeRemoval {
+fn remove_each_observed(
+    root: &Path,
+    one_device: bool,
+    identity: Option<FileIdentity>,
+    observer: Observer<'_>,
+) -> TreeRemoval {
     let mut sink = Sink {
         best_effort: true,
         removal: TreeRemoval::default(),
     };
-    if let Err(error) = remove_with(root, one_device, observer, &mut sink) {
+    if let Err(error) = remove_with(root, one_device, identity, observer, &mut sink) {
         sink.removal.record(root, error);
     }
     sink.removal
@@ -147,6 +174,7 @@ fn remove_each_observed(root: &Path, one_device: bool, observer: Observer<'_>) -
 fn remove_with(
     root: &Path,
     one_device: bool,
+    identity: Option<FileIdentity>,
     observer: Observer<'_>,
     sink: &mut Sink,
 ) -> io::Result<()> {
@@ -184,6 +212,9 @@ fn remove_with(
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
         Err(error) => return Err(error),
     };
+    if identity.is_some_and(|identity| !identity.matches(&expected)) {
+        return Err(changed());
+    }
     remove_entry(
         parent.as_raw_fd(),
         &leaf,
@@ -277,7 +308,16 @@ fn remove_entry(
     let mut opened_stream = None;
     if directory {
         observer(Stage::BeforeDirectoryOpen, shown);
-        let fd = open_directory(parent, name, libc::O_RDONLY)?;
+        let fd = match open_directory(parent, name, libc::O_RDONLY) {
+            Ok(fd) => fd,
+            // Gone since its stat: nothing of it is left.
+            Err(error) if error.raw_os_error() == Some(libc::ENOENT) => return Ok(()),
+            // Now a symlink (`O_NOFOLLOW`) or no longer a folder.
+            Err(error) if matches!(error.raw_os_error(), Some(libc::ELOOP | libc::ENOTDIR)) => {
+                return Err(changed())
+            }
+            Err(error) => return Err(error),
+        };
         let opened = stat_fd(fd.as_raw_fd())?;
         if !same_entry(expected, &opened) {
             return Err(changed());

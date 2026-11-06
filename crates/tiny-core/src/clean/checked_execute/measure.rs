@@ -13,6 +13,16 @@ use crate::clean::trash_plan::Removal;
 
 use super::report::{ItemOutcome, RemovalExtent};
 
+#[cfg(test)]
+type Hook = Option<Box<dyn FnMut(&Path)>>;
+
+#[cfg(test)]
+std::thread_local! {
+    /// Runs right after an item's measurement before its removal, so tests
+    /// can change the disk while the walk would take time.
+    pub(super) static AFTER_MEASURE: std::cell::RefCell<Hook> = std::cell::RefCell::new(None);
+}
+
 /// One measurement of an item's freed bytes.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct Measured {

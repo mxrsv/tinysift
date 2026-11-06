@@ -101,6 +101,9 @@ pub enum FfiFailureCause {
     ProtectedByMacos,
     /// Replaced, edited or added to since the scan.
     ChangedSinceScan,
+    /// Finder Automation was denied (Empty Trash): System Settings ›
+    /// Privacy & Security › Automation, not Full Disk Access.
+    AutomationDenied,
     /// Gone before the run reached it.
     AlreadyGone,
     Other,
@@ -245,6 +248,7 @@ impl From<FailureCause> for FfiFailureCause {
             FailureCause::NeedsAdministrator => Self::NeedsAdministrator,
             FailureCause::ProtectedByMacOs => Self::ProtectedByMacos,
             FailureCause::ChangedSinceScan => Self::ChangedSinceScan,
+            FailureCause::AutomationDenied => Self::AutomationDenied,
             FailureCause::AlreadyGone => Self::AlreadyGone,
             FailureCause::Other => Self::Other,
         }

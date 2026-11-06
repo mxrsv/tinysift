@@ -184,7 +184,11 @@ walk to its target. There is no pathname fallback. Clean's `Delete` is best effo
 (`remove_recursive_one_device_each`, `Delete::delete_each`): an entry that fails (locked, denied,
 replaced, on another device) stays, is recorded with its error, and its siblings are still removed;
 the folders holding it then stay with `ENOTEMPTY`, which is not recorded as a second failure.
-Failures at the item's ancestors or the item itself leave everything. Uninstall and the CLI keep
+Failures at the item's ancestors or the item itself leave everything, and the walk starts only
+from the device and inode discovery fingerprinted (`FileIdentity`, compared on the
+descriptor-relative stat), so a root replaced after the last check is refused whole. A child gone
+between its stat and its open counts as removed; one turned into a symlink or a file is refused as
+changed. Uninstall and the CLI keep
 the fail-fast form (`remove_recursive_*`, `Delete::delete`), which stops at the first error.
 This is not an atomic filesystem transaction: a real directory substituted before the initial
 identity read can still be selected; an opened directory renamed elsewhere remains the same
@@ -225,11 +229,12 @@ item is still `DeleteFailed`, `Failed` or `ToolFailed`, and counts what was meas
 **Every failure has one cause.** `ItemResult::failure` (FFI `cause` and `raw_error`) carries a
 [`FailureCause`](../../crates/tiny-core/src/clean/failure_cause.rs) beside the raw error text, for
 a skip, a failure and a partial removal (its first entry left). An `io::Error` maps by errno:
-`ENOENT` already gone, `EBUSY`/`ETXTBSY` in use, `EROFS` protected by macOS, `ENOTEMPTY` and a
-refused replacement changed since the scan. `EPERM`/`EACCES` look at the entry again: a system flag
-(`restricted`, `schg`, `sappnd`, `sunlnk`) is protected by macOS, a lock the user set (`uchg`) is
-other, another owner of the entry or its folder needs an administrator, anything else is no
-permission (Full Disk Access). Skip reasons map too (`AppRunning` in use, `Changed` changed since
+`ENOENT` already gone, `EBUSY`/`ETXTBSY` in use, `EROFS` protected by macOS, `ENOTEMPTY`, `ELOOP`,
+`ENOTDIR` and a refused replacement changed since the scan. `EPERM`/`EACCES` look at the entry and
+its folder again: a system flag on either (`restricted`, `schg`, `sappnd`, `sunlnk`) is protected by
+macOS, a lock the user set (`uchg`) on either is other, another owner of either needs an
+administrator, anything else is no permission (Full Disk Access). A denied Empty Trash is its own
+cause, `AutomationDenied`, since only the Automation setting fixes it. Skip reasons map too (`AppRunning` in use, `Changed` changed since
 the scan, `/System` protected); an item the user's saved rule keeps has no failure. The raw text is
 for the run report only, never the screen.
 

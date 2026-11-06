@@ -383,7 +383,7 @@ fn a_denied_empty_trash_leaves_the_moves_alone_and_a_denied_move_stops() {
     assert!(matches!(outcomes(&report)[0], ItemOutcome::Failed { .. }));
     assert_eq!(
         report.results[0].failure.as_ref().map(|f| f.cause),
-        Some(FailureCause::NoPermission)
+        Some(FailureCause::AutomationDenied)
     );
     assert_eq!(outcomes(&report)[1], ItemOutcome::MovedToTrash);
     assert_eq!(sinks.log(), ["trash c"]);
@@ -585,5 +585,38 @@ fn a_hard_link_split_between_deleted_items_is_freed_once_both_are_gone() {
     };
     let report = run_sinks(&TempStore::new(), &plan, &MockChecker::none(), &one_left);
     assert_eq!(report.bytes_freed, own, "the link left in b keeps the data");
+    let _ = remove_recursive_safe(&root);
+}
+
+#[test]
+fn an_entry_put_in_the_trash_during_its_measuring_walk_is_never_emptied() {
+    let root = fixture_root("trash-walk", &["c"]);
+    let plan = [trash_row(&root)];
+    super::super::measure::AFTER_MEASURE.with(|hook| {
+        *hook.borrow_mut() = Some(Box::new(|bin: &Path| {
+            fs::write(bin.join("just-trashed"), b"keep").unwrap();
+        }))
+    });
+    let sinks = Sinks {
+        bin: Some(root.join(".Trash")),
+        ..Default::default()
+    };
+    let report = run_sinks(&TempStore::new(), &plan, &MockChecker::none(), &sinks);
+    super::super::measure::AFTER_MEASURE.with(|hook| *hook.borrow_mut() = None);
+
+    assert_eq!(
+        outcomes(&report),
+        [ItemOutcome::Skipped(SkipReason::Changed)]
+    );
+    assert_eq!(
+        report.results[0].failure.as_ref().map(|f| f.cause),
+        Some(FailureCause::ChangedSinceScan)
+    );
+    assert!(
+        sinks.log().is_empty(),
+        "Finder never asked: {:?}",
+        sinks.log()
+    );
+    assert!(root.join(".Trash/just-trashed").exists());
     let _ = remove_recursive_safe(&root);
 }

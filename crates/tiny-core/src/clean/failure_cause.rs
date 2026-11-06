@@ -22,6 +22,9 @@ pub enum FailureCause {
     ProtectedByMacOs,
     /// Replaced, edited or added to since the scan.
     ChangedSinceScan,
+    /// Finder Automation was denied (Empty Trash): only System Settings ›
+    /// Privacy & Security › Automation lets it run, not Full Disk Access.
+    AutomationDenied,
     /// Gone before the run reached it.
     AlreadyGone,
     Other,
@@ -49,10 +52,11 @@ impl Failure {
 pub(crate) const INSIDE_SYSTEM: &str = "inside /System";
 
 /// The cause of `error`, raised acting on `path`. `EPERM` and `EACCES`
-/// look at `path` again: a system flag means macOS protects it, a lock the
-/// user set (Finder's Locked) is `Other`, another owner (of the entry or the
-/// folder holding it) needs an administrator, and anything else is a
-/// permission TinySift lacks (Full Disk Access).
+/// look at `path` and the folder holding it again: a system flag on either
+/// means macOS protects it, a lock the user set (Finder's Locked) on either
+/// is `Other`, another owner of either needs an administrator, and anything
+/// else is a permission TinySift lacks (Full Disk Access). `ELOOP` and
+/// `ENOTDIR` mean a folder became a symlink or a file.
 pub fn cause_of_io(path: &Path, error: &io::Error) -> FailureCause {
     if super::fs_safe::is_entry_changed(error) {
         return FailureCause::ChangedSinceScan;
@@ -62,7 +66,7 @@ pub fn cause_of_io(path: &Path, error: &io::Error) -> FailureCause {
         Some(libc::EBUSY | libc::ETXTBSY) => FailureCause::InUse,
         Some(libc::EROFS) => FailureCause::ProtectedByMacOs,
         // A folder that gained entries after it was listed.
-        Some(libc::ENOTEMPTY) => FailureCause::ChangedSinceScan,
+        Some(libc::ENOTEMPTY | libc::ELOOP | libc::ENOTDIR) => FailureCause::ChangedSinceScan,
         Some(libc::EPERM | libc::EACCES) => permission_cause(path),
         _ => FailureCause::Other,
     }
@@ -73,18 +77,25 @@ fn permission_cause(path: &Path) -> FailureCause {
     let Ok(meta) = std::fs::symlink_metadata(path) else {
         return FailureCause::NoPermission;
     };
-    match flags(&meta) {
-        Flags::System => return FailureCause::ProtectedByMacOs,
-        Flags::UserLock => return FailureCause::Other,
-        Flags::None => {}
+    // Unlinking needs the folder too: its flags block it as the entry's do.
+    let parent = path
+        .parent()
+        .and_then(|parent| std::fs::symlink_metadata(parent).ok());
+    let all_flags = std::iter::once(&meta).chain(parent.as_ref()).map(flags);
+    let (mut system, mut locked) = (false, false);
+    for found in all_flags {
+        system |= matches!(found, Flags::System);
+        locked |= matches!(found, Flags::UserLock);
+    }
+    if system {
+        return FailureCause::ProtectedByMacOs;
+    }
+    if locked {
+        return FailureCause::Other;
     }
     // SAFETY: geteuid has no preconditions and cannot fail.
     let me = unsafe { libc::geteuid() };
-    let parent_owner = path
-        .parent()
-        .and_then(|parent| std::fs::symlink_metadata(parent).ok())
-        .map(|parent| parent.uid());
-    if meta.uid() != me || parent_owner.is_some_and(|uid| uid != me) {
+    if meta.uid() != me || parent.is_some_and(|parent| parent.uid() != me) {
         return FailureCause::NeedsAdministrator;
     }
     FailureCause::NoPermission
@@ -147,7 +158,7 @@ pub fn skip_failure(reason: &SkipReason) -> Option<Failure> {
 /// The failure of a refused move of `path` to the Trash, or Empty Trash.
 pub fn trash_failure(path: &Path, error: &TrashError) -> Failure {
     let cause = match error {
-        TrashError::AutomationDenied(_) => FailureCause::NoPermission,
+        TrashError::AutomationDenied(_) => FailureCause::AutomationDenied,
         TrashError::Os { code, .. } => cause_of_io(path, &io::Error::from_raw_os_error(*code)),
         TrashError::Failed(_) => FailureCause::Other,
     };

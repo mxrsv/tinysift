@@ -22,6 +22,8 @@ fn each_errno_maps_to_its_cause() {
         (libc::ETXTBSY, FailureCause::InUse),
         (libc::EROFS, FailureCause::ProtectedByMacOs),
         (libc::ENOTEMPTY, FailureCause::ChangedSinceScan),
+        (libc::ELOOP, FailureCause::ChangedSinceScan),
+        (libc::ENOTDIR, FailureCause::ChangedSinceScan),
         (libc::EXDEV, FailureCause::Other),
         (libc::EIO, FailureCause::Other),
     ];
@@ -84,6 +86,20 @@ fn flags_and_owners_decide_a_permission_error() {
     let locked = cause_of_io(&file, &os(libc::EPERM));
     set(0);
     assert_eq!(locked, FailureCause::Other, "a lock the user set");
+
+    // A locked folder blocks unlinking the unlocked file inside it.
+    let folder = file.parent().unwrap().join("folder");
+    fs::create_dir(&folder).unwrap();
+    fs::write(folder.join("inside"), b"x").unwrap();
+    let encoded = std::ffi::CString::new(folder.to_str().unwrap()).unwrap();
+    let set = |flags: u32| {
+        // SAFETY: a NUL-terminated path in the test's own temp folder.
+        assert_eq!(unsafe { libc::chflags(encoded.as_ptr(), flags as _) }, 0);
+    };
+    set(libc::UF_IMMUTABLE);
+    let in_locked = cause_of_io(&folder.join("inside"), &os(libc::EPERM));
+    set(0);
+    assert_eq!(in_locked, FailureCause::Other, "not Full Disk Access");
 }
 
 #[test]
@@ -129,7 +145,7 @@ fn skip_reasons_map_to_causes_and_kept_paths_are_no_failure() {
 fn a_refused_trash_route_maps_to_its_cause_with_its_raw_text() {
     let (_temp, file) = own_file();
     let denied = trash_failure(&file, &TrashError::AutomationDenied("(-1743)".into()));
-    assert_eq!(denied.cause, FailureCause::NoPermission);
+    assert_eq!(denied.cause, FailureCause::AutomationDenied);
     assert!(denied.raw_error.contains("-1743"));
     let failed = trash_failure(&file, &TrashError::Failed("Finder error".into()));
     assert_eq!(failed.cause, FailureCause::Other);
