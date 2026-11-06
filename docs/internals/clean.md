@@ -221,6 +221,17 @@ tool that finishes in the background (simulator runtimes). Each result carries a
 `bytes_left` is what is still there), `NotRemoved`, `MovedToTrash` or `Requested`. A partly removed
 item is still `DeleteFailed`, `Failed` or `ToolFailed`, and counts what was measured as freed.
 
+**Every failure has one cause.** `ItemResult::failure` (FFI `cause` and `raw_error`) carries a
+[`FailureCause`](../../crates/tiny-core/src/clean/failure_cause.rs) beside the raw error text, for
+a skip, a failure and a partial removal (its first entry left). An `io::Error` maps by errno:
+`ENOENT` already gone, `EBUSY`/`ETXTBSY` in use, `EROFS` protected by macOS, `ENOTEMPTY` and a
+refused replacement changed since the scan. `EPERM`/`EACCES` look at the entry again: a system flag
+(`restricted`, `schg`, `sappnd`, `sunlnk`) is protected by macOS, a lock the user set (`uchg`) is
+other, another owner of the entry or its folder needs an administrator, anything else is no
+permission (Full Disk Access). Skip reasons map too (`AppRunning` in use, `Changed` changed since
+the scan, `/System` protected); an item the user's saved rule keeps has no failure. The raw text is
+for the run report only, never the screen.
+
 The preview's selection total is the union of the selected items: `freed_size.rs` counts a hard
 link or clone family only when it lies wholly inside an item, so an inode split between two items
 counts in neither. Discovery therefore keeps those `SharedBlocks` (`retain_completable` drops what

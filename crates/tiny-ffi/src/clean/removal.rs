@@ -12,6 +12,7 @@ use tiny_core::clean::checked_execute::{
     execute_checked, CheckedExecReport, ExecContext, ItemOutcome, RemovalExtent, StopReason,
 };
 use tiny_core::clean::elevated_delete::{ElevatedDelete, ElevatedError, OsascriptDelete};
+use tiny_core::clean::failure_cause::FailureCause;
 use tiny_core::clean::finder_trash::{FinderTrash, Trash, TrashError};
 use tiny_core::clean::fs_safe::{Delete, SafeDelete};
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
@@ -102,6 +103,26 @@ pub enum FfiRemovalExtent {
     Requested,
 }
 
+/// Why an item, or part of it, stayed: one cause the app names with one
+/// sentence and one action.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiFailureCause {
+    /// macOS refused TinySift: Full Disk Access, or a folder's own mode.
+    NoPermission,
+    /// An app is running, or the file is busy.
+    InUse,
+    /// Owned by another user or root.
+    NeedsAdministrator,
+    /// System Integrity Protection, a read-only volume, a system flag, or
+    /// `/System`.
+    ProtectedByMacos,
+    /// Replaced, edited or added to since the scan.
+    ChangedSinceScan,
+    /// Gone before the run reached it.
+    AlreadyGone,
+    Other,
+}
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct FfiRemovalResult {
     pub candidate_id: String,
@@ -125,6 +146,15 @@ pub struct FfiRemovalResult {
     /// or a walk after the removal that could not read everything).
     #[uniffi(default = false)]
     pub bytes_freed_is_upper_bound: bool,
+    /// Set for a skip, a failure and a partial removal (its first entry
+    /// left); `None` when the item went as planned, was not attempted, or
+    /// the user's saved rule kept it.
+    #[uniffi(default = None)]
+    pub cause: Option<FfiFailureCause>,
+    /// English diagnostic text beside `cause`, for the run report. Never
+    /// shown on screen.
+    #[uniffi(default = None)]
+    pub raw_error: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
@@ -531,6 +561,8 @@ fn removal_report(
             bytes_freed: result.bytes_freed,
             bytes_left: result.bytes_left,
             bytes_freed_is_upper_bound: result.freed_is_upper_bound,
+            cause: result.failure.as_ref().map(|f| f.cause.into()),
+            raw_error: result.failure.map(|f| f.raw_error),
         })
         .collect();
     FfiRemovalReport { results, ..summary }
@@ -545,6 +577,20 @@ impl ElevatedDelete for NoElevation {
         Err(ElevatedError::Failed(
             "clean_execute never deletes as administrator".into(),
         ))
+    }
+}
+
+impl From<FailureCause> for FfiFailureCause {
+    fn from(cause: FailureCause) -> Self {
+        match cause {
+            FailureCause::NoPermission => Self::NoPermission,
+            FailureCause::InUse => Self::InUse,
+            FailureCause::NeedsAdministrator => Self::NeedsAdministrator,
+            FailureCause::ProtectedByMacOs => Self::ProtectedByMacos,
+            FailureCause::ChangedSinceScan => Self::ChangedSinceScan,
+            FailureCause::AlreadyGone => Self::AlreadyGone,
+            FailureCause::Other => Self::Other,
+        }
     }
 }
 

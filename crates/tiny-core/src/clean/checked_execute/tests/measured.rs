@@ -5,6 +5,7 @@
 
 use super::removal::{allocated, planned, Sinks};
 use super::*;
+use crate::clean::failure_cause::FailureCause;
 use crate::clean::fs_safe::{dir_size_checked, SafeDelete};
 
 /// Clears `chflags` on drop, so a failed assert never leaves a locked file.
@@ -74,6 +75,9 @@ fn a_locked_file_leaves_the_item_partly_removed_with_its_bytes_measured() {
         result.outcome
     );
     assert_eq!((result.bytes_freed, result.bytes_left), (freed, left));
+    let failure = result.failure.as_ref().unwrap();
+    assert_eq!(failure.cause, FailureCause::Other, "a lock the user set");
+    assert!(failure.raw_error.contains("sub/locked"), "{failure:?}");
     assert_eq!(report.bytes_freed, freed);
     assert_eq!(report.bytes_left(), left);
     assert_eq!(report.extent_count(RemovalExtent::PartlyRemoved), 1);
@@ -148,5 +152,32 @@ fn freed_is_before_minus_after_for_clones() {
     assert_eq!(result.bytes_freed, before, "before minus nothing left");
     assert!(!result.freed_is_upper_bound, "APFS answered");
     assert_eq!(fs::read(root.join("outside")).unwrap().len(), 300_000);
+    let _ = remove_recursive_safe(&root);
+}
+
+#[test]
+fn an_unreadable_folder_is_no_permission_and_the_rest_still_goes() {
+    use std::os::unix::fs::PermissionsExt;
+    if unsafe { libc::geteuid() } == 0 {
+        return; // root reads any folder
+    }
+    let root = fixture_root("denied", &[]);
+    let item = root.join("cache");
+    fs::create_dir_all(item.join("closed")).unwrap();
+    fs::write(item.join("closed/inside"), vec![1u8; 10_000]).unwrap();
+    fs::write(item.join("open"), vec![2u8; 10_000]).unwrap();
+    let freed = allocated(&item.join("open"));
+    fs::set_permissions(item.join("closed"), fs::Permissions::from_mode(0o000)).unwrap();
+    let report = run_real(&[planned("user-logs", &root, "cache", Removal::Delete)]);
+    fs::set_permissions(item.join("closed"), fs::Permissions::from_mode(0o700)).unwrap();
+
+    let result = &report.results[0];
+    assert_eq!(result.extent, RemovalExtent::PartlyRemoved);
+    assert_eq!(result.bytes_freed, freed);
+    assert_eq!(
+        result.failure.as_ref().map(|f| f.cause),
+        Some(FailureCause::NoPermission)
+    );
+    assert!(!item.join("open").exists());
     let _ = remove_recursive_safe(&root);
 }

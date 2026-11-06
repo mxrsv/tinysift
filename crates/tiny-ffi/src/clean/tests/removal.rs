@@ -194,6 +194,10 @@ fn permanent_mode_deletes_what_comes_back_and_trashes_your_files() {
     );
     assert_eq!(report.results[0].bytes_freed, 0, "moved, not freed");
     assert_eq!(report.results[1].bytes_freed, log);
+    assert!(report
+        .results
+        .iter()
+        .all(|r| r.cause.is_none() && r.raw_error.is_none()));
     assert_eq!(report.bytes_moved_to_trash, preview.bytes_to_trash);
     assert_eq!((report.deleted_count, report.moved_count), (2, 1));
     remove(&dir);
@@ -252,6 +256,61 @@ fn permanent_deletion_removes_only_the_previewed_path() {
     assert!(fs::symlink_metadata(dir.join("logs/a")).is_err());
     assert!(dir.join("logs/sibling").exists() && dir.join("targets/t").exists());
     assert!(trash.steps().is_empty());
+    remove(&dir);
+}
+
+#[test]
+fn a_partly_removed_item_reports_measured_bytes_and_its_cause() {
+    let dir = layout("partly");
+    fs::remove_file(dir.join("logs/a")).unwrap();
+    fs::create_dir(dir.join("logs/a")).unwrap();
+    fs::write(dir.join("logs/a/free"), vec![1u8; 10_000]).unwrap();
+    fs::write(dir.join("logs/a/locked"), vec![2u8; 10_000]).unwrap();
+    let (free, locked) = (
+        allocated(&dir.join("logs/a/free")),
+        allocated(&dir.join("logs/a/locked")),
+    );
+    let lock = dir.join("logs/a/locked");
+    // `chflags`, as a user locks a file; this crate has no libc.
+    let flag = |flags: &str| {
+        let status = std::process::Command::new("/usr/bin/chflags")
+            .args([flags, lock.to_str().unwrap()])
+            .status()
+            .unwrap();
+        assert!(status.success());
+    };
+    flag("uchg");
+    let session = TestSession::new();
+    let discovery = discover(&session, &providers(&dir)).unwrap();
+    let a = id_of(&discovery, "logs/a");
+    let preview = session
+        .clean_preview_with_mode(vec![a], FfiDeleteMode::Permanent)
+        .unwrap();
+    let trash = FakeTrash::default();
+    let report = run_remove(&session, &preview.preview_id, &dir, &trash, &SafeDelete);
+    flag("nouchg");
+    let report = report.unwrap();
+
+    let result = &report.results[0];
+    assert!(matches!(
+        result.outcome,
+        FfiRemovalOutcome::Failed {
+            reason: FfiRemovalFailure::DeleteFailed,
+            source_still_present: true,
+            ..
+        }
+    ));
+    assert_eq!(result.extent, Some(FfiRemovalExtent::PartlyRemoved));
+    assert_eq!((result.bytes_freed, result.bytes_left), (free, locked));
+    assert_eq!(
+        result.cause,
+        Some(FfiFailureCause::Other),
+        "a lock the user set"
+    );
+    assert!(result.raw_error.as_deref().unwrap().contains("locked"));
+    assert_eq!((report.bytes_freed, report.bytes_left), (free, locked));
+    assert_eq!((report.partly_removed_count, report.failed_count), (1, 1));
+    assert!(!dir.join("logs/a/free").exists());
     remove(&dir);
 }
 

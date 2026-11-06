@@ -15,6 +15,8 @@ use super::scan_context::ScanContext;
 
 mod remove_tree;
 
+#[cfg(test)]
+pub(crate) use remove_tree::changed as entry_changed;
 pub use remove_tree::{is_entry_changed, EntryFailure, TreeRemoval};
 
 /// Yields every entry under `root` without descending into symlinks. Symlink

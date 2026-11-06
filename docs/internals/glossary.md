@@ -113,6 +113,10 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   measured before minus after each deletion, emptying or prune, partly removed items included),
   moved to the Trash (`bytes_moved_to_trash`: still on disk) and
   requested (`bytes_requested`: a tool finishes it in the background). Not: one total.
+- **Failure cause** — The one reason an item, or part of it, stayed: no permission, in use, needs
+  an administrator, protected by macOS, changed since the scan, already gone, other
+  ([`failure_cause.rs`](../../crates/tiny-core/src/clean/failure_cause.rs)). Not: the raw error,
+  which is kept beside it for the run report.
 - **Deletion as administrator** — Root deleting `needs_admin` items through one `osascript`
   authentication dialog per Clean, with nothing installed
   ([contract](clean.md#deletion-as-administrator)). `FfiPreview.bytes_needing_admin` is the part of

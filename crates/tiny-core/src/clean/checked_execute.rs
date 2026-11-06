@@ -18,6 +18,9 @@ use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use super::elevated_delete::{ElevatedDelete, ElevatedError};
+use super::failure_cause::{
+    cause_of_io, skip_failure, trash_failure, Failure, FailureCause, INSIDE_SYSTEM,
+};
 use super::finder_trash::{Trash, TrashError};
 use super::fs_safe::{Delete, PathFingerprint, TreeRemoval};
 use super::process::AppProbe;
@@ -86,7 +89,7 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
         left: 0,
         upper_bound: false,
     };
-    let mut done = vec![(ItemOutcome::NotAttempted, unchanged); plan.len()];
+    let mut done = vec![(ItemOutcome::NotAttempted, unchanged, None); plan.len()];
     let (as_admin, others): (Vec<usize>, Vec<usize>) = execution_order(plan)
         .into_iter()
         .partition(|&index| plan[index].removal == Removal::DeleteAsAdministrator);
@@ -117,8 +120,9 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
     let results: Vec<ItemResult> = plan
         .iter()
         .zip(done)
-        .map(|(planned, (outcome, settled))| ItemResult {
+        .map(|(planned, (outcome, settled, failure))| ItemResult {
             item: planned.item.clone(),
+            failure: failure.or_else(|| failure_of(&outcome)),
             outcome,
             extent: settled.extent,
             bytes_freed: settled.freed,
@@ -139,6 +143,22 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
         freed_is_upper_bound,
     }
 }
+
+/// The failure an outcome names by itself; a deletion's comes from its
+/// route (`Acted::failure`), with this as the fallback.
+fn failure_of(outcome: &ItemOutcome) -> Option<Failure> {
+    match outcome {
+        ItemOutcome::Skipped(reason) => skip_failure(reason),
+        ItemOutcome::Failed { error, .. } => Some(trash_failure(error)),
+        ItemOutcome::DeleteFailed { detail, .. } | ItemOutcome::ToolFailed { detail } => {
+            Some(Failure::new(FailureCause::Other, detail.clone()))
+        }
+        _ => None,
+    }
+}
+
+/// One item's outcome, measurement and failure, as the run reports it.
+type Done = (ItemOutcome, Settled, Option<Failure>);
 
 /// Plan indexes in run order: deletions as administrator, other deletions,
 /// tool commands, then emptying the Trash, then moves to the Trash, each in
@@ -165,7 +185,7 @@ fn delete_as_administrator(
     plan: &[PlannedItem],
     indexes: &[usize],
     ctx: &ExecContext<'_>,
-    done: &mut [(ItemOutcome, Settled)],
+    done: &mut [Done],
     stopped: &mut Option<StopReason>,
 ) {
     let mut batch = Vec::new();
@@ -222,10 +242,13 @@ fn delete_as_administrator(
                 source_present: true,
             },
         };
+        let failure = matches!(outcome, ItemOutcome::DeleteFailed { .. })
+            .then(|| Failure::new(FailureCause::NeedsAdministrator, detail.clone()));
         let acted = Acted {
             outcome,
             before,
             removed_some: false,
+            failure,
         };
         done[index] = acted.settle(path);
     }
@@ -268,6 +291,8 @@ struct Acted {
     before: Option<Measured>,
     /// The route removed at least one entry.
     removed_some: bool,
+    /// What the route knows of its failure beyond the outcome.
+    failure: Option<Failure>,
 }
 
 impl Acted {
@@ -276,12 +301,13 @@ impl Acted {
             outcome,
             before: None,
             removed_some: false,
+            failure: None,
         }
     }
 
     /// Measures `path` again, right after the action, and puts a prune's
     /// measured bytes into its outcome.
-    fn settle(self, path: &Path) -> (ItemOutcome, Settled) {
+    fn settle(self, path: &Path) -> Done {
         let settled = settle(path, &self.outcome, self.before, self.removed_some);
         let outcome = match self.outcome {
             ItemOutcome::Pruned { .. } => ItemOutcome::Pruned {
@@ -290,7 +316,7 @@ impl Acted {
             },
             other => other,
         };
-        (outcome, settled)
+        (outcome, settled, self.failure)
     }
 }
 
@@ -308,6 +334,7 @@ fn act_on(planned: &PlannedItem, ctx: &ExecContext<'_>, stopped: &mut Option<Sto
         outcome,
         before,
         removed_some: false,
+        failure: None,
     };
     // One route per item: a failure is reported, never retried another way.
     let finder = match planned.removal {
@@ -318,10 +345,19 @@ fn act_on(planned: &PlannedItem, ctx: &ExecContext<'_>, stopped: &mut Option<Sto
         Removal::EmptyTrash => ctx.trash.empty_trash().map(|()| ItemOutcome::TrashEmptied),
         Removal::Delete => {
             let removal = ctx.delete.delete_each(path);
+            let outcome = deletion_outcome(&removal, path);
+            let failure = match (&outcome, removal.failures.first()) {
+                (ItemOutcome::DeleteFailed { detail, .. }, Some(first)) => Some(Failure::new(
+                    cause_of_io(&first.path, &first.error),
+                    detail.clone(),
+                )),
+                _ => None,
+            };
             return Acted {
-                outcome: deletion_outcome(&removal, path),
+                outcome,
                 before,
                 removed_some: removal.removed_entries > 0,
+                failure,
             };
         }
         Removal::RunTool(_) => return acted(run_tool(planned, before.is_some(), ctx)),
@@ -439,7 +475,7 @@ fn skip_for(policy: &StoreLease<'_>, evaluation: &Evaluation) -> SkipReason {
 pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), SkipReason> {
     let item = &planned.item;
     if inside_system(&item.path) {
-        return Err(SkipReason::ProtectedPath("inside /System".into()));
+        return Err(SkipReason::ProtectedPath(INSIDE_SYSTEM.into()));
     }
     let on_disk = names_a_file(planned);
     if on_disk {

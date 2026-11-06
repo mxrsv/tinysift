@@ -200,7 +200,7 @@ fn name(value: &OsStr) -> io::Result<CString> {
         .map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))
 }
 
-fn changed() -> io::Error {
+pub(crate) fn changed() -> io::Error {
     io::Error::other(EntryChanged)
 }
 

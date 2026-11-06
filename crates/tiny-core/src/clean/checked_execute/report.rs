@@ -3,6 +3,7 @@
 
 use std::path::PathBuf;
 
+use crate::clean::failure_cause::Failure;
 use crate::clean::finder_trash::TrashError;
 use crate::clean::types::CleanItem;
 
@@ -141,6 +142,10 @@ pub struct ItemResult {
     /// `bytes_freed` may be high: the volume could not show some blocks as
     /// unshared, or the walk after could not read everything.
     pub freed_is_upper_bound: bool,
+    /// Why the item, or part of it, stayed: for a skip, a failure or a
+    /// partial removal (its first entry left). `None` when it went as
+    /// planned, was not attempted, or a saved rule of the user kept it.
+    pub failure: Option<Failure>,
 }
 
 #[derive(Debug, Clone, Default)]
