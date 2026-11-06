@@ -64,6 +64,22 @@ fn a_rescan_invalidates_only_its_categories_ids() {
 }
 
 #[test]
+fn an_empty_category_list_replaces_everything_scanned_before() {
+    let dir = fixture_dir("empty-list", &["x"], 4);
+    let other = fixture_dir("empty-list-other", &["y"], 4);
+    let session = TestSession::new();
+    scan(&session, &["a"], &one("a", &dir)).unwrap();
+    let full = scan(&session, &[], &one("b", &other)).unwrap();
+    assert_eq!(
+        category_ids(&full),
+        ["b"],
+        "a, scanned by ID earlier, is gone"
+    );
+    remove(&dir);
+    remove(&other);
+}
+
+#[test]
 fn a_new_category_joins_the_merged_set() {
     let dir = fixture_dir("join", &["x"], 4);
     let other = fixture_dir("join-other", &["y"], 4);

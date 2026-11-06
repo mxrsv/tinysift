@@ -306,7 +306,13 @@ pub fn discover_checked(
                 cancelled: true,
             };
         }
-        so_far.report(progress, index as u64, total, provider.label());
+        so_far.report(
+            progress,
+            index as u64,
+            total,
+            provider.label(),
+            Some(provider.id()),
+        );
         let outcome = discover_one(provider.as_ref(), ctx);
         let findings = ctx.take_findings();
         if ctx.is_cancelled() {
@@ -334,7 +340,7 @@ pub fn discover_checked(
             outcome,
         });
     }
-    so_far.report(progress, total, total, "Discovery complete");
+    so_far.report(progress, total, total, "Discovery complete", None);
     CheckedDiscovery {
         categories,
         cancelled: false,
@@ -369,6 +375,7 @@ impl FoundSoFar {
         completed: u64,
         total: u64,
         message: &str,
+        current: Option<&str>,
     ) {
         crate::progress::report_scan(
             progress,
@@ -377,6 +384,7 @@ impl FoundSoFar {
             message,
             self.bytes,
             self.last_category.as_deref(),
+            current,
         );
     }
 }

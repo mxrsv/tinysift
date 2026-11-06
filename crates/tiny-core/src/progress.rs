@@ -13,6 +13,9 @@ pub struct Progress {
     /// Scan only: the category finished most recently before this event.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
+    /// Scan only: the ID of the category being scanned now; `None` once all are done.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub current_category: Option<String>,
 }
 pub type ProgressCallback<'a> = Option<&'a (dyn Fn(Progress) + Send + Sync)>;
 pub fn report(
@@ -30,11 +33,13 @@ pub fn report(
             message: message.into(),
             found_bytes: None,
             category: None,
+            current_category: None,
         });
     }
 }
 
-/// `report` for a scan: adds what was found so far and the last finished category.
+/// `report` for a scan: adds what was found so far, the last finished category
+/// and the category being scanned now.
 pub fn report_scan(
     callback: ProgressCallback<'_>,
     completed: u64,
@@ -42,6 +47,7 @@ pub fn report_scan(
     message: &str,
     found_bytes: u64,
     category: Option<&str>,
+    current_category: Option<&str>,
 ) {
     if let Some(callback) = callback {
         callback(Progress {
@@ -51,6 +57,7 @@ pub fn report_scan(
             message: message.into(),
             found_bytes: Some(found_bytes),
             category: category.map(Into::into),
+            current_category: current_category.map(Into::into),
         });
     }
 }

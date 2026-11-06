@@ -45,6 +45,13 @@ fn preview_is_built_from_discovered_ids_only() {
         assert!(!events.is_empty(), "progress reached the caller");
         let last = events.last().unwrap();
         assert_eq!(last.category.as_deref(), Some("logs"));
+        assert_eq!(last.current_category, None, "the closing event names none");
+        assert!(
+            events
+                .iter()
+                .any(|e| e.current_category.as_deref() == Some("logs")),
+            "a scan names the category it is on"
+        );
         assert_eq!(
             last.found_bytes,
             Some(allocated(&dir.join("a")) + allocated(&dir.join("b"))),

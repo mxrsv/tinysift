@@ -114,9 +114,10 @@ impl CleanState {
 impl TinySession {
     /// Scans cleanup categories. Holds the operation gate, so it returns
     /// `Busy` while another scan or mutation runs. A completed scan replaces
-    /// the results of the categories in `options.categories` (every category
-    /// the options select, when it is empty) and returns the merged result
-    /// of all categories scanned so far; the others keep their candidate IDs.
+    /// the results of the categories in `options.category`; an empty list
+    /// scans by the options' risk flags and replaces everything, including
+    /// categories scanned earlier by ID. It returns the merged result of all
+    /// categories scanned so far; categories not replaced keep their candidate IDs.
     /// A scan that is cancelled or fails changes nothing. A preview stays
     /// valid until a scan replaces a category it uses.
     pub fn clean_discover(
