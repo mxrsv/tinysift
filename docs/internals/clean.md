@@ -25,8 +25,8 @@ A category exists only when its id appears in `all_providers_with`, `known_categ
 table test beside them. Tests require the providers in `known_category_ids` order, each with an
 `inclusion_reason` and a `comes_back` answer; `category_family` panics on an unknown id.
 `category_section` derives the desktop section from `comes_back` (Rebuilt, or Your files when
-nothing recreates the items), except `node-modules` and `rust-targets`, which are Project build
-output. The `SECTIONS` test fails until a new id gets a deliberate section, so build output never
+nothing recreates the items), except `node-modules`, `rust-targets` and `build-folders`, which are
+Project build output. The `SECTIONS` test fails until a new id gets a deliberate section, so build output never
 lands in Rebuilt just because a build restores it.
 
 `clean_places(options)` (`FfiCleanPlace`: `id`, `label`) lists the categories `clean_discover` would
@@ -38,8 +38,8 @@ never hard-coded. It is the most a scan can return: a category whose tool or fol
 Desktop eligibility is deny by default. `desktop_trash_paths()` is true only when cleanup is
 exactly "move each listed path to Trash", and `Destructive` risk is always report only
 (`desktop_report_only`). Two narrow exceptions each have their own provider flag and their own
-sink: `desktop_empties_trash()` (only `trash`) and `desktop_tool()` (uv, pnpm, simulator
-runtimes). `desktop_report_only` keeps its answer for them (`Destructive`, `NotPerPathTrash`): it
+sink: `desktop_empties_trash()` (only `trash`) and `desktop_tool()` (uv, pnpm, Bun, pip,
+Homebrew, Docker, simulator devices and runtimes). `desktop_report_only` keeps its answer for them (`Destructive`, `NotPerPathTrash`): it
 means "no per-path unprivileged route", and the flag decides what the app may do instead.
 `needs_admin()` (system simulator caches) stays `NeedsAdministrator`, report-only
 ([why](#deletion-as-administrator)). The `DESKTOP_TRASH` table test fails
@@ -84,7 +84,10 @@ every browser. `codex-releases` and `codex-runtimes` gate on the Codex processes
 
 ## Project build output
 
-`node-modules` and `rust-targets` list build output inside projects. The CLI offers only projects
+`node-modules`, `rust-targets` and `build-folders` list build output inside projects.
+`build-folders` offers `.next`, `Pods`, `build` and `dist` only beside the manifest that proves
+them generated, and its `check_item` repeats that proof
+([`build_folders.rs`](../../crates/tiny-core/src/clean/providers/build_folders.rs)). The CLI offers only projects
 idle for `--idle-days`, as Review. The app sets `all_build_output` and lists every project, so the
 Review default would hide most of the disk: an item is Safe when the project is in a git work tree
 and its manifest, last commit and working tree are all older than `BUILD_OUTPUT_SAFE_DAYS` with
@@ -171,8 +174,9 @@ widens: a cache folder that holds a path which only goes to the Trash goes to th
 | --- | --- | --- |
 | `MoveToTrash` | Trash mode; Your files always; a uv or pnpm cache in Trash mode | [`NativeTrash`](../../crates/tiny-core/src/clean/native_trash.rs): `NSFileManager trashItemAtURL`, no Finder, no Put Back |
 | `Delete` | Permanent mode and the item and all it covers are Rebuilt or Project build output | `SafeDelete` ([`fs_safe.rs`](../../crates/tiny-core/src/clean/fs_safe.rs)): no symlinks, no other volume |
-| `RunTool(Prune)` | uv, pnpm in Permanent mode, tool found | the category's tool |
+| `RunTool(Prune)` | uv, pnpm, Bun, pip in Permanent mode, tool found | the category's tool |
 | `RunTool(Request)` | simulator runtimes, both modes (no Trash route) | `simctl runtime delete` |
+| `RunTool(Remove)` | Homebrew, Docker, simulator devices, both modes (no Trash route), tool found | `brew cleanup --prune=30`, `docker … prune --filter until=168h`, `simctl delete <udid>` |
 | `EmptyTrash` | the `trash` row, both modes, only with `include_trash` | Finder |
 | `DeleteAsAdministrator` | none at present: `needs_admin` categories are report-only on the desktop | [`elevated_delete`](#deletion-as-administrator) |
 
@@ -215,10 +219,13 @@ item. It is the only place that builds the real `OsascriptDelete`, and it panics
 
 **Freed, moved and requested are three numbers.** Bytes freed are measured, never discovery
 sizes: right before each removal that frees space (`Delete`, `DeleteAsAdministrator`, `EmptyTrash`,
-`RunTool(Prune)`), among the slow checks, the item's freed bytes are measured by the
+`RunTool(Prune)`, `RunTool(Remove)`), among the slow checks, the item's freed bytes are measured by the
 [`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs) rule, and once more right after
 it ([`measure.rs`](../../crates/tiny-core/src/clean/checked_execute/measure.rs)); the item freed
-`before - after` (saturating), and the run's `bytes_freed` is the sum. Items are measured one after
+`before - after` (saturating), and the run's `bytes_freed` is the sum. A `RunTool(Remove)` item
+that names no file (Homebrew's `<homebrew:cleanup>`, Docker's placeholders) is measured by its
+provider instead (`CleanProvider::tool_freeable`): Homebrew sizes its dry run's paths again,
+Docker reads its kind's Reclaimable; one that cannot tell counts 0, as a ceiling. Items are measured one after
 another, so a hard link or clone family split between two removed items counts with the second,
 once. Bytes moved to the Trash free nothing until the Trash is emptied; bytes requested belong to a
 tool that finishes in the background (simulator runtimes). Each result carries a `RemovalExtent`:
@@ -247,13 +254,18 @@ each other.
 **Figures count only what surely goes.** The preview's `bytes_to_free` leaves out prunes: neither
 `uv cache prune` (uv 0.8.16: only `--ci`) nor `pnpm store prune` (pnpm 12.18.0: only `-y`) has a dry
 run, so a prune has no estimate, and its cache's size is `bytes_prune_up_to`, a ceiling the client
-shows as "up to" and keeps out of its button. Requested removals and moves are never in it either.
+shows as "up to" and keeps out of its button; Bun and pip, which have no dry run either, and
+Docker (`DesktopTool::Remove { sure: false }`: Reclaimable counts data its filtered prune keeps)
+join it, and the FFI marks all of them `prunes`. A tool removal whose size is its dry run's
+estimate (`Remove { sure: true }`: Homebrew, simulator devices sized on disk) counts in
+`bytes_to_free` and in `found_bytes`. Requested removals and moves are never in it either.
 The scan's progress figure (`found_bytes`) counts only categories whose `desktop_action` is
-`MoveToTrash` without a tool or `EmptyTrash` (`discover_checked_counting`); the CLI still counts
+`MoveToTrash` without a tool, `EmptyTrash`, or `RemoveWithTool` with a sure size
+(`discover_checked_counting`); the CLI still counts
 every category. Docker's figure is `docker system df`'s Reclaimable column, never Size.
 
 **Tool commands** need `tool_commands` in the options; without it every tool row stays
-`ReportOnly{NotPerPathTrash}`, so an app that does not know the option cannot preselect uv into a
+`ReportOnly{NotPerPathTrash}` (`FfiDesktopAction::RemoveWithTool` with it, for `Remove` tools), so an app that does not know the option cannot preselect uv into a
 whole-cache Trash move. The command runs through the bounded `CommandRunner::output`
 ([`tool_command.rs`](../../crates/tiny-core/src/clean/providers/tool_command.rs)): absolute path,
 stdin closed, no shell, never elevated, killed after ten minutes. The app's runner (`ToolRunner::new`)
@@ -265,7 +277,8 @@ cache twice. A tool that cannot be found keeps the row report only; the app neve
 by hand. `ToolLookup::app()` searches `PATH`, then the nvm `bin` folder for pnpm, then
 `/opt/homebrew/bin` and `/usr/local/bin`, then per-user folders (uv in `~/.local/bin` and
 `~/.cargo/bin`; pnpm in `~/Library/pnpm`, `~/.local/share/pnpm`, `~/.volta/bin`), because a
-Finder-launched app has a minimal `PATH`. Every tool runs with `COREPACK_ENABLE_NETWORK=0` and
+Finder-launched app has a minimal `PATH`. `pip-cache` names its `pip3` by absolute path instead
+(Homebrew's, then the Command Line Tools'), never the `/usr/bin` shim. Every tool runs with `COREPACK_ENABLE_NETWORK=0` and
 `COREPACK_ENABLE_DOWNLOAD_PROMPT=0` so a Corepack shim never downloads a package manager or waits
 for an answer ([`runner.rs`](../../crates/tiny-core/src/runner.rs)).
 
@@ -274,7 +287,8 @@ directory's mtime (`PathFingerprint::of_listing`), so a Trash that changed since
 skipped instead of emptying files the user never saw.
 
 **Placeholders.** A simulator runtime has no path: its item is `<simulator-runtime:UUID>` with
-`Evidence::SimulatorRuntime`. Because every file-system check would resolve that relative name
+`Evidence::SimulatorRuntime`. Homebrew's cleanup (`<homebrew:cleanup>`) and Docker's kinds
+(`<docker:images>`, `<docker:build-cache>`) are placeholders too, removed by `RunTool(Remove)`. Because every file-system check would resolve that relative name
 against the working directory, `validate` skips only the file checks for it (rules, fingerprint,
 volume, roots, protected paths) and still runs the app probe and `check_item`; only its tool acts
 on it.
@@ -296,6 +310,12 @@ booted or unknown answer, including a failed lookup (a broken `DEVELOPER_DIR` ex
 `xcrun` times out), refuses every entry with a reason rather than offering any. It never gates on
 `simdiskimaged`, `CoreSimulatorService` or `SimLaunchHost`: they run without Xcode, so the caches
 would never be offered.
+
+`simulator-devices` lists the devices `simctl list devices -j` reports unavailable, as Review in
+Rebuilt (such a device cannot boot; Xcode makes devices again for an installed runtime). The
+desktop deletes each reviewed one with `xcrun simctl delete <udid>` after checking `simctl` still
+lists it unavailable, never `simctl delete unavailable`, which would also take unticked devices.
+It offers the tool only with a Devices folder, so a Mac without one spawns no `xcrun`.
 
 `simulator-runtimes` joins `xcrun simctl runtime list -j` (keyed by image UUID) with
 `list devices -j` (keyed by `runtimeIdentifier`) on `runtimeIdentifier`, never on display names:

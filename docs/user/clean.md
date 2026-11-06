@@ -19,15 +19,15 @@ Run `--dry-run` first on a new machine.
 
 ## Categories
 
-41 categories in three families. Each has a risk level that decides whether you see it by
+47 categories in three families. Each has a risk level that decides whether you see it by
 default.
 
-**Dev caches** — `cargo`, `npm`, `pnpm`, `yarn`, `uv`, `puppeteer`, `huggingface`,
-`codex-runtimes`, `codex-releases`, `node-modules`, `python-caches`, `rust-targets`,
-`gradle-maven`, `jetbrains`, `vscode`, `ios-simulators`, `simulator-devices`,
-`system-simulator-caches`, `simulator-runtimes`, `simulator-runtime-images`, `android-sdk`,
-`go-cache`, `docker`, `docker-volumes`, `xcode-derived`, `xcode-archives`,
-`xcode-devicesupport`.
+**Dev caches** — `cargo`, `npm`, `pnpm`, `yarn`, `uv`, `bun-cache`, `pip-cache`, `puppeteer`,
+`huggingface`, `codex-runtimes`, `codex-releases`, `node-modules`, `python-caches`,
+`rust-targets`, `build-folders`, `gradle-maven`, `jetbrains`, `vscode`, `ios-simulators`,
+`simulator-devices`, `system-simulator-caches`, `simulator-runtimes`,
+`simulator-runtime-images`, `android-sdk`, `go-cache`, `homebrew`, `docker`, `docker-volumes`,
+`xcode-derived`, `xcode-archives`, `xcode-devicesupport`, `xcode-previews`.
 
 **User storage** — `downloads-old`, `screenshots-old`, `mail-attachments`,
 `streaming-caches`, `chat-caches`, `browser-caches`.
@@ -37,9 +37,9 @@ default.
 
 | Risk        | Shown                        | Categories                                                                                      |
 | ----------- | ---------------------------- | ----------------------------------------------------------------------------------------------- |
-| Safe        | always, already ticked       | `user-logs`, `crash-reports`, `font-quicklook-caches`, `xcode-derived`, `puppeteer`             |
+| Safe        | always, already ticked       | `user-logs`, `crash-reports`, `font-quicklook-caches`, `xcode-derived`, `xcode-previews`, `puppeteer` |
 | Review      | with `--include-review`      | everything else                                                                                 |
-| Destructive | with `--include-destructive` | `trash`, `time-machine-local`, `docker-volumes`, `simulator-devices`                            |
+| Destructive | with `--include-destructive` | `trash`, `time-machine-local`, `docker-volumes`                                                 |
 
 Naming a category with `--category` shows it whatever its risk; the `--include-*` flags are
 then ignored. `system-simulator-caches` is Safe but needs administrator rights, which `tiny`
@@ -67,7 +67,8 @@ along. Those overlapping selections are retained and explained in the final repo
 
 ## What is found
 
-- `--idle-days N` (default 30, must be above 0) — `node-modules`, `rust-targets` and the
+- `--idle-days N` (default 30, must be above 0) — `node-modules`, `rust-targets`,
+  `build-folders` and the
   virtualenvs in `python-caches` are listed only for projects with no manifest edit, commit
   or uncommitted change in `N` days. `downloads-old` lists files directly in `~/Downloads`
   neither modified nor opened for `N` days, `screenshots-old` lists screenshots not modified
@@ -76,13 +77,20 @@ along. Those overlapping selections are retained and explained in the final repo
   `~/Workspace`. Nothing inside a `node_modules` folder is listed on its own: `python-caches`
   and `rust-targets` do not look inside one, and `node-modules` lists it whole
   ([`is_node_modules`](../../crates/tiny-core/src/clean/providers/mod.rs)).
-- A `node_modules` or `target/` folder that holds a file git tracks is never listed or removed,
-  and neither is one whose tracked files git cannot list (for example without the Command Line
-  Tools).
+- `build-folders` lists only folders a manifest beside them proves are generated: `.next` beside
+  `package.json`, `Pods` beside a `Podfile`, `build` beside `build.gradle` or
+  `build.gradle.kts`, and `build` or `dist` when `package.json` names it in `main`, `module`,
+  `types`, `typings`, `browser`, `bin`, `exports` or `files`, or `tsconfig.json`'s `outDir` is
+  `dist` ([`build_folders.rs`](../../crates/tiny-core/src/clean/providers/build_folders.rs)).
+  A `build` or `dist` folder without such proof is never listed: many projects keep sources
+  there.
+- A `node_modules`, `target/` or build folder that holds a file git tracks is never listed or
+  removed, and neither is one whose tracked files git cannot list (for example without the
+  Command Line Tools).
 - Some categories are skipped while their app is open, and `tiny` tells you which app to quit:
   the Xcode categories (Xcode), `ios-simulators`, `simulator-devices` and `simulator-runtimes`
   (Xcode or Simulator), `mail-attachments` (Mail), `vscode` (VS Code), `android-sdk` (Android Studio),
-  `docker` and `docker-volumes` (Docker Desktop), `uv` (uv or uvx), `pnpm` (pnpm, including
+  `docker-volumes` (Docker Desktop), `bun-cache` (bun), `uv` (uv or uvx), `pnpm` (pnpm, including
   when Node runs it), `codex-runtimes` (ChatGPT), `codex-releases` (Codex) and
   `system-simulator-caches` (Xcode, Simulator, `xcodebuild`, `xctest`, `XCTRunner`,
   `simctl`, a booted simulator's `launchd_sim`, or any booted simulator).
@@ -116,15 +124,23 @@ private-looking downloads and never ticks them for you.
 - **`-y` needs `--category`**, so an unattended run always names its scope.
 - **The Trash can only be emptied**, with Hard delete. With `trash` selected, Move to Trash
   is refused and nothing is changed.
-- **Some cleanup has no Trash.** `docker` prunes unused images and build cache, and its size is
-  what Docker calls reclaimable, not the images' whole size;
+- **Some cleanup has no Trash.** `homebrew` runs `brew cleanup --prune=30` (old versions and
+  downloads older than 30 days; never a formula, since `tiny` turns off Homebrew's autoremove),
+  and its size is what that command's dry run lists, measured on disk, leaving out
+  `~/Library/Caches`, which `user-caches` already counts;
+  `docker` prunes unused images and build cache, and its size is
+  what Docker calls reclaimable, not the images' whole size (Docker's daemon must be running,
+  so it is not skipped while Docker Desktop is open);
   `docker-volumes` prunes unused volumes, which hold container data such as databases;
-  `time-machine-local` deletes local snapshots; `simulator-devices` deletes simulators that
-  Xcode reports unavailable; `simulator-runtimes` deletes runtimes no simulator uses (`simctl`
+  `time-machine-local` deletes local snapshots; `simulator-devices` deletes, one by one with
+  `xcrun simctl delete`, the simulators that Xcode reports unavailable; `simulator-runtimes` deletes runtimes no simulator uses (`simctl`
   finishes the removal in the background); `uv` runs `uv cache prune` and `pnpm` runs
-  `pnpm store prune`, which remove only entries nothing references. These are permanent
-  whichever action you choose, and `tiny` warns you when you pick Move to Trash. `uv` and `pnpm`
-  are Review for that reason, so plain `tiny clean` leaves them unticked. `pnpm` used to move its
+  `pnpm store prune`, which remove only entries nothing references; `bun-cache` runs
+  `bun pm cache rm` and `pip-cache` runs `pip3 cache purge`, which empty the whole cache
+  (`pip-cache` only through a Homebrew or Command Line Tools `pip3`, and only when
+  `~/Library/Caches/pip` exists). These are permanent
+  whichever action you choose, and `tiny` warns you when you pick Move to Trash. These are
+  Review for that reason, so plain `tiny clean` leaves them unticked. `pnpm` used to move its
   store to the Trash, so a script with `--category pnpm` now prunes instead.
 - **`simulator-runtime-images` is report only.** Without Xcode, `tiny` lists the simulator
   runtimes it finds but refuses to remove them; use System Settings → General → Storage.

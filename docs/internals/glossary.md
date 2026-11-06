@@ -105,7 +105,7 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   and Project build output: `Trash` (move them) or `Permanent` (delete them, or prune a tool's
   cache). Your files always go to the Trash. Fixed when the preview is built.
 - **Removal** (`Removal`) — How the app removes one planned path: `MoveToTrash`, `Delete`,
-  `EmptyTrash`, `RunTool` (a prune or a request) or `DeleteAsAdministrator`, chosen by
+  `EmptyTrash`, `RunTool` (a prune, a request or a removal) or `DeleteAsAdministrator`, chosen by
   `removal_for` ([routing](clean.md#the-desktops-checked-removal)). Not: clean action, exec action.
 - **Trash row** — The `trash` category as the app offers it (`include_trash`): one `Destructive`
   item for `~/.Trash`, never preselected, emptied through Finder when explicitly selected.

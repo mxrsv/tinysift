@@ -14,8 +14,9 @@ Things that are not obvious from reading one file.
 - **Move to Trash is not always recoverable.** With "Empty Trash automatically" on, Finder
   deletes it later; on a volume without a Trash it may delete at once, so the app skips paths
   off the home volume ([`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)).
-- **Some categories ignore Trash.** `docker`, `docker-volumes`, `pnpm`, `uv`, `time-machine-local`,
-  `simulator-devices` and `simulator-runtimes` run their tool for both CLI actions. `pnpm`
+- **Some categories ignore Trash.** `docker`, `docker-volumes`, `pnpm`, `uv`, `bun-cache`,
+  `pip-cache`, `homebrew`, `time-machine-local`, `simulator-devices` and `simulator-runtimes`
+  run their tool for both CLI actions. `pnpm`
   used to move its store to the Trash and now prunes it, so `--category pnpm` is permanent. The
   CLI's warning lists those ids by hand in
   [`render/clean/mod.rs`](../../crates/tiny/src/render/clean/mod.rs); add new tool-backed
@@ -55,6 +56,24 @@ Things that are not obvious from reading one file.
   (`ToolLookup::app`); when a prune frees less than the sized store, check which pnpm resolved.
 - **uv in Trash mode moves the whole cache folder** to the Trash, since a prune has no Trash
   route; only Permanent mode runs `uv cache prune`.
+- **Homebrew's figure costs three dry runs.** `brew cleanup --prune=30 --dry-run` (about 5 s)
+  runs at the scan and right before and after the cleanup, and the paths it lists are sized by
+  our own walk, so figure and freed follow one rule
+  ([`homebrew.rs`](../../crates/tiny-core/src/clean/providers/homebrew.rs)). Paths inside
+  `~/Library/Caches` count in neither: `user-caches` lists Homebrew's download cache whole, so a
+  cleanup without App Caches selected frees old downloads that no figure shows. `brew cleanup`
+  would also autoremove formulae its dry run never sizes; `TOOL_ENV` in
+  [`runner.rs`](../../crates/tiny-core/src/runner.rs) sets `HOMEBREW_NO_AUTOREMOVE` for every
+  non-isolated `brew`.
+- **Docker's freed bytes are Docker's, not the Mac's.** The prune is measured as its kind's
+  Reclaimable before minus after (`docker system df`), and Reclaimable also counts data newer
+  than the `until=168h` filter keeps, so the figure is only a ceiling. The images live in Docker
+  Desktop's disk image, which macOS sees shrink only when Docker compacts it, so the free-space
+  reading may not rise ([`docker.rs`](../../crates/tiny-core/src/clean/providers/docker.rs)).
+- **`/usr/bin/pip3` is a shim.** Without the Command Line Tools it asks to install them, so
+  `pip-cache` runs only Homebrew's or the Command Line Tools' `pip3` by absolute path and spawns
+  nothing unless `~/Library/Caches/pip` exists; `user-caches` leaves that folder to it
+  ([`purged_caches.rs`](../../crates/tiny-core/src/clean/providers/purged_caches.rs)).
 
 ## Cleanup sizes
 
