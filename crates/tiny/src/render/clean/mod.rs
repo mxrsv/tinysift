@@ -94,13 +94,16 @@ pub fn run(opts: crate::cli::CleanOpts) -> Result<()> {
                             | "docker-volumes"
                             | "pnpm"
                             | "uv"
+                            | "bun-cache"
+                            | "pip-cache"
+                            | "homebrew"
                             | "time-machine-local"
                             | "simulator-devices"
                             | "simulator-runtimes"
                     )
                 })
             {
-                eprintln!("Warning: Docker, pnpm and uv prunes, Time Machine snapshot removal and simulator device and runtime deletion cannot be undone; those tools have no Trash semantics.");
+                eprintln!("Warning: Docker, pnpm and uv prunes, Bun and pip cache purges, Homebrew's cleanup, Time Machine snapshot removal and simulator device and runtime deletion cannot be undone; those tools have no Trash semantics.");
             }
             let report = execute::execute(&selected, action, &excluded_paths, &opts)?;
             print_exec_report(&report);
