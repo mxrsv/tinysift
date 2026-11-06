@@ -56,8 +56,11 @@ Things that are not obvious from reading one file.
   (`ToolLookup::app`); when a prune frees less than the sized store, check which pnpm resolved.
 - **uv in Trash mode moves the whole cache folder** to the Trash, since a prune has no Trash
   route; only Permanent mode runs `uv cache prune`.
-- **Homebrew's figure costs three dry runs.** `brew cleanup --prune=30 --dry-run` (about 5 s)
-  runs at the scan and right before and after the cleanup, and the paths it lists are sized by
+- **Homebrew's list outlives the provider.** `brew cleanup --prune=30 --dry-run` (about 5 s) runs
+  at the scan; a Clean within a preview's lifetime (15 minutes) sizes that same list right before
+  and right after the cleanup, so it spawns `brew` once, for the cleanup. The list lives in a
+  static (`LAST_LISTING`), because the app builds new providers for a run. Paths the cleanup would
+  remove that were not in the scan's list are not measured, so freed can only read low. The paths are sized by
   our own walk, so figure and freed follow one rule
   ([`homebrew.rs`](../../crates/tiny-core/src/clean/providers/homebrew.rs)). Paths inside
   `~/Library/Caches` count in neither: `user-caches` lists Homebrew's download cache whole, so a

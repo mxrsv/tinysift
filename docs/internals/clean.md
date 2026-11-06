@@ -234,7 +234,8 @@ sizes: right before each removal that frees space (`Delete`, `DeleteAsAdministra
 it ([`measure.rs`](../../crates/tiny-core/src/clean/checked_execute/measure.rs)); the item freed
 `before - after` (saturating), and the run's `bytes_freed` is the sum. A `RunTool(Remove)` item
 that names no file (Homebrew's `<homebrew:cleanup>`, Docker's placeholders) is measured by its
-provider instead (`CleanProvider::tool_freeable`): Homebrew sizes its dry run's paths again,
+provider instead (`CleanProvider::tool_freeable`): Homebrew sizes its dry run's paths again (the
+scan's list while it is fresh, so neither measurement spawns `brew`),
 Docker reads its kind's Reclaimable; one that cannot tell counts 0, as a ceiling. Items are measured one after
 another, so a hard link or clone family split between two removed items counts with the second,
 once. Bytes moved to the Trash free nothing until the Trash is emptied; bytes requested belong to a
