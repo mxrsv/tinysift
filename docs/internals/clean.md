@@ -325,7 +325,7 @@ would never be offered.
 `simulator-devices` lists the devices `simctl list devices -j` reports unavailable, as Review in
 Rebuilt (such a device cannot boot; Xcode makes devices again for an installed runtime). The
 desktop deletes each reviewed one with `xcrun simctl delete <udid>` after checking `simctl` still
-lists it unavailable, never `simctl delete unavailable`, which would also take unticked devices.
+lists it unavailable (one list per run, at most 30 s old; `xcrun --find` once per provider), never `simctl delete unavailable`, which would also take unticked devices.
 It offers the tool only with a Devices folder, so a Mac without one spawns no `xcrun`.
 
 `simulator-runtimes` joins `xcrun simctl runtime list -j` (keyed by image UUID) with

@@ -13,7 +13,8 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use crate::engine_error;
 use crate::error::Result;
@@ -56,17 +57,33 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// How long one `simctl list devices` answers the per-device check: a run
+/// checks every selected device within seconds, so it lists once.
+const LIST_FRESH: Duration = Duration::from_secs(30);
+
+/// UDID -> `isAvailable`, as `simctl` last listed them, and when.
+type Availability = (Instant, BTreeMap<String, Option<bool>>);
+
 pub struct SimulatorDevices {
     runner: Arc<dyn CommandRunner>,
     /// The home whose Devices folder is read: `HOME`, or a test's folder.
     home: Option<PathBuf>,
+    /// `xcrun --find simctl`, asked once per provider (one scan or run).
+    simctl: OnceLock<bool>,
+    listed: Mutex<Option<Availability>>,
 }
 
 impl SimulatorDevices {
     pub fn with_runner(runner: Arc<dyn CommandRunner>) -> Self {
+        Self::at(runner, home())
+    }
+
+    fn at(runner: Arc<dyn CommandRunner>, home: Option<PathBuf>) -> Self {
         Self {
             runner,
-            home: home(),
+            home,
+            simctl: OnceLock::new(),
+            listed: Mutex::new(None),
         }
     }
 
@@ -74,10 +91,7 @@ impl SimulatorDevices {
     /// the machine's own simulators.
     #[cfg(test)]
     pub(crate) fn at_home(runner: Arc<dyn CommandRunner>, home: &Path) -> Self {
-        Self {
-            runner,
-            home: Some(home.to_path_buf()),
-        }
+        Self::at(runner, Some(home.to_path_buf()))
     }
 
     /// `home`'s Devices folder, when it is a real folder.
@@ -87,10 +101,12 @@ impl SimulatorDevices {
     }
 
     fn simctl_found(&self) -> bool {
-        simctl_found(self.runner.as_ref())
+        *self
+            .simctl
+            .get_or_init(|| simctl_found(self.runner.as_ref()))
     }
 
-    /// `simctl list devices -j`, parsed.
+    /// `simctl list devices -j`, parsed, and kept for `check_item`.
     fn list(&self) -> Result<DeviceList> {
         let out = run_tool(self.runner.as_ref(), XCRUN, LIST_ARGS)?;
         if !out.success() {
@@ -99,8 +115,34 @@ impl SimulatorDevices {
                 out.stderr.trim()
             ));
         }
-        serde_json::from_str(&out.stdout)
-            .map_err(|e| engine_error!("unexpected xcrun simctl output: {e}"))
+        let list: DeviceList = serde_json::from_str(&out.stdout)
+            .map_err(|e| engine_error!("unexpected xcrun simctl output: {e}"))?;
+        let availability = list
+            .devices
+            .values()
+            .flatten()
+            .map(|d| (d.udid.clone(), d.is_available))
+            .collect();
+        *self.listed.lock().unwrap_or_else(|e| e.into_inner()) =
+            Some((Instant::now(), availability));
+        Ok(list)
+    }
+
+    /// `udid`'s `isAvailable` from a list at most `LIST_FRESH` old (`None`
+    /// when simctl does not list it).
+    fn availability(&self, udid: &str) -> Result<Option<Option<bool>>> {
+        let kept = |listed: &Option<Availability>| {
+            listed
+                .as_ref()
+                .filter(|(at, _)| at.elapsed() < LIST_FRESH)
+                .map(|(_, devices)| devices.get(udid).copied())
+        };
+        if let Some(found) = kept(&self.listed.lock().unwrap_or_else(|e| e.into_inner())) {
+            return Ok(found);
+        }
+        self.list()?;
+        let listed = self.listed.lock().unwrap_or_else(|e| e.into_inner());
+        Ok(kept(&listed).flatten())
     }
 
     /// Unavailable devices whose folder exists under `devices_root`. The
@@ -190,9 +232,7 @@ impl CleanProvider for SimulatorDevices {
     /// The device must still be one `simctl` lists as unavailable.
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         let udid = udid_of(path).ok_or("not a simulator device folder")?;
-        let list = self.list().map_err(|e| e.to_string())?;
-        let device = list.devices.values().flatten().find(|d| d.udid == udid);
-        match device.map(|d| d.is_available) {
+        match self.availability(udid).map_err(|e| e.to_string())? {
             Some(Some(false)) => Ok(()),
             Some(_) => Err("the simulator device is available again".into()),
             None => Err("simctl no longer lists the simulator device".into()),
@@ -534,6 +574,31 @@ mod desktop_tests {
             "never `delete unavailable`"
         );
         assert!(runner.run_calls.lock().unwrap().is_empty());
+    }
+
+    /// A run checks each selected device right before its delete: simctl
+    /// lists the devices once for all of them, and is found once.
+    #[test]
+    fn a_run_lists_the_devices_once_and_finds_simctl_once() {
+        let home = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(home.path().join(DEVICES_DIR)).unwrap();
+        let runner = Arc::new(
+            MockRunner::new()
+                .with_exit(XCRUN, LIST_ARGS, 0, &listing(false))
+                .with_exit(XCRUN, FIND_ARGS, 0, "/x/simctl\n"),
+        );
+        let devices = SimulatorDevices::at_home(runner.clone(), home.path());
+        for _ in 0..3 {
+            assert!(devices.desktop_tool().is_some());
+            assert_eq!(devices.check_item(&item(GONE).path), Ok(()));
+            assert!(devices.check_item(&item(LIVE).path).is_err());
+        }
+        let calls = runner.output_calls.lock().unwrap().clone();
+        let count = |args: &[&str]| {
+            let wanted = format!("{XCRUN} {}", args.join(" "));
+            calls.iter().filter(|c| **c == wanted).count()
+        };
+        assert_eq!((count(LIST_ARGS), count(FIND_ARGS)), (1, 1), "{calls:?}");
     }
 
     #[test]
