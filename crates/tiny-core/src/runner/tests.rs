@@ -391,3 +391,42 @@ fn app_timeout_stops_inherited_pipe_child_after_leader_exits() {
     );
     assert!(started.elapsed() < Duration::from_secs(3));
 }
+
+/// A fixed absolute path is found only when an executable file is there:
+/// `pip-cache` probes `/opt/homebrew/bin/pip3` and others, and must never
+/// take one that does not exist.
+#[test]
+fn an_absolute_path_resolves_only_to_an_existing_executable() {
+    let dir = fixture_dir("absolute");
+    write_tool(&dir, "pip3", "echo /c/pip");
+    std::fs::write(dir.join("plain"), "not a program").unwrap();
+    let real = dir.join("pip3");
+    let lookup = ToolLookup::app();
+    assert_eq!(lookup.resolve(real.to_str().unwrap()), Some(real.clone()));
+    let missing = dir.join("missing/pip3");
+    let plain = dir.join("plain");
+    for absent in [
+        missing.to_str().unwrap(),
+        plain.to_str().unwrap(),
+        dir.to_str().unwrap(),
+    ] {
+        assert_eq!(lookup.resolve(absent), None, "{absent}");
+    }
+    let runner = ToolRunner::new(lookup);
+    assert!(runner.which(real.to_str().unwrap()));
+    assert!(!runner.which(missing.to_str().unwrap()));
+    assert!(matches!(
+        runner.output(missing.to_str().unwrap(), &[], GENEROUS),
+        Err(CommandError::NotFound(_))
+    ));
+    let found = crate::clean::providers::purged_caches::real_pip_from(
+        &runner,
+        &[missing.to_str().unwrap(), real.to_str().unwrap()],
+    );
+    assert_eq!(
+        found,
+        Some(real.to_str().unwrap()),
+        "the first pip3 that exists"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

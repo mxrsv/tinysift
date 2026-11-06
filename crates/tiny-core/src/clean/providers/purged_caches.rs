@@ -128,7 +128,16 @@ impl PipCache {
 /// The first real `pip3` of `PIPS` the runner finds. Only then does
 /// `pip-cache` own `~/Library/Caches/pip`, and `user-caches` leave it out.
 pub(super) fn real_pip(runner: &dyn CommandRunner) -> Option<&'static str> {
-    PIPS.iter().copied().find(|pip| runner.which(pip))
+    real_pip_from(runner, PIPS)
+}
+
+/// The first of `candidates` the runner finds; an absolute path counts only
+/// when an executable file is there (`ToolLookup::resolve`).
+pub(crate) fn real_pip_from<'a>(
+    runner: &dyn CommandRunner,
+    candidates: &[&'a str],
+) -> Option<&'a str> {
+    candidates.iter().copied().find(|pip| runner.which(pip))
 }
 
 /// The cache folder name `pip-cache` owns inside `~/Library/Caches`.

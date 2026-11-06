@@ -166,13 +166,17 @@ fn failure_of(path: &Path, outcome: &ItemOutcome) -> Option<Failure> {
 type Done = (ItemOutcome, Settled, Option<Failure>);
 
 /// Plan indexes in run order: deletions as administrator, other deletions,
-/// tool commands, then emptying the Trash, then moves to the Trash, each in
-/// plan order.
+/// prunes and requests, then emptying the Trash, then moves to the Trash,
+/// then tool removals (`DesktopTool::Remove`), each in plan order. A tool
+/// removal never touches the Trash, and running it last means a folder
+/// moved in the same run (App Caches' `Homebrew` in Trash mode) moves whole,
+/// as its counted size says, before `brew cleanup` could empty part of it.
 fn execution_order(plan: &[PlannedItem]) -> Vec<usize> {
     let mut order: Vec<usize> = (0..plan.len()).collect();
     order.sort_by_key(|&index| match plan[index].removal {
         Removal::DeleteAsAdministrator => 0,
         Removal::Delete => 1,
+        Removal::RunTool(DesktopTool::Remove { .. }) => 5,
         Removal::RunTool(_) => 2,
         Removal::EmptyTrash => 3,
         Removal::MoveToTrash => 4,

@@ -162,13 +162,15 @@ impl ToolLookup {
     }
 
     /// Absolute path of `bin`, or `bin` itself when it already contains a
-    /// `/`. Resolution follows symlinks on purpose: Homebrew binaries are
+    /// `/` and names an executable file: a path that does not exist is not
+    /// found, so a caller probing fixed locations (`pip-cache`'s `pip3`s)
+    /// never takes a missing one. Resolution follows symlinks on purpose: Homebrew binaries are
     /// symlinks into the Cellar. This locates trusted tools, not discovered
     /// cleanup paths, so the clean module's `symlink_metadata` rule does
     /// not apply here.
     pub fn resolve(&self, bin: &str) -> Option<PathBuf> {
         if bin.contains('/') {
-            return Some(PathBuf::from(bin));
+            return Some(PathBuf::from(bin)).filter(|path| is_executable(path));
         }
         let path = self.search_path().unwrap_or_default();
         let (before_fallbacks, after_fallbacks) = match &self.user_home {

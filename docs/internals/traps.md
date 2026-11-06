@@ -70,6 +70,10 @@ Things that are not obvious from reading one file.
   than the `until=168h` filter keeps, so the figure is only a ceiling. The images live in Docker
   Desktop's disk image, which macOS sees shrink only when Docker compacts it, so the free-space
   reading may not rise ([`docker.rs`](../../crates/tiny-core/src/clean/providers/docker.rs)).
+- **A tool path with a `/` must exist.** `ToolLookup::resolve` returns such a path only when an
+  executable file is there; before, any absolute path "resolved", so probing fixed locations
+  always took the first ([`runner.rs`](../../crates/tiny-core/src/runner.rs)). `MockRunner::which`
+  checks a set, not the disk, so only a real `ToolRunner` test catches this.
 - **`/usr/bin/pip3` is a shim.** Without the Command Line Tools it asks to install them, so
   `pip-cache` runs only Homebrew's or the Command Line Tools' `pip3` by absolute path and spawns
   nothing unless `~/Library/Caches/pip` exists. Only with such a `pip3` does `pip-cache` list that

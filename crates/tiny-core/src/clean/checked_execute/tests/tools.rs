@@ -631,3 +631,31 @@ fn only_the_ticked_simulator_device_is_passed_to_simctl() {
     assert!(sinks.log().is_empty(), "no move, no file deletion");
     let _ = remove_recursive_safe(&home);
 }
+
+/// A tool removal runs after every move: App Caches' `Homebrew` folder,
+/// moved in the same Trash-mode run, moves whole before `brew cleanup` could
+/// empty part of it, so the bytes counted as moved are the bytes moved.
+#[test]
+fn a_tool_removal_runs_after_the_moves_to_the_trash() {
+    let root = fixture_root("tool-after-moves", &["Homebrew"]);
+    let sinks = Sinks::default();
+    let brew = tool("homebrew", DesktopTool::Remove { sure: true }, &sinks);
+    let plan = [
+        cleanup(300),
+        planned("user-caches", &root, "Homebrew", Removal::MoveToTrash),
+    ];
+    let report = run_tools(
+        &TempStore::new(),
+        &root,
+        &plan,
+        vec![Box::new(brew), Box::new(fixture("user-caches"))],
+        &MockChecker::none(),
+        &sinks,
+    );
+    assert_eq!(sinks.log(), ["trash Homebrew", "run <homebrew:cleanup>"]);
+    assert_eq!(
+        report.results[0].item.category_id, "homebrew",
+        "results stay in plan order"
+    );
+    let _ = remove_recursive_safe(&root);
+}

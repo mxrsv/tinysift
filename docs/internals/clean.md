@@ -202,9 +202,11 @@ Concurrent additions leave their folder with `ENOTEMPTY`, recorded as a failure.
 
 `gated_items` rechecks the table at run time against the providers, so a plan can never delete what
 only goes to the Trash, never delete a tool's store, and never give a `needs_admin` category any
-other removal. `execution_order` runs the administrator batch first, then `Delete`, tool commands,
-`EmptyTrash` and last `MoveToTrash`, so emptying the Trash never takes what the same run moved
-there. Results stay in plan order. Nothing is retried another way: a failed move is not deleted, a
+other removal. `execution_order` runs the administrator batch first, then `Delete`, prunes and
+requests, `EmptyTrash`, `MoveToTrash` and last `RunTool(Remove)`, so emptying the Trash never takes
+what the same run moved there, and a folder moved in the run (App Caches' `Homebrew` in Trash mode)
+moves whole before `brew cleanup` could empty part of it, which would leave its moved bytes
+overcounted. Results stay in plan order. Nothing is retried another way: a failed move is not deleted, a
 failed deletion is not moved or escalated. A failed `EmptyTrash` (a timeout included) skips every
 `MoveToTrash` after it with `SafetyCheckFailed`, because Finder may still be emptying and would take
 what the run moves in. A denied Empty Trash only fails its row: Finder never started, and moves need
