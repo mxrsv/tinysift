@@ -4,7 +4,8 @@ use std::sync::Arc;
 use crate::engine_error;
 use crate::error::Result;
 
-use super::{run_tool, CleanProvider};
+use super::tool_command::run_tool_command;
+use super::{run_tool, CleanProvider, DesktopTool};
 use crate::clean::runner::{CommandRunner, RealRunner};
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
@@ -25,7 +26,15 @@ const PLACEHOLDER_VOLUMES: &str = "<docker:volumes>";
 const CACHE_KINDS: &[DfKind] = &[DfKind::Images, DfKind::BuildCache];
 const VOLUME_KINDS: &[DfKind] = &[DfKind::Volumes];
 
-/// Images and build cache: Docker pulls or rebuilds them on demand.
+/// What the desktop prunes: only what has sat unused for a week, so a build
+/// or pull of the last days survives. `docker system df` has no such filter,
+/// so its Reclaimable figure is only a ceiling of what these free.
+const DESKTOP_IMAGES_PRUNE: &[&str] = &["image", "prune", "-af", "--filter", "until=168h"];
+const DESKTOP_BUILD_PRUNE: &[&str] = &["builder", "prune", "-f", "--filter", "until=168h"];
+
+/// Images and build cache: Docker pulls or rebuilds them on demand. Not
+/// gated on Docker Desktop: its daemon runs only while the app does, and
+/// both `docker system df` and the prunes go through that daemon.
 pub struct Docker {
     runner: Arc<dyn CommandRunner>,
 }
@@ -68,9 +77,6 @@ impl CleanProvider for Docker {
     fn risk(&self) -> RiskLevel {
         RiskLevel::Review
     }
-    fn requires_app_quit(&self) -> Option<&'static str> {
-        Some(APP)
-    }
     fn available(&self) -> bool {
         self.runner.which("docker")
     }
@@ -89,6 +95,40 @@ impl CleanProvider for Docker {
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
         prune(self.runner.as_ref(), items, action, CACHE_KINDS, ID)
     }
+    /// Reclaimable counts images newer than the prune's filter keeps, so
+    /// the figure is a ceiling.
+    fn desktop_tool(&self) -> Option<DesktopTool> {
+        self.runner
+            .which("docker")
+            .then_some(DesktopTool::Remove { sure: false })
+    }
+    fn run_desktop_tool(&self, item: &CleanItem) -> std::result::Result<(), String> {
+        let args = cache_kind(&item.path)?
+            .desktop_prune_args()
+            .ok_or("Docker volumes are never pruned from the app")?;
+        run_tool_command(self.runner.as_ref(), "docker", args)
+    }
+    /// Reclaimable of the item's kind now, from `docker system df`.
+    fn tool_freeable(&self, item: &CleanItem) -> Option<std::result::Result<u64, String>> {
+        let kind = cache_kind(&item.path).ok()?;
+        let found = discover_kinds(self.runner.as_ref(), &[kind], ID, LABEL, RiskLevel::Review);
+        Some(
+            found
+                .map(|items| items.iter().map(|i| i.size).sum())
+                .map_err(|e| e.to_string()),
+        )
+    }
+    fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
+        cache_kind(path).map(|_| ())
+    }
+}
+
+/// The images or build-cache kind a placeholder names; anything else is
+/// refused.
+fn cache_kind(path: &Path) -> std::result::Result<DfKind, String> {
+    DfKind::from_placeholder(path)
+        .filter(|kind| CACHE_KINDS.contains(kind))
+        .ok_or_else(|| format!("{} is not Docker images or build cache", path.display()))
 }
 
 /// Volumes hold container data (databases, uploads) that nothing brings
@@ -252,6 +292,16 @@ impl DfKind {
             .find(|kind| path == Path::new(kind.placeholder()))
     }
 
+    /// The desktop's prune of a cache kind (`DESKTOP_IMAGES_PRUNE`,
+    /// `DESKTOP_BUILD_PRUNE`); volumes have none.
+    fn desktop_prune_args(self) -> Option<&'static [&'static str]> {
+        match self {
+            DfKind::Images => Some(DESKTOP_IMAGES_PRUNE),
+            DfKind::BuildCache => Some(DESKTOP_BUILD_PRUNE),
+            DfKind::Volumes => None,
+        }
+    }
+
     /// `-a` on `volume prune` (Docker 23+) also removes unused named
     /// volumes, which is what `system df` counts.
     fn prune_args(self) -> &'static [&'static str] {
@@ -329,9 +379,61 @@ mod tests {
     }
 
     #[test]
-    fn docker_gates_desktop() {
-        let p = Docker::new();
-        assert_eq!(p.requires_app_quit(), Some(APP));
+    fn docker_is_not_gated_on_docker_desktop_whose_daemon_it_needs() {
+        assert_eq!(Docker::new().requires_app_quit(), None);
+        assert!(Docker::new().quit_apps().is_empty());
+    }
+
+    #[test]
+    fn the_desktop_prunes_only_a_week_old_data_of_the_selected_kind() {
+        let runner = Arc::new(
+            df_runner()
+                .with_exit("docker", DESKTOP_IMAGES_PRUNE, 0, "")
+                .with_exit("docker", DESKTOP_BUILD_PRUNE, 0, ""),
+        );
+        let p = Docker::with_runner(runner.clone());
+        assert_eq!(p.desktop_tool(), Some(DesktopTool::Remove { sure: false }));
+        assert!(!p.desktop_trash_paths());
+        let items = p.discover(&ScanContext::unchecked()).unwrap();
+        let build = items
+            .iter()
+            .find(|i| i.path == Path::new(PLACEHOLDER_BUILD));
+        let build = build.unwrap();
+        assert_eq!(p.check_item(&build.path), Ok(()));
+        assert_eq!(p.run_desktop_tool(build), Ok(()));
+        assert_eq!(p.tool_freeable(build), Some(Ok(build.size)));
+        let calls = calls(&runner);
+        assert!(calls.contains(&"docker builder prune -f --filter until=168h".to_string()));
+        assert!(!ran(&runner, "image prune"), "{calls:?}");
+        assert!(!ran(&runner, "volume"), "{calls:?}");
+        let volumes = PathBuf::from(PLACEHOLDER_VOLUMES);
+        assert!(p.check_item(&volumes).is_err());
+        let item = CleanItem {
+            path: volumes,
+            ..build.clone()
+        };
+        assert!(p.run_desktop_tool(&item).is_err());
+        assert_eq!(p.tool_freeable(&item), None);
+        assert!(!ran(&runner, "volume"));
+    }
+
+    #[test]
+    fn a_docker_df_that_fails_after_the_prune_cannot_be_measured() {
+        let runner = Arc::new(
+            MockRunner::new()
+                .with_which("docker")
+                .with_exit("docker", DF_ARGS, 1, ""),
+        );
+        let p = Docker::with_runner(runner);
+        let item = CleanItem {
+            category_id: ID.into(),
+            category_label: LABEL.into(),
+            path: PathBuf::from(PLACEHOLDER_IMAGES),
+            size: 1,
+            risk: RiskLevel::Review,
+            evidence: Vec::new(),
+        };
+        assert!(matches!(p.tool_freeable(&item), Some(Err(_))));
     }
 
     #[test]

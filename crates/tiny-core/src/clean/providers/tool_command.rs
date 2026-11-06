@@ -70,6 +70,7 @@ mod tests {
                 .with_which("pnpm")
                 .with_which("brew")
                 .with_which("bun")
+                .with_which("docker")
                 .with_which("/opt/homebrew/bin/pip3"),
         );
         let options = crate::options::CleanOptions::default();
@@ -86,6 +87,7 @@ mod tests {
                 ("pip-cache", DesktopTool::Prune),
                 ("simulator-runtimes", DesktopTool::Request),
                 ("homebrew", DesktopTool::Remove { sure: true }),
+                ("docker", DesktopTool::Remove { sure: false }),
             ],
             "simulator-runtime-images stays report only (XcodeNotInstalled)"
         );
