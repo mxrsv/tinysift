@@ -373,10 +373,10 @@ mod tests {
             Some((days, clock)) => (days.parse::<f64>().ok()?, clock),
             None => (0.0, text),
         };
-        let seconds = clock.split(':').try_fold(days * 24.0 * 60.0, |acc, part| {
+        let seconds = clock.split(':').try_fold(0.0, |acc, part| {
             Some(acc * 60.0 + part.parse::<f64>().ok()?)
         })?;
-        Some((seconds * 1e9).round() as u64)
+        Some(((days * 86_400.0 + seconds) * 1e9).round() as u64)
     }
 
     #[test]
