@@ -32,16 +32,19 @@ Things that are not obvious from reading one file.
   ([`measure.rs`](../../crates/tiny-core/src/clean/checked_execute/measure.rs)). Uninstall and the
   CLI use the fail-fast [walker](../../crates/tiny-core/src/clean/fs_safe/remove_tree.rs) form,
   where earlier entries may already be gone when it stops.
-- **The measuring walk opens a window, so identity is checked after it.** `prepare` repeats the
-  fingerprint (the listing for the Trash row), home-volume and root checks after the walk
-  (`same_file` in [`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)), and
-  the deletion pins its root to the fingerprinted device and inode. Without both, a folder replaced
-  or a disk image mounted at the path during the walk would be deleted, and anything trashed during
-  the walk of `~/.Trash` emptied. Finder's Empty Trash cannot be pinned, so its window is only from
-  the check to Finder.
-- **Freed bytes cost a walk before and after each removal.** A partly removed item, a pruned cache
-  and the emptied Trash are walked twice; a fully deleted item only before, since a missing path
-  measures 0 without a walk.
+- **Slow checks and measuring walks open a window, so identity is checked last.** `prepare`
+  repeats the fingerprint (the listing for the Trash row), home-volume and root checks right before
+  acting (`same_file` in [`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)),
+  and the deletion pins its root to the fingerprinted device and inode. Without both, a folder
+  replaced or a disk image mounted at the path meanwhile would be deleted, and anything trashed
+  during the walk of `~/.Trash` emptied. Finder's Empty Trash cannot be pinned, so its window is only
+  from the check to Finder.
+- **A deletion counts what it unlinks; other routes cost a walk before and after.** Counting in the
+  deletion's own pass replaced a walk before it: on 200k one-byte files on a freshly attached APFS
+  image (cold cache) walk plus deletion took 11.9–12.0 s, the counting deletion 10.2–10.5 s. The
+  remaining cost is one `getattrlistat` per file for APFS sharing. A pruned cache, a tool removal and
+  the emptied Trash are still walked twice (another process removes them); a partly deleted item is
+  walked once, after, for what it left.
 - **Permanent deletion rejects symlinked ancestors.** The
   [walker](../../crates/tiny-core/src/clean/fs_safe/remove_tree.rs) opens one component at a time;
   a path through `/var` on a Mac where it aliases `/private/var` is refused. Tests must canonicalize
@@ -56,8 +59,11 @@ Things that are not obvious from reading one file.
   (`ToolLookup::app`); when a prune frees less than the sized store, check which pnpm resolved.
 - **uv in Trash mode moves the whole cache folder** to the Trash, since a prune has no Trash
   route; only Permanent mode runs `uv cache prune`.
-- **Homebrew's figure costs three dry runs.** `brew cleanup --prune=30 --dry-run` (about 5 s)
-  runs at the scan and right before and after the cleanup, and the paths it lists are sized by
+- **Homebrew's list outlives the provider.** `brew cleanup --prune=30 --dry-run` (about 5 s) runs
+  at the scan; a Clean within a preview's lifetime (15 minutes) sizes that same list right before
+  and right after the cleanup, so it spawns `brew` once, for the cleanup. The list lives in a
+  static (`LAST_LISTING`), because the app builds new providers for a run. Paths the cleanup would
+  remove that were not in the scan's list are not measured, so freed can only read low. The paths are sized by
   our own walk, so figure and freed follow one rule
   ([`homebrew.rs`](../../crates/tiny-core/src/clean/providers/homebrew.rs)). Paths inside
   `~/Library/Caches` count in neither: `user-caches` lists Homebrew's download cache whole, so a
@@ -74,6 +80,10 @@ Things that are not obvious from reading one file.
   executable file is there; before, any absolute path "resolved", so probing fixed locations
   always took the first ([`runner.rs`](../../crates/tiny-core/src/runner.rs)). `MockRunner::which`
   checks a set, not the disk, so only a real `ToolRunner` test catches this.
+- **A project provider scanned alone pays the whole shared walk.** The walk of the dev roots
+  serves every project walker at once, so scanning only `build-folders` also walks hidden folders
+  and Rust `target/` that only the others need; a full scan walks each root once instead of five
+  times ([`project_walk.rs`](../../crates/tiny-core/src/clean/providers/project_walk.rs)).
 - **`/usr/bin/pip3` is a shim.** Without the Command Line Tools it asks to install them, so
   `pip-cache` runs only Homebrew's or the Command Line Tools' `pip3` by absolute path and spawns
   nothing unless `~/Library/Caches/pip` exists. Only with such a `pip3` does `pip-cache` list that

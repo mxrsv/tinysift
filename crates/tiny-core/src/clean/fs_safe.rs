@@ -110,7 +110,7 @@ where
 
 /// Lists `dir`'s immediate children with their `symlink_metadata`. Read
 /// failures are recorded in `ctx` under `walk_root` instead of being dropped.
-fn read_entries(
+pub(crate) fn read_entries(
     walk_root: &Path,
     dir: &Path,
     ctx: &ScanContext<'_>,
@@ -336,9 +336,11 @@ pub trait Delete: Send + Sync {
     fn delete(&self, path: &Path) -> std::io::Result<()>;
 
     /// Deletes `path` for good, going on past entries that fail, starting
-    /// only from the file `identity` names when given. A route that cannot
-    /// go on past an entry reports its one failure at `path`; one that
-    /// cannot pin the root ignores `identity` (tests' fakes).
+    /// only from the file `identity` names when given, and counts what it
+    /// freed (`TreeRemoval::freed`). A route that cannot go on past an entry
+    /// reports its one failure at `path`; one that cannot pin the root
+    /// ignores `identity`, and one that cannot count reports 0 freed (tests'
+    /// fakes).
     fn delete_each(&self, path: &Path, identity: Option<FileIdentity>) -> TreeRemoval {
         let _ = identity;
         match self.delete(path) {

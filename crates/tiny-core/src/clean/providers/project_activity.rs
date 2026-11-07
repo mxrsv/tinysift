@@ -52,7 +52,7 @@ const UNLISTED: &str = "git could not tell whether it holds tracked files";
 const DETAIL_CHARS: usize = 200;
 
 /// What the manifest and git say about a project.
-#[derive(Debug, Default, PartialEq)]
+#[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct Activity {
     /// The facts gathered, in order; partial when activity could not be told.
     pub evidence: Vec<Evidence>,
@@ -79,8 +79,26 @@ pub(crate) fn assess(
 /// Whether the project of `manifest` is idle for more than `idle_days`, with
 /// the facts behind the answer. Anything that cannot be told (unreadable
 /// manifest, git without an answer, cancellation) is not idle. `Err` only
-/// when git cannot run at all for a project that needs it.
+/// when git cannot run at all for a project that needs it. Asked once per
+/// scan: `node-modules` and `build-folders` share a `package.json`, so the
+/// second asks no git again.
 pub(crate) fn activity(
+    runner: &dyn CommandRunner,
+    manifest: &Path,
+    idle_days: u64,
+    ctx: &ScanContext<'_>,
+) -> Result<Activity> {
+    if let Some(known) = ctx.known_activity(manifest, idle_days) {
+        return Ok(known);
+    }
+    let answer = activity_now(runner, manifest, idle_days, ctx)?;
+    if !ctx.is_cancelled() {
+        ctx.note_activity(manifest, idle_days, answer.clone());
+    }
+    Ok(answer)
+}
+
+fn activity_now(
     runner: &dyn CommandRunner,
     manifest: &Path,
     idle_days: u64,
@@ -469,6 +487,42 @@ mod tests {
                 Box::new(p)
             }
         }
+    }
+
+    /// `node-modules` and `build-folders` judge the same `package.json`: git
+    /// is asked once per scan, and again by the next scan.
+    #[test]
+    fn a_projects_activity_is_asked_of_git_once_per_scan() {
+        let root = cancellation_fixture();
+        let manifest = root.path().join("project-0/package.json");
+        let runner = CancellingRunner {
+            flag: AtomicBool::new(false),
+            calls: AtomicUsize::new(0),
+        };
+        let ctx = ScanContext::unchecked();
+        let first = activity(&runner, &manifest, IDLE_DAYS, &ctx).unwrap();
+        let asked = runner.calls.load(Ordering::SeqCst);
+        assert!(asked > 0);
+        assert_eq!(
+            activity(&runner, &manifest, IDLE_DAYS, &ctx).unwrap(),
+            first
+        );
+        assert_eq!(
+            runner.calls.load(Ordering::SeqCst),
+            asked,
+            "no git the second time"
+        );
+        activity(&runner, &manifest, 7, &ctx).unwrap();
+        assert!(
+            runner.calls.load(Ordering::SeqCst) > asked,
+            "other idle days ask again"
+        );
+        let next = runner.calls.load(Ordering::SeqCst);
+        activity(&runner, &manifest, IDLE_DAYS, &ScanContext::unchecked()).unwrap();
+        assert!(
+            runner.calls.load(Ordering::SeqCst) > next,
+            "a new scan asks again"
+        );
     }
 
     #[test]

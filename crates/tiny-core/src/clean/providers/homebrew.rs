@@ -7,15 +7,19 @@
 //! spread over the Homebrew prefix (`/opt/homebrew/Cellar`, its vendored
 //! Ruby) that are no discovery root. Its size is the dry run's list sized by
 //! TinySift's own walk, the rule the run is measured by
-//! (`CleanProvider::tool_freeable`): before and after the cleanup the same
-//! dry run is sized again, so the freed bytes are what left the disk. Paths
+//! (`CleanProvider::tool_freeable`): right before and right after the
+//! cleanup the same list is sized again, so the freed bytes are what left
+//! the disk. The list is the scan's while it is fresh (`LISTING_FRESH`),
+//! shared by the scan's and the run's providers, so a Clean spawns `brew`
+//! once, for the cleanup itself. Paths
 //! inside `~/Library/Caches` are left out of both: `user-caches` lists
 //! Homebrew's download cache whole, so counting them here would count them
 //! twice.
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, LazyLock, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::engine_error;
 use crate::error::Result;
@@ -43,18 +47,48 @@ fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
 }
 
+/// How long a dry run's list stands for a Clean: a preview's lifetime, so a
+/// Clean confirmed from a scan reuses the scan's list.
+const LISTING_FRESH: Duration = Duration::from_secs(15 * 60);
+
+/// The paths the latest dry run listed, and when.
+#[derive(Debug, Clone)]
+struct Listing {
+    at: Instant,
+    paths: Vec<PathBuf>,
+}
+
+type SharedListing = Arc<Mutex<Option<Listing>>>;
+
+/// The app's providers are built anew for a run, so the scan's list lives
+/// here, not in one provider.
+static LAST_LISTING: LazyLock<SharedListing> = LazyLock::new(SharedListing::default);
+
 pub struct Homebrew {
     runner: Arc<dyn CommandRunner>,
+    listing: SharedListing,
 }
 
 impl Homebrew {
     pub fn with_runner(runner: Arc<dyn CommandRunner>) -> Self {
-        Self { runner }
+        Self {
+            runner,
+            listing: LAST_LISTING.clone(),
+        }
     }
 
-    /// What `brew cleanup --prune=30` would free now, sized by TinySift's
-    /// walk. A dry run that cannot run or fails is an error.
-    fn freeable(&self, home: Option<&Path>) -> std::result::Result<u64, String> {
+    /// The same provider with a list of its own, so tests never share one.
+    #[cfg(test)]
+    fn isolated(runner: Arc<dyn CommandRunner>) -> Self {
+        Self {
+            runner,
+            listing: SharedListing::default(),
+        }
+    }
+
+    /// Runs the dry run now and keeps its list. A dry run that cannot run
+    /// or fails is an error.
+    fn list(&self, home: Option<&Path>) -> std::result::Result<Vec<PathBuf>, String> {
         let out = run_tool(self.runner.as_ref(), BREW, DRY_RUN).map_err(|e| e.to_string())?;
         if !out.success() {
             let reason = out.stderr.lines().map(str::trim).find(|l| !l.is_empty());
@@ -63,11 +97,40 @@ impl Homebrew {
                 reason.unwrap_or("no error output")
             ));
         }
-        Ok(would_remove(&out.stdout, home)
-            .iter()
-            .map(|path| size_of(path))
-            .fold(0u64, u64::saturating_add))
+        let paths = would_remove(&out.stdout, home);
+        let listing = Listing {
+            at: Instant::now(),
+            paths: paths.clone(),
+        };
+        *self.listing.lock().unwrap_or_else(|e| e.into_inner()) = Some(listing);
+        Ok(paths)
     }
+
+    /// The kept list while it is fresh.
+    fn fresh_list(&self) -> Option<Vec<PathBuf>> {
+        let kept = self.listing.lock().unwrap_or_else(|e| e.into_inner());
+        kept.as_ref()
+            .filter(|listing| listing.at.elapsed() < LISTING_FRESH)
+            .map(|listing| listing.paths.clone())
+    }
+
+    /// What the listed paths hold now, by TinySift's walk: the kept list
+    /// while fresh, a new dry run's otherwise. Before and after a cleanup
+    /// both size the same list, so the second never spawns `brew`.
+    fn freeable(&self, home: Option<&Path>) -> std::result::Result<u64, String> {
+        let paths = match self.fresh_list() {
+            Some(paths) => paths,
+            None => self.list(home)?,
+        };
+        Ok(sized(&paths))
+    }
+}
+
+fn sized(paths: &[PathBuf]) -> u64 {
+    paths
+        .iter()
+        .map(|path| size_of(path))
+        .fold(0u64, u64::saturating_add)
 }
 
 impl CleanProvider for Homebrew {
@@ -97,9 +160,11 @@ impl CleanProvider for Homebrew {
         Some(BREW)
     }
     fn discover(&self, _ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
-        let size = self
-            .freeable(home().as_deref())
+        // A scan always asks brew afresh.
+        let paths = self
+            .list(home().as_deref())
             .map_err(|e| engine_error!("{e}"))?;
+        let size = sized(&paths);
         if size == 0 {
             return Ok(Vec::new());
         }
@@ -219,7 +284,7 @@ mod tests {
                 .with_which(BREW)
                 .with_exit(BREW, DRY_RUN, 0, &stdout),
         );
-        let brew = Homebrew::with_runner(runner.clone());
+        let brew = Homebrew::isolated(runner.clone());
         let size = brew.freeable(Some(&home)).unwrap();
         assert_eq!(size, size_of(&keg) + size_of(&ruby));
         assert!(size >= 80 * 1024, "{size}");
@@ -242,17 +307,17 @@ mod tests {
                 .with_which(BREW)
                 .with_exit(BREW, DRY_RUN, 0, ""),
         );
-        let brew = Homebrew::with_runner(quiet);
+        let brew = Homebrew::isolated(quiet);
         assert!(brew.discover(&ScanContext::unchecked()).unwrap().is_empty());
         let failing = Arc::new(
             MockRunner::new()
                 .with_which(BREW)
                 .with_exit(BREW, DRY_RUN, 1, ""),
         );
-        assert!(Homebrew::with_runner(failing)
+        assert!(Homebrew::isolated(failing)
             .discover(&ScanContext::unchecked())
             .is_err());
-        let missing = Homebrew::with_runner(Arc::new(MockRunner::new()));
+        let missing = Homebrew::isolated(Arc::new(MockRunner::new()));
         assert!(!missing.available());
         assert_eq!(missing.desktop_tool(), None);
     }
@@ -273,7 +338,7 @@ mod tests {
                 .with_exit(BREW, CLEANUP, 0, "")
                 .with_exit(BREW, DRY_RUN, 0, ""),
         );
-        let brew = Homebrew::with_runner(runner.clone());
+        let brew = Homebrew::isolated(runner.clone());
         assert_eq!(brew.run_desktop_tool(&item), Ok(()));
         assert_eq!(brew.tool_freeable(&item), Some(Ok(0)));
         let other = CleanItem {
@@ -292,6 +357,61 @@ mod tests {
         assert!(runner.run_calls.lock().unwrap().is_empty());
     }
 
+    /// A Clean right after a scan spawns brew once, for the cleanup: before
+    /// and after are the scan's list sized again, so freed is what left it.
+    #[test]
+    fn a_clean_after_a_scan_measures_the_scans_list_without_another_dry_run() {
+        let (dir, keg, ruby, cached) = fixture();
+        let stdout = dry_run(&lines(&keg, &ruby, &cached));
+        let runner = Arc::new(
+            MockRunner::new()
+                .with_which(BREW)
+                .with_exit(BREW, DRY_RUN, 0, &stdout)
+                .with_exit(BREW, CLEANUP, 0, ""),
+        );
+        let brew = Homebrew::isolated(runner.clone());
+        let home = dir.path().join("home");
+        let scanned = brew.list(Some(&home)).unwrap();
+        assert_eq!(scanned, vec![keg.clone(), ruby.clone()]);
+        let item = CleanItem {
+            category_id: ID.into(),
+            category_label: LABEL.into(),
+            path: PathBuf::from(PLACEHOLDER),
+            size: 1,
+            risk: RiskLevel::Review,
+            evidence: Vec::new(),
+        };
+        let keg_size = size_of(&keg);
+        let Some(Ok(before)) = brew.tool_freeable(&item) else {
+            panic!("measured")
+        };
+        assert_eq!(brew.run_desktop_tool(&item), Ok(()));
+        std::fs::remove_dir_all(&keg).unwrap(); // what the cleanup removed
+        let Some(Ok(after)) = brew.tool_freeable(&item) else {
+            panic!("measured")
+        };
+        assert_eq!(
+            before - after,
+            keg_size,
+            "freed is what left the listed paths"
+        );
+        assert_eq!(
+            runner.output_calls.lock().unwrap().clone(),
+            [
+                "brew cleanup --prune=30 --dry-run",
+                "brew cleanup --prune=30"
+            ],
+            "the scan's dry run, then only the cleanup"
+        );
+        // A list older than a preview's lifetime is asked again.
+        let old = Instant::now().checked_sub(LISTING_FRESH + Duration::from_secs(1));
+        if let Some(at) = old {
+            brew.listing.lock().unwrap().as_mut().unwrap().at = at;
+            brew.tool_freeable(&item);
+            assert_eq!(runner.output_calls.lock().unwrap().len(), 3);
+        }
+    }
+
     #[test]
     fn the_cli_runs_the_same_cleanup_once() {
         let runner = Arc::new(
@@ -307,7 +427,7 @@ mod tests {
             risk: RiskLevel::Review,
             evidence: Vec::new(),
         };
-        let report = Homebrew::with_runner(runner.clone())
+        let report = Homebrew::isolated(runner.clone())
             .execute(&[item], ExecAction::HardDelete)
             .unwrap();
         assert_eq!(report.removed_paths, vec![PathBuf::from(PLACEHOLDER)]);

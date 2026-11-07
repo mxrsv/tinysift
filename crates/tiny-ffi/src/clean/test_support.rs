@@ -241,6 +241,27 @@ impl Delete for FakeTrash {
             false => Ok(()),
         }
     }
+
+    /// With `deletes`, the real best-effort removal, so it counts what it
+    /// frees; otherwise `delete`, which removes nothing and frees nothing.
+    fn delete_each(
+        &self,
+        path: &Path,
+        identity: Option<tiny_core::clean::fs_safe::FileIdentity>,
+    ) -> tiny_core::clean::fs_safe::TreeRemoval {
+        use tiny_core::clean::fs_safe::{remove_recursive_one_device_each, TreeRemoval};
+        if !self.deletes {
+            return Delete::delete(self, path).map_or_else(
+                |error| TreeRemoval::failed_at(path, error),
+                |()| TreeRemoval::default(),
+            );
+        }
+        if self.fail_delete_on.is_some_and(|name| path.ends_with(name)) {
+            return TreeRemoval::failed_at(path, std::io::Error::other("busy"));
+        }
+        self.step("delete", Some(path));
+        remove_recursive_one_device_each(path, identity)
+    }
 }
 
 impl ElevatedDelete for FakeTrash {

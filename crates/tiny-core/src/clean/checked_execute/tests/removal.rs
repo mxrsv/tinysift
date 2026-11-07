@@ -71,6 +71,20 @@ impl Delete for Sinks {
         // Only the tests' own fixtures reach this sink.
         remove_recursive_safe(path)
     }
+
+    /// The real best-effort removal, so it counts what it frees.
+    fn delete_each(
+        &self,
+        path: &Path,
+        identity: Option<crate::clean::fs_safe::FileIdentity>,
+    ) -> crate::clean::fs_safe::TreeRemoval {
+        if self.fail_delete.is_some_and(|fail| path.ends_with(fail)) {
+            let denied = io::Error::new(io::ErrorKind::PermissionDenied, "permission denied");
+            return crate::clean::fs_safe::TreeRemoval::failed_at(path, denied);
+        }
+        self.record(format!("delete {}", name(path)));
+        crate::clean::fs_safe::remove_recursive_one_device_each(path, identity)
+    }
 }
 
 /// The allocated blocks of one test file.

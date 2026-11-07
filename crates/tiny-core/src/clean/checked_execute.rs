@@ -34,7 +34,7 @@ use super::trash_plan::{
 mod measure;
 mod report;
 
-use measure::{frees_space, measure, measure_planned, settle, Measured, Settled};
+use measure::{measure, measure_planned, settle, settle_counted, walked_around, Measured, Settled};
 pub use report::{
     CheckedExecReport, ItemOutcome, ItemResult, RemovalExtent, SkipReason, StopReason,
 };
@@ -257,6 +257,7 @@ fn delete_as_administrator(
             outcome,
             before,
             removed_some: false,
+            counted: None,
             failure,
         };
         done[index] = acted.settle(|| measure(path, true));
@@ -279,12 +280,12 @@ fn prepare(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<Option<Measur
     policy_unchanged(ctx.policy).map_err(Halt::Stop)?;
     validate(planned, ctx).map_err(Halt::Skip)?;
     // Measured among the slow checks, so the checks below also cover the
-    // time its walk takes.
+    // time its walk takes. A deletion counts what it unlinks instead.
     let before =
-        frees_space(planned.removal).then(|| measure_planned(planned, ctx.providers, false));
+        walked_around(planned.removal).then(|| measure_planned(planned, ctx.providers, false));
     #[cfg(test)]
     measure::AFTER_MEASURE.with(|hook| {
-        if let (Some(hook), Some(_)) = (hook.borrow_mut().as_mut(), before) {
+        if let Some(hook) = hook.borrow_mut().as_mut() {
             hook(&planned.item.path);
         }
     });
@@ -292,11 +293,10 @@ fn prepare(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<Option<Measur
     policy_unchanged(ctx.policy).map_err(Halt::Stop)?;
     if names_a_file(planned) {
         protection_skip(ctx.policy, &planned.item.path).map_err(Halt::Skip)?;
-        // The walk takes time: the path must still be the file discovery
-        // fingerprinted, and the Trash must still hold only what it listed.
-        if before.is_some() {
-            same_file(planned, ctx).map_err(Halt::Skip)?;
-        }
+        // The checks (and any walk) take time: the path must still be the
+        // file discovery fingerprinted, and the Trash must still hold only
+        // what it listed. A deletion also pins its root to it.
+        same_file(planned, ctx).map_err(Halt::Skip)?;
     }
     // Last check before the mutation.
     if ctx.is_cancelled() {
@@ -312,6 +312,9 @@ struct Acted {
     before: Option<Measured>,
     /// The route removed at least one entry.
     removed_some: bool,
+    /// What the route counted as freed while removing (the best-effort
+    /// deletion); then nothing was measured before.
+    counted: Option<Measured>,
     /// What the route knows of its failure beyond the outcome.
     failure: Option<Failure>,
 }
@@ -322,14 +325,19 @@ impl Acted {
             outcome,
             before: None,
             removed_some: false,
+            counted: None,
             failure: None,
         }
     }
 
     /// Measures again (`measure_again`), right after the action, and puts a
-    /// prune's or tool removal's measured bytes into its outcome.
+    /// prune's or tool removal's measured bytes into its outcome. A deletion
+    /// that counted what it freed is measured again only for what it left.
     fn settle(self, measure_again: impl FnOnce() -> Measured) -> Done {
-        let settled = settle(measure_again, &self.outcome, self.before, self.removed_some);
+        let settled = match self.counted {
+            Some(freed) => settle_counted(measure_again, &self.outcome, freed, self.removed_some),
+            None => settle(measure_again, &self.outcome, self.before, self.removed_some),
+        };
         let outcome = match self.outcome {
             ItemOutcome::Pruned { .. } => ItemOutcome::Pruned {
                 bytes_freed: settled.freed,
@@ -355,6 +363,7 @@ fn act_on(planned: &PlannedItem, ctx: &ExecContext<'_>, stopped: &mut Option<Sto
         outcome,
         before,
         removed_some: false,
+        counted: None,
         failure: None,
     };
     // One route per item: a failure is reported, never retried another way.
@@ -381,6 +390,10 @@ fn act_on(planned: &PlannedItem, ctx: &ExecContext<'_>, stopped: &mut Option<Sto
                 outcome,
                 before,
                 removed_some: removal.removed_entries > 0,
+                counted: Some(Measured {
+                    bytes: removal.freed,
+                    upper_bound: removal.freed_is_upper_bound,
+                }),
                 failure,
             };
         }

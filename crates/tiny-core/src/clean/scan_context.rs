@@ -9,12 +9,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::engine_error;
 use crate::error::Result;
 
 use super::freed_size::SharedBlocks;
 use super::process::{AppProbe, PgrepChecker};
+use super::providers::project_activity::Activity;
+use super::providers::project_walk::ProjectWalk;
 
 /// Entries under one walked path that could not be read.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -78,6 +81,10 @@ pub struct ScanContext<'a> {
     /// Set by the desktop only: refuse protected paths at discovery.
     protected_home: Option<PathBuf>,
     findings: RefCell<ScanFindings>,
+    /// Each dev root walked once for every project provider of this scan.
+    project_walks: RefCell<BTreeMap<PathBuf, Arc<ProjectWalk>>>,
+    /// What git said about each project manifest this scan, per idle days.
+    activities: RefCell<BTreeMap<(PathBuf, u64), Activity>>,
 }
 
 static LEGACY_PROBE: PgrepChecker = PgrepChecker;
@@ -89,6 +96,8 @@ impl<'a> ScanContext<'a> {
             probe,
             protected_home: None,
             findings: RefCell::new(ScanFindings::default()),
+            project_walks: RefCell::default(),
+            activities: RefCell::default(),
         }
     }
 
@@ -195,6 +204,32 @@ impl<'a> ScanContext<'a> {
 
     pub fn add_root(&self, root: &Path) {
         self.findings.borrow_mut().roots.insert(root.to_path_buf());
+    }
+
+    /// The walk of `root` this scan already made, or the one `walk` makes now.
+    pub(crate) fn project_walk(
+        &self,
+        root: &Path,
+        walk: impl FnOnce(&Self) -> Arc<ProjectWalk>,
+    ) -> Arc<ProjectWalk> {
+        if let Some(walked) = self.project_walks.borrow().get(root) {
+            return walked.clone();
+        }
+        let walked = walk(self);
+        self.project_walks
+            .borrow_mut()
+            .insert(root.to_path_buf(), walked.clone());
+        walked
+    }
+
+    pub(crate) fn known_activity(&self, manifest: &Path, idle_days: u64) -> Option<Activity> {
+        let key = (manifest.to_path_buf(), idle_days);
+        self.activities.borrow().get(&key).cloned()
+    }
+
+    pub(crate) fn note_activity(&self, manifest: &Path, idle_days: u64, activity: Activity) {
+        let key = (manifest.to_path_buf(), idle_days);
+        self.activities.borrow_mut().insert(key, activity);
     }
 
     pub fn take_findings(&self) -> ScanFindings {

@@ -102,6 +102,7 @@ fn permanent_deletion_never_enters_a_directory_on_another_device() {
         &mut Sink {
             best_effort: false,
             removal: TreeRemoval::default(),
+            freed: FreedBytes::default(),
         },
     );
     assert_eq!(result.unwrap_err().raw_os_error(), Some(libc::EXDEV));
@@ -374,4 +375,73 @@ fn a_child_gone_before_its_open_is_removed_and_one_turned_into_a_link_is_changed
     assert_eq!(removal.failed_entries, 1);
     assert!(is_entry_changed(&removal.failures[0].error));
     assert_eq!(fs::read(base.join("outside/precious")).unwrap(), b"keep");
+}
+
+fn allocated(path: &Path) -> u64 {
+    std::os::unix::fs::MetadataExt::blocks(&fs::symlink_metadata(path).unwrap()) * 512
+}
+
+#[test]
+fn best_effort_counts_what_it_unlinked_by_the_freed_size_rule() {
+    let (_temp, base) = fixture();
+    let item = base.join("item");
+    fs::write(item.join("plain"), vec![1u8; 20_000]).unwrap();
+    fs::write(item.join("pair"), vec![2u8; 30_000]).unwrap();
+    fs::hard_link(item.join("pair"), item.join("sub/pair-link")).unwrap();
+    fs::write(item.join("shared"), vec![3u8; 40_000]).unwrap();
+    fs::hard_link(item.join("shared"), base.join("outside/shared")).unwrap();
+    let expected = allocated(&item.join("sub/file"))
+        + allocated(&item.join("plain"))
+        + allocated(&item.join("pair"));
+
+    let removal = remove_each(&item, true, None);
+
+    assert!(removal.is_complete(), "{removal:?}");
+    assert_eq!(
+        removal.freed, expected,
+        "the pair once; `shared` keeps its outside link"
+    );
+    assert_eq!(removal.freed_is_upper_bound, cfg!(not(target_os = "macos")));
+    assert_eq!(fs::read(base.join("outside/shared")).unwrap().len(), 40_000);
+}
+
+#[test]
+fn best_effort_counts_only_the_files_it_removed() {
+    let (_temp, base) = fixture();
+    let item = base.join("item");
+    fs::write(item.join("plain"), vec![1u8; 20_000]).unwrap();
+    fs::write(item.join("locked"), vec![2u8; 20_000]).unwrap();
+    let expected = allocated(&item.join("sub/file")) + allocated(&item.join("plain"));
+    let _lock = Locked::new(item.join("locked"));
+
+    let removal = remove_each(&item, true, None);
+
+    assert_eq!(removal.failed_entries, 1);
+    assert_eq!(removal.freed, expected, "the locked file stays, uncounted");
+    assert!(item.join("locked").exists());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn best_effort_counts_a_clone_family_once_and_not_one_with_a_member_outside() {
+    let clone = |from: &Path, to: &Path| {
+        let from = name(from.as_os_str()).unwrap();
+        let to = name(to.as_os_str()).unwrap();
+        // SAFETY: both arguments are valid NUL-terminated paths.
+        let rc = unsafe { libc::clonefile(from.as_ptr(), to.as_ptr(), 0) };
+        assert_eq!(rc, 0, "clonefile: {}", io::Error::last_os_error());
+    };
+    let (_temp, base) = fixture();
+    let item = base.join("item");
+    fs::write(item.join("original"), vec![7u8; 300_000]).unwrap();
+    clone(&item.join("original"), &item.join("copy"));
+    fs::write(item.join("kept"), vec![8u8; 300_000]).unwrap();
+    clone(&item.join("kept"), &base.join("outside/kept"));
+    let expected = allocated(&item.join("sub/file")) + allocated(&item.join("original"));
+
+    let removal = remove_each(&item, true, None);
+
+    assert!(removal.is_complete());
+    assert_eq!(removal.freed, expected);
+    assert!(!removal.freed_is_upper_bound, "APFS answered");
 }

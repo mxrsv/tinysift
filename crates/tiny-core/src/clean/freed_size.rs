@@ -268,6 +268,19 @@ fn sharing_of(_: &Path) -> Sharing {
     Sharing::Unknown
 }
 
+/// How `name`'s blocks inside the open folder `dir` are shared: the query
+/// `sharing_of` makes, descriptor-relative, for a removal that counts what
+/// it unlinks.
+#[cfg(target_os = "macos")]
+pub(crate) fn sharing_at(dir: std::os::fd::RawFd, name: &std::ffi::CStr) -> Sharing {
+    apfs::sharing_at(dir, name)
+}
+
+#[cfg(not(target_os = "macos"))]
+pub(crate) fn sharing_at(_: std::os::fd::RawFd, _: &std::ffi::CStr) -> Sharing {
+    Sharing::Unknown
+}
+
 /// One `getattrlist` call per file for the APFS clone attributes. They are
 /// "extended common" attributes, requested in the `forkattr` group with
 /// `FSOPT_ATTR_CMN_EXTENDED`.
@@ -300,6 +313,12 @@ mod apfs {
         let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
             return Sharing::Unknown;
         };
+        sharing_at(libc::AT_FDCWD, &path)
+    }
+
+    /// `sharing` of `name` inside the open folder `dir` (or the working
+    /// directory for `AT_FDCWD`), never following a final symlink.
+    pub(crate) fn sharing_at(dir: libc::c_int, name: &std::ffi::CStr) -> Sharing {
         let mut request = libc::attrlist {
             bitmapcount: libc::ATTR_BIT_MAP_COUNT,
             reserved: 0,
@@ -310,16 +329,18 @@ mod apfs {
             forkattr: REQUESTED,
         };
         let mut reply = Reply([0; 64]);
-        // SAFETY: `path` is NUL-terminated and both buffers outlive the call,
-        // which writes at most `reply.0.len()` bytes. `FSOPT_NOFOLLOW` reads
-        // a final symlink itself, never its target.
+        // SAFETY: `name` is NUL-terminated, `dir` is a live descriptor or
+        // AT_FDCWD, and both buffers outlive the call, which writes at most
+        // `reply.0.len()` bytes. `FSOPT_NOFOLLOW` reads a final symlink
+        // itself, never its target.
         let rc = unsafe {
-            libc::getattrlist(
-                path.as_ptr(),
+            libc::getattrlistat(
+                dir,
+                name.as_ptr(),
                 (&mut request as *mut libc::attrlist).cast(),
                 reply.0.as_mut_ptr().cast(),
                 reply.0.len(),
-                libc::FSOPT_NOFOLLOW | libc::FSOPT_ATTR_CMN_EXTENDED,
+                (libc::FSOPT_NOFOLLOW | libc::FSOPT_ATTR_CMN_EXTENDED).into(),
             )
         };
         if rc != 0 {
