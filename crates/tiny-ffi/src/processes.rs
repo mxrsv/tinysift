@@ -27,6 +27,11 @@ pub struct FfiProcessInfo {
     /// and swapped pages. `None` when it cannot be read.
     pub memory_bytes: Option<u64>,
     pub executable_path: Option<String>,
+    /// User plus system CPU time since the process started, including the children it has
+    /// reaped, in nanoseconds; it only grows while the process lives. `None` exactly when
+    /// `memory_bytes` is: another user's process, or one that is gone. Never zero for unread.
+    #[uniffi(default = None)]
+    pub cpu_time_ns: Option<u64>,
     /// Why `process_terminate` would refuse this process, if anything. Lets
     /// the UI disable Quit up front instead of offering a refused action.
     pub refusal: Option<FfiRefusal>,
@@ -374,6 +379,7 @@ impl From<ProcessInfo> for FfiProcessInfo {
             executable_path: info
                 .exe
                 .and_then(|path| path.into_os_string().into_string().ok()),
+            cpu_time_ns: info.cpu_time_ns,
             refusal,
         }
     }
@@ -497,9 +503,13 @@ mod tests {
             .expect("own process is sampled");
         assert!(me.is_current_user);
         assert!(me.cpu_measured);
-        // Only macOS reads a footprint; elsewhere memory stays unavailable.
+        // Only macOS reads a footprint and CPU time; elsewhere both stay unavailable.
         assert_eq!(
             me.memory_bytes.is_some_and(|bytes| bytes > 0),
+            cfg!(target_os = "macos")
+        );
+        assert_eq!(
+            me.cpu_time_ns.is_some_and(|ns| ns > 0),
             cfg!(target_os = "macos")
         );
         assert_eq!(me.refusal, Some(FfiRefusal::OwnProcess));
@@ -519,6 +529,7 @@ mod tests {
             cpu_measured: false,
             memory_bytes: Some(4096),
             footprint_bytes,
+            cpu_time_ns: None,
             exe: None,
         };
         assert_eq!(
@@ -527,6 +538,30 @@ mod tests {
         );
         // An unread footprint never falls back to resident memory.
         assert_eq!(FfiProcessInfo::from(info(None)).memory_bytes, None);
+    }
+
+    #[test]
+    fn cpu_time_crosses_the_boundary_and_unread_stays_unread() {
+        let info = |cpu_time_ns| ProcessInfo {
+            pid: 42,
+            name: "sample".into(),
+            user: None,
+            uid: None,
+            is_current_user: false,
+            parent_pid: None,
+            start_time: 1,
+            cpu_percent: None,
+            cpu_measured: false,
+            memory_bytes: Some(4096),
+            footprint_bytes: Some(1024),
+            cpu_time_ns,
+            exe: None,
+        };
+        assert_eq!(
+            FfiProcessInfo::from(info(Some(1_500_000_000))).cpu_time_ns,
+            Some(1_500_000_000)
+        );
+        assert_eq!(FfiProcessInfo::from(info(None)).cpu_time_ns, None);
     }
 
     #[test]
