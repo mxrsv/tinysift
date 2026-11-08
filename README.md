@@ -6,9 +6,9 @@
 
 **Know your Mac. Then clean it.**
 
-A Mac app that shows what slows your Mac and what fills its disk, then
-cleans only what you pick. This repository is its open-source engine, where the rules that touch
-your files live.
+A Mac app that shows which app or AI agent session is slowing your Mac and what fills its disk,
+then cleans only what you pick. This repository is its open-source engine, where the rules that
+touch your files live, and the `tiny` command-line tool.
 
 [![Latest release](https://img.shields.io/github/v/release/mxrsv/tinysift?label=release)](https://github.com/mxrsv/tinysift/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/mxrsv/tinysift/ci.yml?branch=main&label=CI)](https://github.com/mxrsv/tinysift/actions/workflows/ci.yml)
@@ -20,6 +20,10 @@ your files live.
 <img src=".github/readme/app-overview.png" width="860" alt="TinySift Overview: live CPU, memory and startup disk, the apps using the most, and listening ports">
 
 </div>
+
+> **Status:** early 0.x, built by one maintainer, with new versions most weeks. Monitor is free;
+> Clean and Uninstall work free for 14 days, then need a [$5 Lifetime license](https://tinysift.app)
+> for one Mac. The `tiny` CLI in this repository is free.
 
 ## Install
 
@@ -39,9 +43,25 @@ Full Disk Access. Watch this repository's releases to hear about new versions.
 | --- | --- |
 | **Overview** | CPU, memory, startup disk and listening ports, live. |
 | **CPU and RAM** | Every app and background process ranked by what it uses, with Quit and Force Quit ([processes](https://tinysift.app/docs#processes)). |
+| **Network and Battery** | Live readings; Battery ranks the apps that use it most. |
+| **Agents** | Every Claude Code and Codex session, grouped by repository, with its CPU and memory. |
+| **Menu bar** | The same readings in a popover; right-click for Smart Clean, Settings and updates. |
 | **Clean** | Developer caches, logs and leftovers: Xcode DerivedData, simulators, `node_modules`, npm, pnpm, cargo and [more](docs/user/clean.md#categories). |
 | **Storage** | What fills the disk, folder by folder. It only reads ([scan](docs/user/scan.md)). |
-| **Apps** | Installed apps by size; Uninstall moves an app and the files it left to the Trash ([uninstall contract](docs/internals/clean.md#the-desktops-checked-uninstall)). |
+| **Apps** | Installed apps by size, and Homebrew updates; Uninstall moves an app and the files it left to the Trash ([uninstall contract](docs/internals/clean.md#the-desktops-checked-uninstall)). |
+
+## How it compares
+
+- **[Stats](https://github.com/exelban/stats) or iStat Menus** give richer menu-bar graphs. TinySift
+  adds AI agent sessions and cleaning in the same app. If you only want graphs, Stats is free and
+  open source.
+- **CleanMyMac** covers more than developer files. TinySift focuses on developer caches and app leftovers,
+  and its removal rules are open source in this repository, so you can read what it will touch.
+- **[DevCleaner for Xcode](https://github.com/vashpan/xcode-dev-cleaner)** cleans Xcode only.
+  TinySift also covers `node_modules`, npm, pnpm, cargo, logs and app leftovers.
+
+TinySift runs only on Apple silicon with macOS 14 or later. It does not remove malware or tune
+system settings.
 
 ## Safe by design
 
@@ -59,7 +79,7 @@ screens, so you can read and test them.
   ([`checked_execute.rs`](crates/tiny-core/src/clean/checked_execute.rs)), and a permanent deletion
   never follows a symlink or crosses to another volume ([`fs_safe.rs`](crates/tiny-core/src/clean/fs_safe.rs)).
 - **Your data stays on your Mac.** No account and no analytics; the app goes online only to check
-  for updates ([privacy](https://tinysift.app/privacy)).
+  for updates and your license, and sends no system profile ([privacy](https://tinysift.app/privacy)).
 
 ## Command line
 
@@ -71,6 +91,17 @@ cargo install --path crates/tiny
 tiny clean --dry-run
 ```
 
+The dry run lists each category with its size and safety level, then the full plan, path by path:
+
+```text
+Cleanup candidates
+
+  User logs                     276.00 KB   safe          (6 items)
+  Crash reports / DiagnosticR…  776.00 KB   safe          (13 items)
+
+  Total: 1.03 MB
+```
+
 ### Commands
 
 | Command | Guide |
@@ -80,6 +111,14 @@ tiny clean --dry-run
 | `tiny clean` | [Cleaning caches](docs/user/clean.md) |
 | `tiny uninstall` | [Uninstalling apps](docs/user/uninstall.md) |
 | `tiny processes` | [Processes](docs/user/processes.md) |
+
+## License
+
+This repository is licensed under [GPL-3.0-only](LICENSE). The code is open source; the
+TinySift name and logo are not, see the [trademark policy](TRADEMARK.md). The source became
+public on 2026-10-14 under the earlier MIT declaration, so copies obtained before the
+relicense on 2026-10-17 remain under MIT. Third-party distribution notices for the released binaries are
+still pending.
 
 ## Contributing
 
@@ -98,11 +137,3 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 The [documentation index](docs/README.md) leads to the architecture, the native safety contract and
 the [development guide](docs/operations/development.md), including how a native client builds the
 FFI library and its Swift bindings.
-
-## License
-
-This repository is licensed under [GPL-3.0-only](LICENSE). The code is open source; the
-TinySift name and logo are not, see the [trademark policy](TRADEMARK.md). The source became
-public on 2026-10-14 under the earlier MIT declaration, so copies obtained before the
-relicense on 2026-10-17 remain under MIT. Third-party distribution notices for the released binaries are
-still pending.
