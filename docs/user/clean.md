@@ -70,7 +70,8 @@ along. Those overlapping selections are retained and explained in the final repo
 - `--idle-days N` (default 30, must be above 0) — `node-modules`, `rust-targets`,
   `build-folders` and the
   virtualenvs in `python-caches` are listed only for projects with no manifest edit, commit
-  or uncommitted change in `N` days. `downloads-old` lists files directly in `~/Downloads`
+  or uncommitted change in `N` days. Inside git the commit and the changes are the whole
+  repository's: `ios/Pods` serves the app beside it, however long `ios/` went untouched. `downloads-old` lists files directly in `~/Downloads`
   neither modified nor opened for `N` days, `screenshots-old` lists screenshots not modified
   for `N` days, and `android-sdk` uses it for emulator system images.
 - Project caches are searched under `~/Documents`, `~/Projects`, `~/Code`, `~/Developer` and

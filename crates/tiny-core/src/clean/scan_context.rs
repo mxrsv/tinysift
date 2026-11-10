@@ -85,6 +85,8 @@ pub struct ScanContext<'a> {
     project_walks: RefCell<BTreeMap<PathBuf, Arc<ProjectWalk>>>,
     /// What git said about each project manifest this scan, per idle days.
     activities: RefCell<BTreeMap<(PathBuf, u64), Activity>>,
+    /// The same about each git work tree, by its root.
+    repositories: RefCell<BTreeMap<(PathBuf, u64), Activity>>,
 }
 
 static LEGACY_PROBE: PgrepChecker = PgrepChecker;
@@ -98,6 +100,7 @@ impl<'a> ScanContext<'a> {
             findings: RefCell::new(ScanFindings::default()),
             project_walks: RefCell::default(),
             activities: RefCell::default(),
+            repositories: RefCell::default(),
         }
     }
 
@@ -230,6 +233,16 @@ impl<'a> ScanContext<'a> {
     pub(crate) fn note_activity(&self, manifest: &Path, idle_days: u64, activity: Activity) {
         let key = (manifest.to_path_buf(), idle_days);
         self.activities.borrow_mut().insert(key, activity);
+    }
+
+    pub(crate) fn known_repository(&self, root: &Path, idle_days: u64) -> Option<Activity> {
+        let key = (root.to_path_buf(), idle_days);
+        self.repositories.borrow().get(&key).cloned()
+    }
+
+    pub(crate) fn note_repository(&self, root: &Path, idle_days: u64, activity: Activity) {
+        let key = (root.to_path_buf(), idle_days);
+        self.repositories.borrow_mut().insert(key, activity);
     }
 
     pub fn take_findings(&self) -> ScanFindings {

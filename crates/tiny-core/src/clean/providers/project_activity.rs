@@ -76,8 +76,10 @@ pub(crate) struct Activity {
 
 /// Evidence for a project whose manifest already passed the idle filter, or
 /// `None` when git says the project is still active or cannot say. Inside a
-/// git work tree the last commit touching the project must be older than
-/// `idle_days` and the project must have no uncommitted changes. `Err` only
+/// git work tree its last commit must be older than `idle_days` and it must
+/// have no uncommitted changes: the whole work tree's, not just the
+/// manifest's folder, since `ios/Pods` or `packages/ui/dist` serve the rest of
+/// the repository. `Err` only
 /// when git cannot run at all for a project that needs it.
 pub(crate) fn assess(
     runner: &dyn CommandRunner,
@@ -139,24 +141,62 @@ fn activity_now(
     if !older_than(modified, idle_days) {
         return active(evidence);
     }
-    if !in_git_work_tree(project) {
+    let Some(root) = work_tree_root(project) else {
         evidence.push(Evidence::NotGitRepo);
         return Ok(Activity {
             evidence,
             idle: true,
         });
+    };
+    let repository = repository_activity(runner, root, idle_days, ctx)?;
+    evidence.extend(repository.evidence);
+    Ok(Activity {
+        evidence,
+        idle: repository.idle,
+    })
+}
+
+/// The git half of `activity`, for the work tree at `root`: asked once per
+/// scan, however many manifests the repository holds.
+fn repository_activity(
+    runner: &dyn CommandRunner,
+    root: &Path,
+    idle_days: u64,
+    ctx: &ScanContext<'_>,
+) -> Result<Activity> {
+    if let Some(known) = ctx.known_repository(root, idle_days) {
+        return Ok(known);
     }
-    let Some(project_arg) = project.to_str() else {
-        return active(evidence);
+    let answer = repository_activity_now(runner, root, idle_days, ctx)?;
+    if !ctx.is_cancelled() {
+        ctx.note_repository(root, idle_days, answer.clone());
+    }
+    Ok(answer)
+}
+
+fn repository_activity_now(
+    runner: &dyn CommandRunner,
+    root: &Path,
+    idle_days: u64,
+    ctx: &ScanContext<'_>,
+) -> Result<Activity> {
+    let active = |evidence| {
+        Ok(Activity {
+            evidence,
+            idle: false,
+        })
     };
-    let Some(commit) = last_commit(runner, project_arg)? else {
-        return active(evidence);
+    let Some(root_arg) = root.to_str() else {
+        return active(Vec::new());
     };
-    evidence.push(Evidence::LastCommit { at: commit });
+    let Some(commit) = last_commit(runner, root_arg)? else {
+        return active(Vec::new());
+    };
+    let mut evidence = vec![Evidence::LastCommit { at: commit }];
     if ctx.is_cancelled() || !older_than(commit, idle_days) {
         return active(evidence);
     }
-    if !work_tree_clean(runner, project_arg)? {
+    if !work_tree_clean(runner, root_arg)? {
         return active(evidence);
     }
     evidence.push(Evidence::WorkTreeClean);
@@ -282,8 +322,14 @@ pub(crate) fn refuse_if_used_since(
 /// Looks for `.git` (a directory, or a file for linked work trees) in
 /// `dir` and its ancestors without running git.
 fn in_git_work_tree(dir: &Path) -> bool {
+    work_tree_root(dir).is_some()
+}
+
+/// The nearest of `dir` and its ancestors holding `.git`: the top of the
+/// work tree git finds from `dir`.
+fn work_tree_root(dir: &Path) -> Option<&Path> {
     dir.ancestors()
-        .any(|dir| std::fs::symlink_metadata(dir.join(".git")).is_ok())
+        .find(|dir| std::fs::symlink_metadata(dir.join(".git")).is_ok())
 }
 
 /// More than `days` days between the Unix time `at` and now.
@@ -296,8 +342,8 @@ fn older_than(at: i64, days: u64) -> bool {
     now_secs() - at > threshold
 }
 
-/// Unix time of the last commit touching `project`; `None` when git cannot
-/// answer or no commit touches it.
+/// Unix time of the last commit touching `project` (a work tree's root: any
+/// commit); `None` when git cannot answer or no commit touches it.
 fn last_commit(runner: &dyn CommandRunner, project: &str) -> Result<Option<i64>> {
     let out = git(runner, project, &["log", "-1", "--format=%ct", "--", "."])?;
     Ok(out.and_then(|text| text.trim().parse().ok()))
@@ -681,7 +727,7 @@ mod tests {
         let root = tempdir("clean");
         mark_repo(&root);
         let manifest = old_manifest(&root);
-        let runner = mock_git(manifest.parent().unwrap(), 60, "");
+        let runner = mock_git(&root, 60, "");
         let evidence = run(&runner, &manifest).unwrap().expect("offered");
         assert!(matches!(evidence[0], Evidence::ManifestModified { .. }));
         assert!(matches!(evidence[1], Evidence::LastCommit { .. }));
@@ -694,7 +740,7 @@ mod tests {
         let root = tempdir("recent");
         mark_repo(&root);
         let manifest = old_manifest(&root);
-        let runner = mock_git(manifest.parent().unwrap(), 2, "");
+        let runner = mock_git(&root, 2, "");
         assert_eq!(run(&runner, &manifest).unwrap(), None);
     }
 
@@ -703,7 +749,7 @@ mod tests {
         let root = tempdir("dirty");
         mark_repo(&root);
         let manifest = old_manifest(&root);
-        let runner = mock_git(manifest.parent().unwrap(), 60, " M src/main.rs\n");
+        let runner = mock_git(&root, 60, " M src/main.rs\n");
         assert_eq!(run(&runner, &manifest).unwrap(), None);
     }
 
@@ -712,17 +758,10 @@ mod tests {
         let root = tempdir("nonzero");
         mark_repo(&root);
         let manifest = old_manifest(&root);
-        let log = git_args(
-            manifest.parent().unwrap(),
-            &["log", "-1", "--format=%ct", "--", "."],
-        );
+        let log = git_args(&root, &["log", "-1", "--format=%ct", "--", "."]);
         let old = format!("{}\n", now_secs() - 60 * SECS_PER_DAY);
-        let runner = never_fetches(MockRunner::new(), manifest.parent().unwrap()).with_exit(
-            GIT,
-            &as_strs(&log),
-            128,
-            &old,
-        );
+        let runner =
+            never_fetches(MockRunner::new(), &root).with_exit(GIT, &as_strs(&log), 128, &old);
         assert_eq!(run(&runner, &manifest).unwrap(), None);
     }
 
@@ -731,6 +770,12 @@ mod tests {
     /// file. The script leaves `.git/ran` behind.
     /// Fixture git, away from the user's own config and hooks.
     fn setup(dir: &Path, args: &[&str]) -> String {
+        setup_at(dir, args, None)
+    }
+
+    /// `setup`, committing at Unix time `at` when given.
+    fn setup_at(dir: &Path, args: &[&str], at: Option<i64>) -> String {
+        let date = at.map(|at| format!("@{at} +0000"));
         let out = std::process::Command::new(GIT)
             .args([
                 "-c",
@@ -747,6 +792,10 @@ mod tests {
             .args(args)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
             .env("GIT_CONFIG_NOSYSTEM", "1")
+            .envs(
+                date.iter()
+                    .flat_map(|d| [("GIT_AUTHOR_DATE", d), ("GIT_COMMITTER_DATE", d)]),
+            )
             .output()
             .unwrap();
         assert!(out.status.success(), "git {args:?}");
@@ -793,6 +842,71 @@ mod tests {
             .set_modified(index)
             .unwrap();
         repo
+    }
+
+    /// RP-05: `ios/Pods` serves the app whose `src/` changes daily, however
+    /// long `ios/` has gone without a commit.
+    #[test]
+    fn a_folder_untouched_in_a_repository_in_use_is_not_idle() {
+        if !Path::new(GIT).exists() {
+            return;
+        }
+        let repo = tempfile::tempdir().unwrap();
+        let dir = repo.path();
+        let podfile = dir.join("ios/Podfile");
+        fs::create_dir_all(dir.join("ios")).unwrap();
+        fs::create_dir_all(dir.join("src")).unwrap();
+        fs::write(&podfile, "platform :ios\n").unwrap();
+        fs::write(dir.join("src/app.js"), "x\n").unwrap();
+        let long_ago = now_secs() - 60 * SECS_PER_DAY;
+        setup(dir, &["init", "-q"]);
+        setup(dir, &["add", "ios/Podfile"]);
+        setup_at(dir, &["commit", "-qm", "ios"], Some(long_ago));
+        setup(dir, &["add", "src/app.js"]);
+        setup(dir, &["commit", "-qm", "today"]);
+        fs::File::open(&podfile)
+            .unwrap()
+            .set_modified(UNIX_EPOCH + std::time::Duration::from_secs(long_ago as u64))
+            .unwrap();
+        let ctx = ScanContext::unchecked();
+        let found = activity(&crate::runner::RealRunner, &podfile, 7, &ctx).unwrap();
+        assert!(!found.idle, "{:?}", found.evidence);
+        assert!(
+            found
+                .evidence
+                .iter()
+                .any(|e| matches!(e, Evidence::LastCommit { at } if !older_than(*at, 1))),
+            "{:?}",
+            found.evidence
+        );
+    }
+
+    /// Git is asked once per repository, however many manifests it holds.
+    #[test]
+    fn a_repository_is_asked_once_for_all_its_projects() {
+        let root = tempdir("one-repo");
+        mark_repo(&root);
+        let first = old_manifest(&root);
+        let second = root.join("web/package.json");
+        fs::create_dir_all(second.parent().unwrap()).unwrap();
+        fs::write(&second, b"{}").unwrap();
+        fs::File::open(&second)
+            .unwrap()
+            .set_modified(SystemTime::now() - std::time::Duration::from_secs(90 * 86_400))
+            .unwrap();
+        let runner = mock_git(&root, 60, "");
+        let ctx = ScanContext::unchecked();
+        for manifest in [&first, &second] {
+            assert!(activity(&runner, manifest, IDLE_DAYS, &ctx).unwrap().idle);
+        }
+        let logs = runner
+            .output_calls
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|call| call.contains("--format=%ct"))
+            .count();
+        assert_eq!(logs, 1);
     }
 
     #[test]
@@ -873,10 +987,7 @@ mod tests {
         let root = tempdir("promisor");
         mark_repo(&root);
         let manifest = old_manifest(&root);
-        let check = git_args(
-            manifest.parent().unwrap(),
-            &["config", "--get-regexp", LAZY_FETCH],
-        );
+        let check = git_args(&root, &["config", "--get-regexp", LAZY_FETCH]);
         let found = "remote.origin.promisor true\n";
         let runner = MockRunner::new().with_exit(GIT, &as_strs(&check), 0, found);
         assert_eq!(run(&runner, &manifest).unwrap(), None);
@@ -984,7 +1095,7 @@ mod tests {
         let root = tempdir("status-fails");
         mark_repo(&root);
         let manifest = old_manifest(&root);
-        let project = manifest.parent().unwrap();
+        let project = root.as_path();
         let st = git_args(project, &STATUS);
         let runner = mock_git(project, 60, "").with_exit(GIT, &as_strs(&st), 128, "");
         assert_eq!(run(&runner, &manifest).unwrap(), None);
@@ -995,19 +1106,13 @@ mod tests {
         let root = tempdir("timeout");
         mark_repo(&root);
         let manifest = old_manifest(&root);
-        let log = git_args(
-            manifest.parent().unwrap(),
-            &["log", "-1", "--format=%ct", "--", "."],
-        );
+        let log = git_args(&root, &["log", "-1", "--format=%ct", "--", "."]);
         let timeout = CommandError::Timeout {
             bin: GIT.to_string(),
             timeout_ms: 30_000,
         };
-        let runner = never_fetches(MockRunner::new(), manifest.parent().unwrap()).with_output(
-            GIT,
-            &as_strs(&log),
-            Err(timeout),
-        );
+        let runner =
+            never_fetches(MockRunner::new(), &root).with_output(GIT, &as_strs(&log), Err(timeout));
         assert_eq!(run(&runner, &manifest).unwrap(), None);
     }
 
@@ -1016,11 +1121,8 @@ mod tests {
         let root = tempdir("garbage");
         mark_repo(&root);
         let manifest = old_manifest(&root);
-        let log = git_args(
-            manifest.parent().unwrap(),
-            &["log", "-1", "--format=%ct", "--", "."],
-        );
-        let runner = never_fetches(MockRunner::new(), manifest.parent().unwrap()).with_exit(
+        let log = git_args(&root, &["log", "-1", "--format=%ct", "--", "."]);
+        let runner = never_fetches(MockRunner::new(), &root).with_exit(
             GIT,
             &as_strs(&log),
             0,
@@ -1043,7 +1145,7 @@ mod tests {
         let root = tempdir("worktree");
         fs::write(root.join(".git"), b"gitdir: /elsewhere/.git/worktrees/x\n").unwrap();
         let manifest = old_manifest(&root);
-        let runner = mock_git(manifest.parent().unwrap(), 2, "");
+        let runner = mock_git(&root, 2, "");
         // Recent commit proves git was consulted, so the .git file was detected.
         assert_eq!(run(&runner, &manifest).unwrap(), None);
         assert!(!runner.output_calls.lock().unwrap().is_empty());
@@ -1145,12 +1247,7 @@ mod tests {
         let root = tempdir("bo-repo-idle");
         mark_repo(&root);
         let project = rust_project(&root, 40);
-        let runner = ls_files(
-            mock_git(project.1.parent().unwrap(), 8, ""),
-            &project.0,
-            0,
-            "",
-        );
+        let runner = ls_files(mock_git(&root, 8, ""), &project.0, 0, "");
         let (risk, evidence) = desktop(&runner, &project).unwrap().expect("offered");
         assert_eq!(risk, RiskLevel::Safe);
         assert!(matches!(
@@ -1282,7 +1379,7 @@ mod tests {
         let root = tempdir("bo-repo-active");
         mark_repo(&root);
         let project = rust_project(&root, 40);
-        let dir = project.1.parent().unwrap();
+        let dir = root.as_path();
         let recent = ls_files(mock_git(dir, 2, ""), &project.0, 0, "");
         assert_eq!(
             risk_of(desktop(&recent, &project).unwrap()),
@@ -1299,7 +1396,7 @@ mod tests {
         let root = tempdir("bo-unknown");
         mark_repo(&root);
         let project = rust_project(&root, 40);
-        let dir = project.1.parent().unwrap();
+        let dir = root.as_path();
         let log = git_args(dir, &["log", "-1", "--format=%ct", "--", "."]);
         let failed_log = ls_files(never_fetches(MockRunner::new(), dir), &project.0, 0, "")
             .with_exit(GIT, &as_strs(&log), 128, "");
@@ -1330,7 +1427,7 @@ mod tests {
         let root = tempdir("bo-tracked");
         mark_repo(&root);
         let project = rust_project(&root, 40);
-        let dir = project.1.parent().unwrap();
+        let dir = root.as_path();
         let runner = ls_files(mock_git(dir, 40, ""), &project.0, 0, "fixture.bin\n");
         let ctx = ScanContext::unchecked();
         assert_eq!(
@@ -1370,7 +1467,7 @@ mod tests {
         let root = tempdir("bo-ls-fails");
         mark_repo(&root);
         let project = rust_project(&root, 40);
-        let dir = project.1.parent().unwrap();
+        let dir = root.as_path();
         let refusals = |runner: &MockRunner, idle_days| {
             let ctx = ScanContext::unchecked();
             let safe_days = BUILD_OUTPUT_SAFE_DAYS;
@@ -1407,8 +1504,8 @@ mod tests {
     fn a_category_says_which_projects_git_could_not_check() {
         let root = tempdir("bo-refused-category");
         mark_repo(&root);
-        let (folder, manifest) = rust_project(&root, 40);
-        let runner = ls_files_without_clt(mock_git(manifest.parent().unwrap(), 40, ""), &folder);
+        let (folder, _) = rust_project(&root, 40);
+        let runner = ls_files_without_clt(mock_git(&root, 40, ""), &folder);
         let opts = crate::options::CleanOptions {
             all_build_output: true,
             ..Default::default()
@@ -1518,12 +1615,7 @@ mod tests {
         let root = tempdir("bo-cli");
         mark_repo(&root);
         let project = rust_project(&root, 40);
-        let runner = ls_files(
-            mock_git(project.1.parent().unwrap(), 40, ""),
-            &project.0,
-            0,
-            "",
-        );
+        let runner = ls_files(mock_git(&root, 40, ""), &project.0, 0, "");
         let (risk, evidence) = cli(&runner, &project).unwrap().expect("offered");
         assert_eq!(risk, RiskLevel::Review);
         assert_eq!(

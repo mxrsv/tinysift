@@ -102,7 +102,9 @@ idle for `--idle-days`, as Review. The app sets `all_build_output` and lists eve
 Review default would hide most of the disk: an item is Safe when the project is in a git work tree
 and its manifest, last commit and working tree are all older than `build_output_safe_days` (the
 app's choice, 7 by default and never fewer) with every fact checked, and Review when it is active, outside git (`NotGitRepo`: a manifest's age
-alone proves nothing) or git cannot tell. The category stays Review, so Swift preselects exactly
+alone proves nothing) or git cannot tell. The commit and the working tree are the whole work
+tree's, asked once per repository per scan from its root (`repository_activity`): one idle folder
+of a repository in use still serves the rest of it. The category stays Review, so Swift preselects exactly
 the Safe items by risk. Do not add a separate "preselected" flag that bypasses risk.
 
 A folder that holds a file git tracks is never offered, and `check_item` repeats the test through
