@@ -53,8 +53,9 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   ([`project_activity.rs`](../../crates/tiny-core/src/clean/providers/project_activity.rs)).
   Elsewhere: the item's own modification time (Downloads also checks last opened). An
   unreadable time, or git that cannot answer, counts as not idle. The app lists build output for
-  every project and uses a fixed 7 days (`BUILD_OUTPUT_SAFE_DAYS`): Safe only inside git with every
-  fact checked, Review otherwise, including outside git (`NotGitRepo`).
+  every project and uses the days it passes as `build_output_safe_days` (7 by default, never fewer:
+  `BUILD_OUTPUT_SAFE_DAYS`): Safe only inside git with every fact checked, Review otherwise,
+  including outside git (`NotGitRepo`).
 - **Section** (`Section`, `FfiCleanSection`) — Where the app groups a category's movable items by
   what to expect afterwards: **Rebuilt automatically**, **Project build output** (`node-modules`,
   `rust-targets`, which a build or install recreates but which hold a project's work) or **Your

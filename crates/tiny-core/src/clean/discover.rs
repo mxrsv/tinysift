@@ -13,6 +13,7 @@ use std::sync::Arc;
 
 use super::freed_size::SharedBlocks;
 use super::process::{AppProbe, PgrepChecker, ProcessChecker};
+use super::providers::project_activity::BUILD_OUTPUT_SAFE_DAYS;
 use super::providers::{all_providers, all_providers_with, CleanProvider};
 use super::scan_context::{ScanContext, Unreadable};
 use super::trash_plan::protected_reason;
@@ -134,6 +135,12 @@ pub fn validate_options(opts: &CleanOpts) -> Result<()> {
         return Err(crate::error::Error::InvalidInput(
             "idleDays must be greater than zero".into(),
         ));
+    }
+    // Fewer days would make build output Safe sooner than the default does.
+    if opts.build_output_safe_days < BUILD_OUTPUT_SAFE_DAYS {
+        return Err(crate::error::Error::InvalidInput(format!(
+            "buildOutputSafeDays must be at least {BUILD_OUTPUT_SAFE_DAYS}"
+        )));
     }
     Ok(())
 }

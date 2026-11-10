@@ -49,10 +49,11 @@ const LAZY_FETCH: &str = r"^(extensions\.partialclone|remote\..*\.(promisor|part
 const FETCHES: &str = "its git config lets git fetch missing objects, so git was not asked";
 const SECS_PER_DAY: i64 = 86_400;
 
-/// Days without edits, commits or uncommitted changes after which the
-/// desktop's build output inside a git work tree is Safe, so the app
-/// preselects it. Outside git it stays Review: a manifest's age alone does
-/// not prove a project idle.
+/// The default and the fewest days without edits, commits or uncommitted
+/// changes after which the desktop's build output inside a git work tree is
+/// Safe, so the app preselects it (`CleanOptions::build_output_safe_days`).
+/// Outside git it stays Review: a manifest's age alone does not prove a
+/// project idle.
 pub const BUILD_OUTPUT_SAFE_DAYS: u64 = 7;
 
 /// Why build output is not offered when git cannot list its tracked files.
@@ -169,22 +170,22 @@ fn activity_now(
 /// `node_modules`) beside `manifest`, or `None` when it is not offered.
 /// `Some(days)` (the CLI) offers only a project idle for more than `days`,
 /// as Review. `None` (the desktop) offers every project: Safe when git shows
-/// it idle for more than `BUILD_OUTPUT_SAFE_DAYS` with every fact checked,
-/// Review when active, outside git, or when that cannot be told. Either way
-/// a folder holding a file git tracks is never offered, nor one whose
-/// tracked files git cannot list; that one is noted as refused, with why.
+/// it idle for more than `safe_days` with every fact checked, Review when
+/// active, outside git, or when that cannot be told. Either way a folder
+/// holding a file git tracks is never offered, nor one whose tracked files
+/// git cannot list; that one is noted as refused, with why.
 pub(crate) fn assess_build_output(
     runner: &dyn CommandRunner,
     folder: &Path,
     manifest: &Path,
     idle_days: Option<u64>,
+    safe_days: u64,
     ctx: &ScanContext<'_>,
 ) -> Result<Option<(RiskLevel, Vec<Evidence>)>> {
     let offered = match idle_days {
         Some(days) => assess(runner, manifest, days, ctx)?.map(|e| (RiskLevel::Review, e)),
         None => {
-            let Activity { evidence, idle } =
-                activity(runner, manifest, BUILD_OUTPUT_SAFE_DAYS, ctx)?;
+            let Activity { evidence, idle } = activity(runner, manifest, safe_days, ctx)?;
             // Outside git only the manifest's age is known (`NotGitRepo`).
             let risk = if idle && !evidence.contains(&Evidence::NotGitRepo) {
                 RiskLevel::Safe
@@ -285,8 +286,13 @@ fn in_git_work_tree(dir: &Path) -> bool {
 }
 
 /// More than `days` days between the Unix time `at` and now.
+/// Saturates, so days too many to count are never reached rather than
+/// wrapping to a past that every project is older than.
 fn older_than(at: i64, days: u64) -> bool {
-    now_secs() - at > days as i64 * SECS_PER_DAY
+    let threshold = i64::try_from(days)
+        .unwrap_or(i64::MAX)
+        .saturating_mul(SECS_PER_DAY);
+    now_secs() - at > threshold
 }
 
 /// Unix time of the last commit touching `project`; `None` when git cannot
@@ -465,8 +471,8 @@ mod tests {
     use crate::clean::discover::discover_checked;
     use crate::clean::process::test_support::MockChecker;
     use crate::clean::providers::{
-        node_modules::NodeModules, python_caches::PythonCaches, rust_targets::RustTargets,
-        CleanProvider,
+        build_folders::BuildFolders, node_modules::NodeModules, python_caches::PythonCaches,
+        rust_targets::RustTargets, CleanProvider,
     };
     use crate::clean::scan_context::ScanContext;
     use std::sync::{
@@ -1071,9 +1077,19 @@ mod tests {
     /// The desktop's listing: every project.
     fn desktop(
         runner: &MockRunner,
-        (folder, manifest): &(PathBuf, PathBuf),
+        project: &(PathBuf, PathBuf),
     ) -> Result<Option<(RiskLevel, Vec<Evidence>)>> {
-        assess_build_output(runner, folder, manifest, None, &ScanContext::unchecked())
+        desktop_after(runner, project, BUILD_OUTPUT_SAFE_DAYS)
+    }
+
+    /// The desktop's listing with `safe_days` chosen.
+    fn desktop_after(
+        runner: &MockRunner,
+        (folder, manifest): &(PathBuf, PathBuf),
+        safe_days: u64,
+    ) -> Result<Option<(RiskLevel, Vec<Evidence>)>> {
+        let ctx = ScanContext::unchecked();
+        assess_build_output(runner, folder, manifest, None, safe_days, &ctx)
     }
 
     /// The CLI's listing: projects idle for `IDLE_DAYS`.
@@ -1082,7 +1098,8 @@ mod tests {
         (folder, manifest): &(PathBuf, PathBuf),
     ) -> Result<Option<(RiskLevel, Vec<Evidence>)>> {
         let ctx = ScanContext::unchecked();
-        assess_build_output(runner, folder, manifest, Some(IDLE_DAYS), &ctx)
+        let days = Some(IDLE_DAYS);
+        assess_build_output(runner, folder, manifest, days, BUILD_OUTPUT_SAFE_DAYS, &ctx)
     }
 
     fn risk_of(found: Option<(RiskLevel, Vec<Evidence>)>) -> Option<RiskLevel> {
@@ -1182,6 +1199,48 @@ mod tests {
         assert_eq!(used.output_calls.lock().unwrap().len(), calls);
     }
 
+    /// CA1: the days chosen draw the Safe line for the manifest and the last
+    /// commit alike. A project in git is Safe once idle for more than the
+    /// days chosen; never exactly N days, as the rule is strict.
+    #[test]
+    fn the_days_chosen_decide_when_build_output_is_safe() {
+        use RiskLevel::{Review, Safe};
+        // (manifest days old, last commit days ago, days chosen, risk)
+        let cases = [
+            // The same project, idle for 10 days.
+            (10, 10, 7, Safe),
+            (10, 10, 14, Review),
+            (10, 10, 30, Review),
+            // Either side of each boundary.
+            (6, 6, 7, Review),
+            (8, 8, 7, Safe),
+            (13, 13, 14, Review),
+            (15, 15, 14, Safe),
+            (29, 29, 30, Review),
+            (31, 31, 30, Safe),
+            // An old manifest with a recent commit.
+            (40, 13, 14, Review),
+            (40, 15, 14, Safe),
+            (40, 29, 30, Review),
+            (40, 31, 30, Safe),
+            // Days too many to count are never reached.
+            (40, 40, u64::MAX, Review),
+            (40, 40, 1 << 62, Review),
+        ];
+        for (manifest_days, commit_days, safe_days, expected) in cases {
+            let root = tempfile::tempdir().unwrap();
+            mark_repo(root.path());
+            let project = rust_project(root.path(), manifest_days);
+            let dir = project.1.parent().unwrap();
+            let runner = ls_files(mock_git(dir, commit_days, ""), &project.0, 0, "");
+            assert_eq!(
+                risk_of(desktop_after(&runner, &project, safe_days).unwrap()),
+                Some(expected),
+                "manifest {manifest_days} days, commit {commit_days} days, {safe_days} chosen"
+            );
+        }
+    }
+
     #[test]
     fn desktop_lists_a_recent_commit_or_uncommitted_changes_as_review() {
         let root = tempdir("bo-repo-active");
@@ -1239,7 +1298,15 @@ mod tests {
         let runner = ls_files(mock_git(dir, 40, ""), &project.0, 0, "fixture.bin\n");
         let ctx = ScanContext::unchecked();
         assert_eq!(
-            assess_build_output(&runner, &project.0, &project.1, None, &ctx).unwrap(),
+            assess_build_output(
+                &runner,
+                &project.0,
+                &project.1,
+                None,
+                BUILD_OUTPUT_SAFE_DAYS,
+                &ctx
+            )
+            .unwrap(),
             None
         );
         assert_eq!(cli(&runner, &project).unwrap(), None);
@@ -1270,8 +1337,10 @@ mod tests {
         let dir = project.1.parent().unwrap();
         let refusals = |runner: &MockRunner, idle_days| {
             let ctx = ScanContext::unchecked();
+            let safe_days = BUILD_OUTPUT_SAFE_DAYS;
             let listed =
-                assess_build_output(runner, &project.0, &project.1, idle_days, &ctx).unwrap();
+                assess_build_output(runner, &project.0, &project.1, idle_days, safe_days, &ctx)
+                    .unwrap();
             assert_eq!(listed, None, "never offered");
             ctx.take_findings().refused
         };
@@ -1321,6 +1390,72 @@ mod tests {
                 assert!(refused[0].1.contains(XCRUN_ERROR), "{}", refused[0].1);
             }
             other => panic!("unexpected {other:?}"),
+        }
+    }
+
+    /// CA1: each build output provider judges its projects by the days its
+    /// options carry, here a project in git idle for 10 days.
+    #[test]
+    fn build_output_providers_take_the_days_from_their_options() {
+        use RiskLevel::{Review, Safe};
+        let projects = [
+            ("Cargo.toml", "target"),
+            ("package.json", "node_modules"),
+            ("package.json", ".next"),
+        ];
+        for (manifest, folder) in projects {
+            for (build_output_safe_days, expected) in [(7, Safe), (14, Review), (30, Review)] {
+                let root = tempfile::tempdir().unwrap();
+                mark_repo(root.path());
+                let project = build_project(root.path(), manifest, folder, 10);
+                let dir = project.1.parent().unwrap();
+                let runner = Arc::new(ls_files(mock_git(dir, 10, ""), &project.0, 0, ""));
+                let opts = crate::options::CleanOptions {
+                    all_build_output: true,
+                    build_output_safe_days,
+                    ..Default::default()
+                };
+                let roots = vec![root.path().to_path_buf()];
+                let provider: Box<dyn CleanProvider> = match folder {
+                    "target" => {
+                        let mut p = RustTargets::with_options(&opts, runner);
+                        p.search_roots = roots;
+                        Box::new(p)
+                    }
+                    "node_modules" => {
+                        let mut p = NodeModules::with_options(&opts, runner);
+                        p.search_roots = roots;
+                        Box::new(p)
+                    }
+                    _ => {
+                        let mut p = BuildFolders::with_options(&opts, runner);
+                        p.search_roots = roots;
+                        Box::new(p)
+                    }
+                };
+                let items = provider.discover(&ScanContext::unchecked()).unwrap();
+                let found: Vec<_> = items.iter().map(|i| (&i.path, i.risk)).collect();
+                assert_eq!(
+                    found,
+                    [(&project.0, expected)],
+                    "{folder} at {build_output_safe_days} days"
+                );
+                // SC2 with CA1: the run-time recheck judges by the same days.
+                let safe = CleanItem {
+                    risk: Safe,
+                    ..items[0].clone()
+                };
+                let rechecked = provider.recheck_idle(&safe);
+                let still_idle = if expected == Safe {
+                    Ok(())
+                } else {
+                    Err(USED_SINCE.into())
+                };
+                assert_eq!(
+                    rechecked, still_idle,
+                    "{folder} rechecked at {build_output_safe_days} days"
+                );
+            }
         }
     }
 

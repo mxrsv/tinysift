@@ -13,9 +13,7 @@ use std::sync::Arc;
 
 use crate::error::Result;
 
-use super::project_activity::{
-    assess_build_output, refuse_if_used_since, refuse_tracked, BUILD_OUTPUT_SAFE_DAYS,
-};
+use super::project_activity::{assess_build_output, refuse_if_used_since, refuse_tracked};
 use super::project_walk::{project_walk, Walker};
 use super::{dev_search_roots, execute_per_item, is_idle, CleanProvider};
 use crate::clean::fs_safe::dir_size_checked;
@@ -40,6 +38,8 @@ pub struct BuildFolders {
     pub idle_days: u64,
     /// List every project's build folders (the desktop), not only idle ones.
     pub all_projects: bool,
+    /// With `all_projects`, the idle days after which a project in git is Safe.
+    pub safe_days: u64,
     pub search_roots: Vec<PathBuf>,
     runner: Arc<dyn CommandRunner>,
 }
@@ -50,6 +50,7 @@ impl BuildFolders {
         Self {
             idle_days: opts.idle_days,
             all_projects: opts.all_build_output,
+            safe_days: opts.build_output_safe_days,
             search_roots: dev_search_roots(),
             runner,
         }
@@ -75,7 +76,7 @@ impl CleanProvider for BuildFolders {
         let folders =
             ".next, Pods, and build or dist folders their project's manifest names as output";
         if self.all_projects {
-            return format!("{folders}; building the project restores them. Safe once a project in git has no edits, commits or uncommitted changes for {BUILD_OUTPUT_SAFE_DAYS} days");
+            return format!("{folders}; building the project restores them. Safe once a project in git has no edits, commits or uncommitted changes for {} days", self.safe_days);
         }
         format!("{folders}, in projects with no edits, commits or uncommitted changes for {} days; building the project restores them", self.idle_days)
     }
@@ -101,7 +102,7 @@ impl CleanProvider for BuildFolders {
         }
         let manifest =
             manifest_of(&item.path).ok_or("its project no longer names it as build output")?;
-        refuse_if_used_since(&*self.runner, &manifest, BUILD_OUTPUT_SAFE_DAYS)
+        refuse_if_used_since(&*self.runner, &manifest, self.safe_days)
     }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
         let mut items = Vec::new();
@@ -110,8 +111,14 @@ impl CleanProvider for BuildFolders {
                 if ctx.is_cancelled() {
                     return Ok(Vec::new());
                 }
-                let Some((risk, evidence)) =
-                    assess_build_output(&*self.runner, &found, &manifest, self.idle_filter(), ctx)?
+                let Some((risk, evidence)) = assess_build_output(
+                    &*self.runner,
+                    &found,
+                    &manifest,
+                    self.idle_filter(),
+                    self.safe_days,
+                    ctx,
+                )?
                 else {
                     continue;
                 };
@@ -355,6 +362,7 @@ mod tests {
         let provider = BuildFolders {
             idle_days: 30,
             all_projects: true,
+            safe_days: 7,
             search_roots: vec![root.path().to_path_buf()],
             runner,
         };

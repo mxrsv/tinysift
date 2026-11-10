@@ -365,6 +365,39 @@ fn only_the_desktop_option_lists_every_projects_build_output() {
     );
 }
 
+/// CA1: each build output description states the days chosen, 7 by default.
+#[test]
+fn build_output_descriptions_state_the_days_chosen() {
+    let runner: Arc<dyn CommandRunner> = Arc::new(crate::runner::test_support::MockRunner::new());
+    let reasons = |opts: crate::options::CleanOptions| {
+        all_providers_with(&opts, runner.clone())
+            .into_iter()
+            .filter(|p| matches!(p.id(), "node-modules" | "rust-targets" | "build-folders"))
+            .map(|p| p.inclusion_reason())
+            .collect::<Vec<_>>()
+    };
+    let desktop = |build_output_safe_days| crate::options::CleanOptions {
+        all_build_output: true,
+        build_output_safe_days,
+        ..Default::default()
+    };
+    let by_default = reasons(crate::options::CleanOptions {
+        all_build_output: true,
+        ..Default::default()
+    });
+    assert_eq!(by_default, reasons(desktop(7)));
+    for days in [7, 14, 30] {
+        let stated = reasons(desktop(days));
+        assert_eq!(stated.len(), 3);
+        for reason in stated {
+            assert!(
+                reason.ends_with(&format!("uncommitted changes for {days} days")),
+                "{reason}"
+            );
+        }
+    }
+}
+
 #[test]
 #[should_panic(expected = "unknown category id")]
 fn category_family_panics_on_unknown() {

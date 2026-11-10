@@ -14,8 +14,9 @@ checked removal) is [`tiny-ffi/src/clean.rs`](../../crates/tiny-ffi/src/clean.rs
 [`cli_validate.rs`](../../crates/tiny/src/render/clean/cli_validate.rs) refuses the bad flag
 combinations before any
 filesystem access. `TINY_CONFIRM_HARD` is injected as a boolean (`validate_with_env`) so tests
-never set process environment. Core repeats only `idle_days > 0` (`validate_options`), because
-the app reaches discovery without clap.
+never set process environment. Core repeats `idle_days > 0` (`validate_options`), because
+the app reaches discovery without clap, and refuses a `build_output_safe_days` below
+`BUILD_OUTPUT_SAFE_DAYS`, which only the app sets.
 
 ## The provider registry
 
@@ -98,8 +99,8 @@ them generated, and its `check_item` repeats that proof
 ([`build_folders.rs`](../../crates/tiny-core/src/clean/providers/build_folders.rs)). The CLI offers only projects
 idle for `--idle-days`, as Review. The app sets `all_build_output` and lists every project, so the
 Review default would hide most of the disk: an item is Safe when the project is in a git work tree
-and its manifest, last commit and working tree are all older than `BUILD_OUTPUT_SAFE_DAYS` with
-every fact checked, and Review when it is active, outside git (`NotGitRepo`: a manifest's age
+and its manifest, last commit and working tree are all older than `build_output_safe_days` (the
+app's choice, 7 by default and never fewer) with every fact checked, and Review when it is active, outside git (`NotGitRepo`: a manifest's age
 alone proves nothing) or git cannot tell. The category stays Review, so Swift preselects exactly
 the Safe items by risk. Do not add a separate "preselected" flag that bypasses risk.
 

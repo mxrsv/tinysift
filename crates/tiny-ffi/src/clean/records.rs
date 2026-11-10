@@ -19,10 +19,14 @@ pub struct FfiCleanOptions {
     /// `build-folders`),
     /// not only projects idle for `idle_days`: a candidate is Safe when its
     /// project is in a git work tree and has no edits, commits or uncommitted
-    /// changes for 7 days, every fact checked, and Review otherwise (outside
-    /// git too). The CLI never sets it.
+    /// changes for `build_output_safe_days`, every fact checked, and Review
+    /// otherwise (outside git too). The CLI never sets it.
     #[uniffi(default = false)]
     pub all_build_output: bool,
+    /// The days of `all_build_output`'s Safe rule. A scan refuses fewer than
+    /// 7 (`InvalidInput`), so no value makes build output Safe sooner.
+    #[uniffi(default = 7)]
+    pub build_output_safe_days: u64,
     /// Also scan the user's Trash (`trash`) and offer it as a row that an
     /// explicit selection empties for good (`FfiDesktopAction::EmptyTrash`).
     /// Other Destructive categories stay report only.
@@ -446,6 +450,7 @@ impl From<FfiCleanOptions> for CleanOptions {
             include_destructive: options.include_destructive,
             idle_days: options.idle_days,
             all_build_output: options.all_build_output,
+            build_output_safe_days: options.build_output_safe_days,
             include_trash: options.include_trash,
             tool_commands: options.tool_commands,
         }

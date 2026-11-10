@@ -23,6 +23,8 @@ pub struct RustTargets {
     pub idle_days: u64,
     /// List every project's `target/` (the desktop), not only idle ones.
     pub all_projects: bool,
+    /// With `all_projects`, the idle days after which a project in git is Safe.
+    pub safe_days: u64,
     pub search_roots: Vec<PathBuf>,
     runner: Arc<dyn CommandRunner>,
 }
@@ -36,6 +38,7 @@ impl RustTargets {
         Self {
             idle_days,
             all_projects: false,
+            safe_days: BUILD_OUTPUT_SAFE_DAYS,
             search_roots: dev_search_roots(),
             runner,
         }
@@ -45,6 +48,7 @@ impl RustTargets {
     pub fn with_options(opts: &CleanOptions, runner: Arc<dyn CommandRunner>) -> Self {
         Self {
             all_projects: opts.all_build_output,
+            safe_days: opts.build_output_safe_days,
             ..Self::with_runner(opts.idle_days, runner)
         }
     }
@@ -68,7 +72,7 @@ impl CleanProvider for RustTargets {
     }
     fn inclusion_reason(&self) -> String {
         if self.all_projects {
-            return format!("Rust target/ folders in your projects; cargo build restores them. Safe once a project in git has no edits, commits or uncommitted changes for {BUILD_OUTPUT_SAFE_DAYS} days");
+            return format!("Rust target/ folders in your projects; cargo build restores them. Safe once a project in git has no edits, commits or uncommitted changes for {} days", self.safe_days);
         }
         format!("Rust target/ folders in projects with no edits, commits or uncommitted changes for {} days; cargo build restores them", self.idle_days)
     }
@@ -89,7 +93,7 @@ impl CleanProvider for RustTargets {
             return Ok(());
         }
         let manifest = item.path.with_file_name("Cargo.toml");
-        refuse_if_used_since(&*self.runner, &manifest, BUILD_OUTPUT_SAFE_DAYS)
+        refuse_if_used_since(&*self.runner, &manifest, self.safe_days)
     }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
         let mut items = Vec::new();
@@ -99,8 +103,14 @@ impl CleanProvider for RustTargets {
                     return Ok(Vec::new());
                 }
                 let manifest = found.with_file_name("Cargo.toml");
-                let Some((risk, evidence)) =
-                    assess_build_output(&*self.runner, &found, &manifest, self.idle_filter(), ctx)?
+                let Some((risk, evidence)) = assess_build_output(
+                    &*self.runner,
+                    &found,
+                    &manifest,
+                    self.idle_filter(),
+                    self.safe_days,
+                    ctx,
+                )?
                 else {
                     continue;
                 };

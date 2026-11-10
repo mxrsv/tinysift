@@ -8,8 +8,29 @@ fn opts() -> CleanOpts {
         include_destructive: false,
         idle_days: 30,
         all_build_output: false,
+        build_output_safe_days: 7,
         include_trash: false,
         tool_commands: false,
+    }
+}
+
+/// CA1: no value makes build output Safe sooner than the default 7 days.
+#[test]
+fn build_output_safe_days_below_the_default_are_refused() {
+    let with = |build_output_safe_days| CleanOpts {
+        build_output_safe_days,
+        ..opts()
+    };
+    assert_eq!(CleanOpts::default().build_output_safe_days, 7);
+    for days in [0, 1, 6] {
+        let refused = validate_options(&with(days));
+        assert!(
+            matches!(refused, Err(crate::error::Error::InvalidInput(_))),
+            "{days}: {refused:?}"
+        );
+    }
+    for days in [7, 14, 30] {
+        assert!(validate_options(&with(days)).is_ok(), "{days}");
     }
 }
 

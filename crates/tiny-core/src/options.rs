@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::clean::providers::project_activity::BUILD_OUTPUT_SAFE_DAYS;
+
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScanOptions {
@@ -37,6 +39,12 @@ pub struct CleanOptions {
     /// never does.
     #[serde(default)]
     pub all_build_output: bool,
+
+    /// With `all_build_output`, the days a project in git must have no
+    /// edits, commits or uncommitted changes before its build output is
+    /// Safe. At least `BUILD_OUTPUT_SAFE_DAYS` (`validate_options`).
+    #[serde(default = "build_output_safe_days")]
+    pub build_output_safe_days: u64,
 
     /// Scan the user's Trash (`trash`) even without `include_destructive`,
     /// so the desktop can offer emptying it. The CLI never sets it.
@@ -79,11 +87,18 @@ impl Default for CleanOptions {
             include_destructive: false,
             idle_days: 30,
             all_build_output: false,
+            build_output_safe_days: BUILD_OUTPUT_SAFE_DAYS,
             include_trash: false,
             tool_commands: false,
         }
     }
 }
+
+/// Serde's default for `build_output_safe_days`.
+fn build_output_safe_days() -> u64 {
+    BUILD_OUTPUT_SAFE_DAYS
+}
+
 impl Default for ScanOptions {
     fn default() -> Self {
         Self {

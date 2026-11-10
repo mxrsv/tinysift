@@ -14,6 +14,7 @@ fn desktop_options() -> FfiCleanOptions {
         include_destructive: false,
         idle_days: 30,
         all_build_output: true,
+        build_output_safe_days: 7,
         include_trash: true,
         tool_commands: true,
     }

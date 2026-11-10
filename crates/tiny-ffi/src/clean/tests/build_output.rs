@@ -93,11 +93,37 @@ fn the_desktop_option_reaches_core_options() {
         include_destructive: false,
         idle_days: 30,
         all_build_output,
+        build_output_safe_days: 7,
         include_trash: false,
         tool_commands: false,
     };
     assert!(CleanOptions::from(options(true)).all_build_output);
     assert!(!CleanOptions::from(options(false)).all_build_output);
+}
+
+/// CA1: the app's days reach core, and fewer than 7 are refused before
+/// anything is scanned.
+#[test]
+fn the_safe_days_reach_core_options_and_fewer_than_7_are_refused() {
+    let options = |build_output_safe_days| FfiCleanOptions {
+        categories: Vec::new(),
+        include_review: true,
+        include_destructive: false,
+        idle_days: 30,
+        all_build_output: true,
+        build_output_safe_days,
+        include_trash: false,
+        tool_commands: false,
+    };
+    assert_eq!(CleanOptions::from(options(14)).build_output_safe_days, 14);
+    let result = TestSession::new().discover_clean(
+        CleanOptions::from(options(6)),
+        &[],
+        &NotRunning,
+        &CancellationToken::default(),
+        &Progress::default(),
+    );
+    assert!(matches!(result, Err(FfiError::InvalidInput { .. })));
 }
 
 #[test]

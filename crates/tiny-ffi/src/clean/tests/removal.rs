@@ -139,6 +139,7 @@ fn old_callers_keep_the_trash_only_flow() {
         include_destructive: false,
         idle_days: 30,
         all_build_output: true,
+        build_output_safe_days: 7,
         include_trash,
         tool_commands: false,
     };
