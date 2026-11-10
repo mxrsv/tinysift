@@ -90,7 +90,13 @@ pub const APP_TOOL_ENV: &[(&str, &str)] = &[
 /// cleanup removes old versions and old downloads only: `brew cleanup` would
 /// otherwise also uninstall dependencies nothing needs any more, which its
 /// dry run lists by name without a size, so no figure could include them.
-pub const TOOL_ENV: &[(&str, &[(&str, &str)])] = &[("brew", &[("HOMEBREW_NO_AUTOREMOVE", "1")])];
+///
+/// git only inspects repositories here: it must never fetch an object one
+/// lacks, which would run the transport that repository's config names.
+pub const TOOL_ENV: &[(&str, &[(&str, &str)])] = &[
+    ("brew", &[("HOMEBREW_NO_AUTOREMOVE", "1")]),
+    ("git", &[("GIT_NO_LAZY_FETCH", "1")]),
+];
 
 /// Where a bare tool name is searched.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

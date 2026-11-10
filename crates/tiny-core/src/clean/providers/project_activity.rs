@@ -18,6 +18,7 @@ const GIT: &str = "/usr/bin/git";
 /// write the index (`--no-optional-locks`), and no program its own config
 /// names may run: a filesystem monitor, a hook or a signature check. `-c`
 /// outranks the repository's config and reaches the processes git starts.
+/// Fetching is ruled out apart from these: by `TOOL_ENV` and `LAZY_FETCH`.
 const INSPECT_ONLY: [&str; 7] = [
     "--no-optional-locks",
     "-c",
@@ -37,6 +38,15 @@ pub(crate) const STATUS: [&str; 5] = [
 ];
 /// Filter drivers `status` would run on a file it has to re-read.
 const FILTER_DRIVERS: &str = r"^filter\..*\.(clean|process)$";
+/// Config that names a promisor remote. With one, a command that reads an
+/// object the repository lacks fetches it, through whatever transport that
+/// config names. A git too old for `TOOL_ENV`'s switch still obeys this
+/// check, so such a repository is never asked anything that reads objects.
+// ponytail: this also turns away the user's own partial clones; ask git's
+// version once and trust `GIT_NO_LAZY_FETCH` alone if they should be read.
+const LAZY_FETCH: &str = r"^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$";
+/// Why git is not asked about such a repository.
+const FETCHES: &str = "its git config lets git fetch missing objects, so git was not asked";
 const SECS_PER_DAY: i64 = 86_400;
 
 /// Days without edits, commits or uncommitted changes after which the
@@ -302,12 +312,28 @@ fn git(runner: &dyn CommandRunner, project: &str, args: &[&str]) -> Result<Optio
     Ok(git_answer(runner, project, args)?.ok())
 }
 
-/// `git`, keeping why git did not answer.
+/// True when no config git reads for `project` names a promisor remote
+/// (`LAZY_FETCH`), whatever its scope. False when git cannot tell.
+fn never_fetches(runner: &dyn CommandRunner, project: &str) -> Result<bool> {
+    match run_git(runner, project, &["config", "--get-regexp", LAZY_FETCH]) {
+        // `--get-regexp` exits 1 when nothing matches.
+        Ok(outcome) => Ok(outcome.status == Some(1)),
+        Err(CommandError::Timeout { .. } | CommandError::NonUtf8(_)) => Ok(false),
+        Err(CommandError::NotFound(_) | CommandError::Spawn { .. }) => Err(unavailable()),
+    }
+}
+
+/// `git` for a command that reads objects (`log`, `status`, `ls-files`),
+/// keeping why git did not answer. Not asked at all when the repository
+/// could fetch (`never_fetches`).
 fn git_answer(
     runner: &dyn CommandRunner,
     project: &str,
     args: &[&str],
 ) -> Result<std::result::Result<String, String>> {
+    if !never_fetches(runner, project)? {
+        return Ok(Err(FETCHES.into()));
+    }
     match run_git(runner, project, args) {
         Ok(outcome) if outcome.success() => Ok(Ok(outcome.stdout)),
         Ok(outcome) => Ok(Err(exit_detail(&outcome))),
@@ -372,7 +398,7 @@ fn now_secs() -> i64 {
 pub(crate) mod test_support {
     use std::path::Path;
 
-    use super::{FILTER_DRIVERS, GIT, INSPECT_ONLY};
+    use super::{FILTER_DRIVERS, GIT, INSPECT_ONLY, LAZY_FETCH};
     use crate::runner::test_support::MockRunner;
 
     /// `args` as `git_answer` sends them for `project`.
@@ -386,12 +412,20 @@ pub(crate) mod test_support {
             .collect()
     }
 
-    /// `runner`, answering that `project`'s config defines no filter.
+    /// `runner`, answering that `project`'s config defines no filter and
+    /// names no promisor remote.
     pub(crate) fn no_filters(runner: MockRunner, project: &Path) -> MockRunner {
         let args = git_args(
             project,
             &["config", "--show-scope", "--get-regexp", FILTER_DRIVERS],
         );
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        never_fetches(runner, project).with_exit(GIT, &args, 1, "")
+    }
+
+    /// `runner`, answering that `dir`'s config names no promisor remote.
+    pub(crate) fn never_fetches(runner: MockRunner, dir: &Path) -> MockRunner {
+        let args = git_args(dir, &["config", "--get-regexp", LAZY_FETCH]);
         let args: Vec<&str> = args.iter().map(String::as_str).collect();
         runner.with_exit(GIT, &args, 1, "")
     }
@@ -574,7 +608,7 @@ mod tests {
         manifest
     }
 
-    use super::test_support::{git_args, no_filters};
+    use super::test_support::{git_args, never_fetches, no_filters};
 
     /// Mock git answering `log` with `commit_secs_ago` and `status` with `dirty`.
     fn mock_git(project: &Path, commit_days_ago: i64, status: &str) -> MockRunner {
@@ -652,61 +686,71 @@ mod tests {
             &["log", "-1", "--format=%ct", "--", "."],
         );
         let old = format!("{}\n", now_secs() - 60 * SECS_PER_DAY);
-        let runner = MockRunner::new().with_exit(GIT, &as_strs(&log), 128, &old);
+        let runner = never_fetches(MockRunner::new(), manifest.parent().unwrap()).with_exit(
+            GIT,
+            &as_strs(&log),
+            128,
+            &old,
+        );
         assert_eq!(run(&runner, &manifest).unwrap(), None);
     }
 
     /// A committed repository whose config runs `.git/probe.sh` as a
     /// filesystem monitor and, with `filter`, as a clean filter for every
     /// file. The script leaves `.git/ran` behind.
-    fn hostile_repo(filter: bool) -> tempfile::TempDir {
-        let repo = tempfile::tempdir().unwrap();
-        let dir = repo.path();
-        let setup = |args: &[&str]| {
-            let status = std::process::Command::new(GIT)
-                .args([
-                    "-c",
-                    "core.hooksPath=/dev/null",
-                    "-c",
-                    "commit.gpgSign=false",
-                ])
-                .arg("-C")
-                .arg(dir)
-                .args(args)
-                .env("GIT_CONFIG_GLOBAL", "/dev/null")
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .output()
-                .unwrap()
-                .status;
-            assert!(status.success(), "git {args:?}");
-        };
-        fs::write(dir.join("file.txt"), "kept\n").unwrap();
-        setup(&["init", "-q"]);
-        setup(&["add", "file.txt"]);
-        setup(&[
-            "-c",
-            "user.name=t",
-            "-c",
-            "user.email=t@t",
-            "commit",
-            "-qm",
-            "init",
-        ]);
+    /// Fixture git, away from the user's own config and hooks.
+    fn setup(dir: &Path, args: &[&str]) -> String {
+        let out = std::process::Command::new(GIT)
+            .args([
+                "-c",
+                "core.hooksPath=/dev/null",
+                "-c",
+                "commit.gpgSign=false",
+                "-c",
+                "user.name=t",
+                "-c",
+                "user.email=t@t",
+            ])
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_NOSYSTEM", "1")
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "git {args:?}");
+        String::from_utf8(out.stdout).unwrap()
+    }
+
+    /// `script` in `dir/.git`, executable, leaving `.git/ran` behind and
+    /// then running `then`.
+    fn probe_script(dir: &Path, then: &str) -> String {
         let script = dir.join(".git/probe.sh");
         let ran = dir.join(".git/ran");
         fs::write(
             &script,
-            format!("#!/bin/sh\ntouch '{}'\ncat\n", ran.display()),
+            format!("#!/bin/sh\ntouch '{}'\n{then}\n", ran.display()),
         )
         .unwrap();
         let mut perms = fs::metadata(&script).unwrap().permissions();
         std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
         fs::set_permissions(&script, perms).unwrap();
-        let script = script.to_str().unwrap();
-        setup(&["config", "core.fsmonitor", script]);
+        script.to_str().unwrap().to_string()
+    }
+
+    fn hostile_repo(filter: bool) -> tempfile::TempDir {
+        let repo = tempfile::tempdir().unwrap();
+        let dir = repo.path();
+        let setup = |args: &[&str]| setup(dir, args);
+        fs::write(dir.join("file.txt"), "kept\n").unwrap();
+        setup(&["init", "-q"]);
+        setup(&["add", "file.txt"]);
+        setup(&["commit", "-qm", "init"]);
+        let script = probe_script(dir, "cat");
+        setup(&["config", "core.fsmonitor", &script]);
         if filter {
             fs::write(dir.join(".git/info/attributes"), "* filter=probe\n").unwrap();
-            setup(&["config", "filter.probe.clean", script]);
+            setup(&["config", "filter.probe.clean", &script]);
         }
         // An mtime equal to the index's makes git re-read the file through filters.
         let index = fs::metadata(dir.join(".git/index"))
@@ -747,6 +791,89 @@ mod tests {
         );
     }
 
+    /// A repository that lacks the commit `HEAD` names and whose config,
+    /// through `key`, names a promisor remote reached by `.git/probe.sh`.
+    fn promisor_repo(key: &str, value: &str) -> tempfile::TempDir {
+        let repo = tempfile::tempdir().unwrap();
+        let dir = repo.path();
+        setup(dir, &["init", "-q"]);
+        setup(dir, &["commit", "-q", "--allow-empty", "-m", "init"]);
+        let head = setup(dir, &["rev-parse", "HEAD"]);
+        let (fan, rest) = head.trim().split_at(2);
+        fs::remove_file(dir.join(".git/objects").join(fan).join(rest)).unwrap();
+        setup(
+            dir,
+            &["config", "remote.origin.url", "ssh://probe.invalid/x"],
+        );
+        setup(
+            dir,
+            &["config", "core.sshCommand", &probe_script(dir, "exit 1")],
+        );
+        setup(dir, &["config", key, value]);
+        repo
+    }
+
+    #[test]
+    fn a_repository_that_could_fetch_is_asked_nothing_that_reads_objects() {
+        if !Path::new(GIT).exists() {
+            return;
+        }
+        for (key, value) in [
+            ("extensions.partialClone", "origin"),
+            ("remote.origin.promisor", "true"),
+            ("remote.origin.partialCloneFilter", "blob:none"),
+        ] {
+            let repo = promisor_repo(key, value);
+            let dir = repo.path().to_str().unwrap();
+            let runner = crate::runner::RealRunner;
+            assert_eq!(last_commit(&runner, dir).unwrap(), None, "{key}");
+            assert!(!work_tree_clean(&runner, dir).unwrap(), "{key}");
+            assert!(
+                matches!(tracked_files(&runner, repo.path()).unwrap(), Tracked::Unknown(why) if why == FETCHES),
+                "{key}"
+            );
+            assert!(!repo.path().join(".git/ran").exists(), "{key}: it fetched");
+        }
+    }
+
+    /// A git too old for `GIT_NO_LAZY_FETCH` has this check alone.
+    #[test]
+    fn a_repository_naming_a_promisor_remote_is_asked_only_for_its_config() {
+        let root = tempdir("promisor");
+        mark_repo(&root);
+        let manifest = old_manifest(&root);
+        let check = git_args(
+            manifest.parent().unwrap(),
+            &["config", "--get-regexp", LAZY_FETCH],
+        );
+        let found = "remote.origin.promisor true\n";
+        let runner = MockRunner::new().with_exit(GIT, &as_strs(&check), 0, found);
+        assert_eq!(run(&runner, &manifest).unwrap(), None);
+        assert_eq!(
+            *runner.output_calls.lock().unwrap(),
+            [format!("{GIT} {}", check.join(" "))]
+        );
+    }
+
+    /// The second lock: even asked, a git that knows `GIT_NO_LAZY_FETCH`
+    /// (2.45 on) fetches nothing, because every git the runner starts has it.
+    #[test]
+    fn git_started_by_the_runner_never_fetches_a_missing_object() {
+        let knows_the_switch = std::process::Command::new(GIT)
+            .args(["--no-lazy-fetch", "version"])
+            .output()
+            .is_ok_and(|out| out.status.success());
+        if !knows_the_switch {
+            return;
+        }
+        let repo = promisor_repo("remote.origin.promisor", "true");
+        let dir = repo.path().to_str().unwrap();
+        let log = ["log", "-1", "--format=%ct", "--", "."];
+        let asked = run_git(&crate::runner::RealRunner, dir, &log).unwrap();
+        assert!(!asked.success(), "the commit is missing");
+        assert!(!repo.path().join(".git/ran").exists(), "it fetched");
+    }
+
     #[test]
     fn filters_from_the_users_own_config_still_allow_status() {
         let project = Path::new("/p");
@@ -755,7 +882,7 @@ mod tests {
             &["config", "--show-scope", "--get-regexp", FILTER_DRIVERS],
         );
         let answer = |stdout: &str| {
-            let runner = MockRunner::new()
+            let runner = never_fetches(MockRunner::new(), project)
                 .with_exit(GIT, &as_strs(&args), 0, stdout)
                 .with_exit(GIT, &as_strs(&git_args(project, &STATUS)), 0, "");
             work_tree_clean(&runner, "/p").unwrap()
@@ -791,7 +918,11 @@ mod tests {
             bin: GIT.to_string(),
             timeout_ms: 30_000,
         };
-        let runner = MockRunner::new().with_output(GIT, &as_strs(&log), Err(timeout));
+        let runner = never_fetches(MockRunner::new(), manifest.parent().unwrap()).with_output(
+            GIT,
+            &as_strs(&log),
+            Err(timeout),
+        );
         assert_eq!(run(&runner, &manifest).unwrap(), None);
     }
 
@@ -804,7 +935,12 @@ mod tests {
             manifest.parent().unwrap(),
             &["log", "-1", "--format=%ct", "--", "."],
         );
-        let runner = MockRunner::new().with_exit(GIT, &as_strs(&log), 0, "not a number\n");
+        let runner = never_fetches(MockRunner::new(), manifest.parent().unwrap()).with_exit(
+            GIT,
+            &as_strs(&log),
+            0,
+            "not a number\n",
+        );
         assert_eq!(run(&runner, &manifest).unwrap(), None);
     }
 
@@ -851,7 +987,7 @@ mod tests {
 
     fn ls_files(runner: MockRunner, folder: &Path, status: i32, stdout: &str) -> MockRunner {
         let args = git_args(folder, &["ls-files", "--", "."]);
-        runner.with_exit(GIT, &as_strs(&args), status, stdout)
+        never_fetches(runner, folder).with_exit(GIT, &as_strs(&args), status, stdout)
     }
 
     /// The desktop's listing: every project.
@@ -955,8 +1091,8 @@ mod tests {
         let project = rust_project(&root, 40);
         let dir = project.1.parent().unwrap();
         let log = git_args(dir, &["log", "-1", "--format=%ct", "--", "."]);
-        let failed_log =
-            ls_files(MockRunner::new(), &project.0, 0, "").with_exit(GIT, &as_strs(&log), 128, "");
+        let failed_log = ls_files(never_fetches(MockRunner::new(), dir), &project.0, 0, "")
+            .with_exit(GIT, &as_strs(&log), 128, "");
         let (risk, evidence) = desktop(&failed_log, &project).unwrap().expect("listed");
         assert_eq!(risk, RiskLevel::Review);
         assert!(matches!(
@@ -1005,7 +1141,7 @@ mod tests {
             stdout: String::new(),
             stderr: format!("{XCRUN_ERROR}\nsecond line\n"),
         };
-        runner.with_output(GIT, &as_strs(&args), Ok(outcome))
+        never_fetches(runner, folder).with_output(GIT, &as_strs(&args), Ok(outcome))
     }
 
     const XCRUN_ERROR: &str =
@@ -1039,7 +1175,11 @@ mod tests {
             bin: GIT.to_string(),
             timeout_ms: 30_000,
         };
-        let timed_out = mock_git(dir, 40, "").with_output(GIT, &as_strs(&ls), Err(timeout));
+        let timed_out = never_fetches(mock_git(dir, 40, ""), &project.0).with_output(
+            GIT,
+            &as_strs(&ls),
+            Err(timeout),
+        );
         assert!(refusals(&timed_out, None)[&project.0].contains("did not finish"));
     }
 
