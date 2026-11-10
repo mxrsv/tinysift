@@ -312,27 +312,32 @@ fn git(runner: &dyn CommandRunner, project: &str, args: &[&str]) -> Result<Optio
     Ok(git_answer(runner, project, args)?.ok())
 }
 
-/// True when no config git reads for `project` names a promisor remote
-/// (`LAZY_FETCH`), whatever its scope. False when git cannot tell.
-fn never_fetches(runner: &dyn CommandRunner, project: &str) -> Result<bool> {
+/// Why git is not asked about `project`: a config git reads for it names a
+/// promisor remote (`LAZY_FETCH`), whatever its scope, or git could not say.
+/// `None` when it names none.
+fn fetch_refusal(runner: &dyn CommandRunner, project: &str) -> Result<Option<String>> {
     match run_git(runner, project, &["config", "--get-regexp", LAZY_FETCH]) {
         // `--get-regexp` exits 1 when nothing matches.
-        Ok(outcome) => Ok(outcome.status == Some(1)),
-        Err(CommandError::Timeout { .. } | CommandError::NonUtf8(_)) => Ok(false),
+        Ok(outcome) if outcome.status == Some(1) => Ok(None),
+        Ok(outcome) if outcome.success() => Ok(Some(FETCHES.into())),
+        Ok(outcome) => Ok(Some(exit_detail(&outcome))),
+        Err(e @ (CommandError::Timeout { .. } | CommandError::NonUtf8(_))) => {
+            Ok(Some(e.to_string()))
+        }
         Err(CommandError::NotFound(_) | CommandError::Spawn { .. }) => Err(unavailable()),
     }
 }
 
 /// `git` for a command that reads objects (`log`, `status`, `ls-files`),
 /// keeping why git did not answer. Not asked at all when the repository
-/// could fetch (`never_fetches`).
+/// could fetch (`fetch_refusal`).
 fn git_answer(
     runner: &dyn CommandRunner,
     project: &str,
     args: &[&str],
 ) -> Result<std::result::Result<String, String>> {
-    if !never_fetches(runner, project)? {
-        return Ok(Err(FETCHES.into()));
+    if let Some(why) = fetch_refusal(runner, project)? {
+        return Ok(Err(why));
     }
     match run_git(runner, project, args) {
         Ok(outcome) if outcome.success() => Ok(Ok(outcome.stdout)),
@@ -853,6 +858,60 @@ mod tests {
             *runner.output_calls.lock().unwrap(),
             [format!("{GIT} {}", check.join(" "))]
         );
+    }
+
+    /// A config git cannot read is refused for that reason, not as a fetch.
+    #[test]
+    fn a_config_git_cannot_read_is_refused_with_gits_own_reason() {
+        let root = tempdir("bad-config");
+        mark_repo(&root);
+        let (folder, _) = rust_project(&root, 40);
+        let check = git_args(&folder, &["config", "--get-regexp", LAZY_FETCH]);
+        let broken = CommandOutcome {
+            status: Some(128),
+            stdout: String::new(),
+            stderr: "fatal: bad config line 1 in file .git/config\n".into(),
+        };
+        let runner = MockRunner::new().with_output(GIT, &as_strs(&check), Ok(broken));
+        let why = refuse_tracked(&runner, &folder).unwrap_err();
+        assert!(
+            why.contains("status 128: fatal: bad config line 1"),
+            "{why}"
+        );
+        assert!(!why.contains(FETCHES), "{why}");
+    }
+
+    /// The transport lock, which every git obeys: with no protocol allowed
+    /// the fetch is refused before the remote's command starts. The control
+    /// run shows the fixture does fetch when nothing stops it.
+    #[test]
+    fn no_transport_is_allowed_to_git() {
+        if !Path::new(GIT).exists() {
+            return;
+        }
+        let repo = promisor_repo("remote.origin.promisor", "true");
+        let ran = repo.path().join(".git/ran");
+        let log = |allow_no_protocol: bool| {
+            let mut git = std::process::Command::new(GIT);
+            git.arg("-C").arg(repo.path());
+            git.args(["log", "-1", "--format=%ct", "--", "."]);
+            git.env_remove("GIT_NO_LAZY_FETCH");
+            if allow_no_protocol {
+                git.env("GIT_ALLOW_PROTOCOL", "");
+            } else {
+                git.env_remove("GIT_ALLOW_PROTOCOL");
+            }
+            git.output().unwrap();
+        };
+        log(false);
+        assert!(ran.exists(), "the fixture no longer fetches by itself");
+        fs::remove_file(&ran).unwrap();
+        log(true);
+        assert!(!ran.exists(), "it fetched");
+        let git = crate::runner::TOOL_ENV
+            .iter()
+            .find(|(tool, _)| *tool == "git");
+        assert!(git.is_some_and(|(_, env)| env.contains(&("GIT_ALLOW_PROTOCOL", ""))));
     }
 
     /// The second lock: even asked, a git that knows `GIT_NO_LAZY_FETCH`

@@ -92,10 +92,16 @@ pub const APP_TOOL_ENV: &[(&str, &str)] = &[
 /// dry run lists by name without a size, so no figure could include them.
 ///
 /// git only inspects repositories here: it must never fetch an object one
-/// lacks, which would run the transport that repository's config names.
+/// lacks, which would run the transport that repository's config names. An
+/// empty `GIT_ALLOW_PROTOCOL` allows no transport, whatever the repository's
+/// config says, on every git; `GIT_NO_LAZY_FETCH` (git 2.45 on) stops the
+/// fetch before it is tried.
 pub const TOOL_ENV: &[(&str, &[(&str, &str)])] = &[
     ("brew", &[("HOMEBREW_NO_AUTOREMOVE", "1")]),
-    ("git", &[("GIT_NO_LAZY_FETCH", "1")]),
+    (
+        "git",
+        &[("GIT_NO_LAZY_FETCH", "1"), ("GIT_ALLOW_PROTOCOL", "")],
+    ),
 ];
 
 /// Where a bare tool name is searched.
