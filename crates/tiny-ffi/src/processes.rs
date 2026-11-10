@@ -245,14 +245,14 @@ impl TinySession {
         })
     }
 
-    /// Revalidates the target, then sends one signal. Takes the operation
-    /// gate, so it returns `Busy` while another operation runs.
+    /// Revalidates the target, then sends one signal. Bypasses the gate: a
+    /// signal shares no state with a scan or a mutation, and Quit of a runaway
+    /// process must not wait minutes for a scan to finish.
     pub fn process_terminate(
         &self,
         target: FfiTerminateTarget,
         kind: FfiTerminateKind,
     ) -> Result<FfiTerminateOutcome, FfiError> {
-        let _gate = self.begin()?;
         Ok(processes::terminate(&target.into(), kind.into())?.into())
     }
 
@@ -626,20 +626,19 @@ mod tests {
         (child, target)
     }
 
+    /// A scan holds the gate for minutes; Quit of a runaway process must not wait for it.
     #[test]
-    fn terminate_is_busy_while_the_gate_is_held_then_quits_the_child() {
+    fn terminate_quits_the_child_while_a_scan_holds_the_gate() {
         let session = TinySession::new();
         let (mut child, target) = sleeper(&session);
         let gate = session.begin().unwrap();
-        let busy = session.process_terminate(target.clone(), FfiTerminateKind::Graceful);
-        let alive_while_busy = child.try_wait().unwrap().is_none();
-        drop(gate);
         let outcome = session.process_terminate(target, FfiTerminateKind::Graceful);
+        let still_held = session.is_busy();
+        drop(gate);
         child.kill().ok();
         child.wait().unwrap();
-        assert!(matches!(busy, Err(FfiError::Busy)));
-        assert!(alive_while_busy);
         assert_eq!(outcome.unwrap(), FfiTerminateOutcome::Exited);
+        assert!(still_held);
         assert!(!session.is_busy());
     }
 
