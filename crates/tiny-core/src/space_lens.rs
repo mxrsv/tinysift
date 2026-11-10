@@ -431,14 +431,15 @@ fn device(_: &fs::Metadata) -> u64 {
     0
 }
 
+/// The space a file takes on disk: its allocated blocks, not its length.
 #[cfg(unix)]
-fn allocated(meta: &fs::Metadata) -> u64 {
+pub(crate) fn allocated(meta: &fs::Metadata) -> u64 {
     use std::os::unix::fs::MetadataExt;
     meta.blocks().saturating_mul(512)
 }
 
 #[cfg(not(unix))]
-fn allocated(meta: &fs::Metadata) -> u64 {
+pub(crate) fn allocated(meta: &fs::Metadata) -> u64 {
     meta.len()
 }
 

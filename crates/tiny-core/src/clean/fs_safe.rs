@@ -236,7 +236,7 @@ pub fn is_dir_safe(path: &Path) -> bool {
 pub fn dir_size_safe(root: &Path) -> u64 {
     let mut total = 0u64;
     walk_files(root, &ScanContext::unchecked(), &mut |_, meta| {
-        total = total.saturating_add(meta.blocks().saturating_mul(512));
+        total = total.saturating_add(crate::space_lens::allocated(meta));
     });
     total
 }
@@ -392,7 +392,7 @@ mod tests {
 
     /// What `file` takes on disk, as `stat` reports its blocks.
     fn on_disk(file: &Path) -> u64 {
-        fs::symlink_metadata(file).unwrap().blocks() * 512
+        crate::space_lens::allocated(&fs::symlink_metadata(file).unwrap())
     }
 
     #[test]
