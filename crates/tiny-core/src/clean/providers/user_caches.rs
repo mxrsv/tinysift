@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 
 use super::purged_caches::{real_pip, PIP_FOLDER};
 use super::{execute_per_item, run_tool, CleanProvider};
-use crate::clean::fs_safe::{dir_size_checked, list_children};
+use crate::clean::fs_safe::{dir_size_checked, is_dir_safe, list_children};
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, Evidence, ExecAction, ExecReport, RiskLevel};
 use crate::runner::CommandRunner;
@@ -32,6 +32,12 @@ const VENDOR_APPS: &[(&str, &str)] = &[
     ("Google", "Google Chrome"),
     ("BraveSoftware", "Brave Browser"),
 ];
+/// Where a JetBrains-platform IDE keeps the user's edit history, inside its
+/// system directory: `<vendor>/<product><version>`, or `<product><version>`
+/// alone for older IDEs.
+const LOCAL_HISTORY: &str = "LocalHistory";
+/// The vendor folder `jetbrains` lists what the IDEs rebuild from.
+const JETBRAINS: &str = "JetBrains";
 /// Ids per Spotlight query, so hundreds of cache folders stay safe.
 const QUERY_CHUNK: usize = 50;
 
@@ -205,7 +211,8 @@ impl UserCaches {
             .into_iter()
             .filter_map(|path| {
                 let name = path.file_name()?.to_str()?.to_string();
-                (!is_apple_cache(&name) && !owned(&name)).then_some((path, name))
+                let offered = !is_apple_cache(&name) && !owned(&name) && !holds_ide_history(&path);
+                offered.then_some((path, name))
             })
             .collect();
         let ids: Vec<&str> = paths
@@ -275,6 +282,22 @@ impl CleanProvider for UserCaches {
 
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// An IDE's system directory, or a vendor folder with one in it, is never
+/// offered whole: beside caches that holds Local History, the user's edit
+/// history, which nothing rebuilds. JetBrains' own is `jetbrains`'s to list;
+/// any other (`Google/AndroidStudio*`) is found by the history folder itself.
+// ponytail: the vendor's other caches (`Google/Chrome`) go unoffered with
+// it; list such a folder's children one by one if that space is missed.
+fn holds_ide_history(vendor: &Path) -> bool {
+    vendor.file_name().is_some_and(|name| name == JETBRAINS)
+        || is_dir_safe(&vendor.join(LOCAL_HISTORY))
+        || std::fs::read_dir(vendor).is_ok_and(|systems| {
+            systems
+                .flatten()
+                .any(|system| is_dir_safe(&system.path().join(LOCAL_HISTORY)))
+        })
 }
 
 /// System daemon caches (`com.apple.bird`, `CloudKit`, ...) are not the
@@ -400,6 +423,32 @@ mod tests {
             .list_caches(&ctx, &root)
             .unwrap();
         assert_eq!(names(&items), vec!["Homebrew"]);
+        cleanup(&root);
+    }
+
+    #[test]
+    fn a_vendor_folder_holding_an_ides_local_history_is_never_offered() {
+        let root = fixture(
+            "ide-history",
+            &["JetBrains", "Google", "Homebrew", "IdeaIC2019.3"],
+        );
+        let history = root.join("Google/AndroidStudio2025.1/LocalHistory");
+        std::fs::create_dir_all(&history).unwrap();
+        std::fs::create_dir_all(root.join("IdeaIC2019.3/LocalHistory")).unwrap();
+        std::fs::create_dir_all(root.join("Google/Chrome")).unwrap();
+        let m = MockChecker::none();
+        let ctx = ScanContext::new(None, &m);
+        let caches = provider(MockRunner::new());
+        assert_eq!(
+            names(&caches.list_caches(&ctx, &root).unwrap()),
+            ["Homebrew"]
+        );
+        // Without an IDE's history in it, the vendor's folder is a cache like any other.
+        std::fs::remove_dir(&history).unwrap();
+        assert_eq!(
+            names(&caches.list_caches(&ctx, &root).unwrap()),
+            ["Google", "Homebrew"]
+        );
         cleanup(&root);
     }
 
