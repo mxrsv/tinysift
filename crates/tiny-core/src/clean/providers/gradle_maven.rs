@@ -10,10 +10,11 @@ use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 use crate::runner::CommandRunner;
 
 const ID: &str = "gradle-maven";
-const LABEL: &str = "Gradle/Maven caches";
+const LABEL: &str = "Gradle caches";
 
+/// Maven's local repository (`~/.m2/repository`) is not offered: besides
+/// downloads it holds what `mvn install` put there, which no server has.
 const GRADLE_SUBDIRS: &[&str] = &[".gradle/caches", ".gradle/daemon"];
-const MAVEN_SUBDIR: &str = ".m2/repository";
 /// `pgrep -f` pattern for a running Gradle: the daemon, the client and the
 /// wrapper all run as `java` with one of these classes. A daemon outlives
 /// its build (three idle hours by default) and holds the caches open.
@@ -41,7 +42,7 @@ impl CleanProvider for GradleMaven {
         LABEL
     }
     fn inclusion_reason(&self) -> String {
-        "Gradle and Maven caches re-downloaded on the next build".into()
+        "Gradle caches re-downloaded on the next build".into()
     }
     fn risk(&self) -> RiskLevel {
         RiskLevel::Review
@@ -54,31 +55,10 @@ impl CleanProvider for GradleMaven {
             Some(h) => h,
             None => return false,
         };
-        GRADLE_SUBDIRS.iter().any(|s| h.join(s).exists()) || h.join(MAVEN_SUBDIR).exists()
+        GRADLE_SUBDIRS.iter().any(|s| h.join(s).exists())
     }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
-        let h = match home() {
-            Some(h) => h,
-            None => return Ok(Vec::new()),
-        };
-        let mut items = Vec::new();
-        for sub in GRADLE_SUBDIRS {
-            items.extend(root_as_item(
-                ctx,
-                &h.join(sub),
-                ID,
-                LABEL,
-                RiskLevel::Review,
-            ));
-        }
-        items.extend(root_as_item(
-            ctx,
-            &h.join(MAVEN_SUBDIR),
-            ID,
-            LABEL,
-            RiskLevel::Review,
-        ));
-        Ok(items)
+        Ok(home().map_or_else(Vec::new, |h| gradle_caches(ctx, &h)))
     }
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
         execute_per_item(items, action, ID)
@@ -92,6 +72,13 @@ impl CleanProvider for GradleMaven {
     }
 }
 
+fn gradle_caches(ctx: &ScanContext<'_>, home: &Path) -> Vec<CleanItem> {
+    GRADLE_SUBDIRS
+        .iter()
+        .flat_map(|sub| root_as_item(ctx, &home.join(sub), ID, LABEL, RiskLevel::Review))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +87,25 @@ mod tests {
     #[test]
     fn gradle_maven_id_in_known_categories() {
         assert!(known_category_ids().contains(&ID));
+    }
+
+    /// RP-04: `mvn install` puts the user's own builds in `~/.m2/repository`.
+    #[test]
+    fn maven_s_local_repository_is_never_offered() {
+        let home = tempfile::tempdir().unwrap();
+        for sub in [
+            ".gradle/caches/modules-2",
+            ".gradle/daemon/8.10",
+            ".m2/repository/com",
+        ] {
+            std::fs::create_dir_all(home.path().join(sub)).unwrap();
+        }
+        let items = gradle_caches(&ScanContext::unchecked(), home.path());
+        let paths: Vec<_> = items.iter().map(|i| i.path.clone()).collect();
+        assert_eq!(
+            paths,
+            [".gradle/caches", ".gradle/daemon"].map(|sub| home.path().join(sub))
+        );
     }
 
     /// RP-06: a running daemon holds the caches open.

@@ -39,6 +39,14 @@ const VENDOR_APPS: &[(&str, &str)] = &[
 const LOCAL_HISTORY: &str = "LocalHistory";
 /// The vendor folder `jetbrains` lists what the IDEs rebuild from.
 const JETBRAINS: &str = "JetBrains";
+/// Tools that keep state beside their caches by default, and where:
+/// Poetry's virtualenvs (`virtualenvs.path` is `{cache-dir}/virtualenvs`)
+/// and Deno's origin data (localStorage and Deno KV in `location_data`,
+/// which Deno plans to rename `origin_data`). Nothing rebuilds them.
+const TOOL_STATE: &[(&str, &[&str])] = &[
+    ("pypoetry", &["virtualenvs"]),
+    ("deno", &["location_data", "origin_data"]),
+];
 /// Ids per Spotlight query, so hundreds of cache folders stay safe.
 const QUERY_CHUNK: usize = 50;
 
@@ -215,7 +223,8 @@ impl UserCaches {
                 let offered = !is_apple_cache(&name)
                     && !owned(&name)
                     && !holds_ide_history(&path)
-                    && holds_user_data(&path).is_none();
+                    && holds_user_data(&path).is_none()
+                    && !holds_tool_state(&path, &name);
                 offered.then_some((path, name))
             })
             .collect();
@@ -304,6 +313,18 @@ fn holds_ide_history(vendor: &Path) -> bool {
                     system.map_or(true, |s| is_dir_safe(&s.path().join(LOCAL_HISTORY)))
                 })
             }))
+}
+
+/// A tool's cache folder holding its state (`TOOL_STATE`) is never offered
+/// whole.
+// ponytail: the tool's caches go unoffered with it; list such a folder's
+// children one by one if that space is missed.
+fn holds_tool_state(folder: &Path, name: &str) -> bool {
+    TOOL_STATE
+        .iter()
+        .filter(|(tool, _)| tool.eq_ignore_ascii_case(name))
+        .flat_map(|(_, state)| state.iter())
+        .any(|state| std::fs::symlink_metadata(folder.join(state)).is_ok())
 }
 
 /// System daemon caches (`com.apple.bird`, `CloudKit`, ...) are not the
@@ -462,6 +483,32 @@ mod tests {
         assert_eq!(
             names(&caches.list_caches(&ctx, &root).unwrap()),
             ["Google", "Homebrew"]
+        );
+        cleanup(&root);
+    }
+
+    /// RP-04: Poetry's virtualenvs and Deno's localStorage and KV live in
+    /// their cache folders by default.
+    #[test]
+    fn a_tool_folder_holding_its_state_is_never_offered() {
+        let root = fixture("tool-state", &["pypoetry", "deno", "Homebrew"]);
+        std::fs::create_dir_all(root.join("pypoetry/virtualenvs/app-py3.12")).unwrap();
+        std::fs::create_dir_all(root.join("pypoetry/artifacts")).unwrap();
+        std::fs::create_dir_all(root.join("deno/location_data/0a1b")).unwrap();
+        std::fs::create_dir_all(root.join("deno/remote")).unwrap();
+        let m = MockChecker::none();
+        let ctx = ScanContext::new(None, &m);
+        let caches = provider(MockRunner::new());
+        assert_eq!(
+            names(&caches.list_caches(&ctx, &root).unwrap()),
+            ["Homebrew"]
+        );
+        // Without state in them, they are caches like any other.
+        std::fs::remove_dir_all(root.join("pypoetry/virtualenvs")).unwrap();
+        std::fs::remove_dir_all(root.join("deno/location_data")).unwrap();
+        assert_eq!(
+            names(&caches.list_caches(&ctx, &root).unwrap()),
+            ["deno", "pypoetry", "Homebrew"]
         );
         cleanup(&root);
     }

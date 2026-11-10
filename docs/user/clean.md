@@ -95,6 +95,10 @@ along. Those overlapping selections are retained and explained in the final repo
   when Node runs it), `codex-runtimes` (ChatGPT), `codex-releases` (Codex) and
   `system-simulator-caches` (Xcode, Simulator, `xcodebuild`, `xctest`, `XCTRunner`,
   `simctl`, a booted simulator's `launchd_sim`, or any booted simulator).
+- `user-caches` never offers a folder that keeps a tool's state beside its caches: `pypoetry` while it holds
+  Poetry's `virtualenvs`, or `deno` while it holds Deno's `location_data` (localStorage and Deno KV)
+  ([`user_caches.rs`](../../crates/tiny-core/src/clean/providers/user_caches.rs)). `gradle-maven` lists only
+  Gradle's caches: Maven's `~/.m2/repository` also holds what `mvn install` put there, so it is not offered.
 - `npm` offers only npm's package cache (`_cacache`), never `_npx`, where the packages `npx` runs live.
 - `puppeteer` leaves out just the builds of a browser that is running (Chrome for Testing or
   `chrome-headless-shell`), without a message.
