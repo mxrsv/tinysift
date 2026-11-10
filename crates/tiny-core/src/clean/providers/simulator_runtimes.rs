@@ -504,6 +504,6 @@ mod tests {
         assert_eq!(p.risk(), RiskLevel::Review);
         assert!(!p.needs_admin(), "simctl runtime delete runs without sudo");
         assert_eq!(desktop_report_only(&p), Some(ReportOnly::NotPerPathTrash));
-        assert_eq!(p.quit_apps(), vec!["Xcode", "Simulator"]);
+        assert_eq!(p.quit_apps(), vec!["Xcode", "Simulator", "xcodebuild"]);
     }
 }

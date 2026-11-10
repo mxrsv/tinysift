@@ -11,8 +11,8 @@ const ID: &str = "ios-simulators";
 const LABEL: &str = "iOS Simulator caches";
 
 /// Apps that use CoreSimulator data; both simulator categories wait for
-/// them to quit.
-pub(super) const SIMULATOR_APPS: &[&str] = &["Xcode", "Simulator"];
+/// them to quit. `xcodebuild test` boots devices without the Simulator app.
+pub(super) const SIMULATOR_APPS: &[&str] = &["Xcode", "Simulator", "xcodebuild"];
 
 /// Devices are not listed here: removing one is `xcrun simctl delete`
 /// (`simulator-devices`), and `Devices/` also holds `device_set.plist`,
@@ -91,9 +91,12 @@ mod tests {
     }
 
     #[test]
-    fn ios_simulators_gates_xcode_and_simulator() {
+    fn ios_simulators_gates_xcode_simulator_and_xcodebuild() {
         let p = IosSimulators;
-        assert_eq!(p.quit_apps(), vec!["Xcode", "Simulator"]);
-        assert_eq!(p.item_apps(Path::new("/x")), vec!["Xcode", "Simulator"]);
+        assert_eq!(p.quit_apps(), vec!["Xcode", "Simulator", "xcodebuild"]);
+        assert_eq!(
+            p.item_apps(Path::new("/x")),
+            vec!["Xcode", "Simulator", "xcodebuild"]
+        );
     }
 }

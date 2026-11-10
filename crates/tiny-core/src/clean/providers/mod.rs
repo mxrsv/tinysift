@@ -399,7 +399,7 @@ pub fn all_providers_with(
             opts,
             runner.clone(),
         )),
-        Box::new(gradle_maven::GradleMaven),
+        Box::new(gradle_maven::GradleMaven::with_runner(runner.clone())),
         Box::new(jetbrains::JetBrains),
         Box::new(vscode::VsCode),
         Box::new(ios_simulators::IosSimulators),

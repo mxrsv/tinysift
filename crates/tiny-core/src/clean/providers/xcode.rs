@@ -6,6 +6,8 @@ use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 
 const APP: &str = "Xcode";
+/// Builds from a terminal, a script or an agent write DerivedData too.
+const DERIVED_TOOLS: &[&str] = &[APP, "xcodebuild"];
 
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
@@ -32,8 +34,8 @@ impl CleanProvider for XcodeDerivedData {
     fn desktop_trash_paths(&self) -> bool {
         true
     }
-    fn requires_app_quit(&self) -> Option<&'static str> {
-        Some(APP)
+    fn quit_apps(&self) -> Vec<&'static str> {
+        DERIVED_TOOLS.to_vec()
     }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
         let h = match home() {
@@ -204,6 +206,22 @@ mod tests {
         assert_eq!(items[0].risk, RiskLevel::Safe);
         assert!(XcodePreviews.desktop_trash_paths());
         assert_eq!(XcodePreviews.desktop_tool(), None);
+    }
+
+    /// RP-06: a build outside Xcode writes DerivedData too.
+    #[test]
+    fn derived_data_is_skipped_while_xcodebuild_runs() {
+        let providers: Vec<Box<dyn CleanProvider>> = vec![Box::new(XcodeDerivedData)];
+        let checker = MockChecker::with_running(["xcodebuild"]);
+        let found = discover_checked(&providers, &ScanContext::new(None, &checker), None);
+        assert!(matches!(
+            &found.categories[0].outcome,
+            CategoryOutcome::AppRunning { app } if app == "xcodebuild"
+        ));
+        assert_eq!(
+            XcodeDerivedData.item_apps(std::path::Path::new("/x")),
+            ["Xcode", "xcodebuild"]
+        );
     }
 
     #[test]

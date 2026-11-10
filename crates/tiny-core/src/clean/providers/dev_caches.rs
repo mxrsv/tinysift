@@ -73,6 +73,8 @@ const CARGO_LABEL: &str = "Cargo cache";
 /// Cargo subdirs we will touch — pinned. Anything else under `~/.cargo`
 /// (especially `bin/`, `config.toml`, `credentials*`) is off-limits.
 const CARGO_SUBDIRS: &[&str] = &["registry/cache", "registry/src", "git/db", "git/checkouts"];
+/// A build reads the sources it compiles from `registry/src` and `git/checkouts`.
+const CARGO_TOOLS: &[&str] = &["cargo", "rustc"];
 
 pub struct CargoCache;
 
@@ -91,6 +93,9 @@ impl CleanProvider for CargoCache {
     }
     fn desktop_trash_paths(&self) -> bool {
         true
+    }
+    fn quit_apps(&self) -> Vec<&'static str> {
+        CARGO_TOOLS.to_vec()
     }
     fn available(&self) -> bool {
         home().map(|h| h.join(".cargo").is_dir()).unwrap_or(false)
@@ -153,6 +158,10 @@ pub fn is_safe_cargo_path(path: &std::path::Path) -> bool {
 
 const NPM_ID: &str = "npm";
 const NPM_LABEL: &str = "npm cache";
+/// The packages npm downloads, inside the folder `npm config get cache`
+/// prints. Its sibling `_npx` holds the packages `npx` runs, often servers
+/// that keep running (an agent's MCP servers), so it is never offered.
+const NPM_PACKAGES: &str = "_cacache";
 
 pub struct NpmCache {
     runner: Arc<dyn CommandRunner>,
@@ -191,7 +200,7 @@ impl CleanProvider for NpmCache {
     }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
         let path = match tool_path(self.runner.as_ref(), "npm", &["config", "get", "cache"])? {
-            Some(p) => p,
+            Some(p) => p.join(NPM_PACKAGES),
             None => return Ok(Vec::new()),
         };
         Ok(root_sparing_user_data(
@@ -499,6 +508,36 @@ mod tests {
 
     fn calls(runner: &MockRunner) -> Vec<String> {
         runner.run_calls.lock().unwrap().clone()
+    }
+
+    // ---------- npm and cargo ----------
+
+    /// RP-06: `_npx` holds what `npx` runs, so it stays.
+    #[test]
+    fn npm_offers_its_package_cache_never_npx() {
+        let dir = tempfile::tempdir().unwrap();
+        let cache = dir.path().join(".npm");
+        for sub in ["_cacache/content-v2", "_npx/0123abcd/node_modules", "_logs"] {
+            std::fs::create_dir_all(cache.join(sub)).unwrap();
+        }
+        let runner = MockRunner::new().with_which("npm").with_exit(
+            "npm",
+            &["config", "get", "cache"],
+            0,
+            &printed(&cache),
+        );
+        let ctx = ScanContext::unchecked();
+        let items = NpmCache::with_runner(Arc::new(runner))
+            .discover(&ctx)
+            .unwrap();
+        assert_eq!(paths(&items), vec![cache.join("_cacache")]);
+    }
+
+    /// RP-06: a build compiles from the registry sources.
+    #[test]
+    fn cargo_waits_for_cargo_and_rustc() {
+        assert_eq!(CargoCache.quit_apps(), ["cargo", "rustc"]);
+        assert_eq!(CargoCache.item_apps(Path::new("/x")), ["cargo", "rustc"]);
     }
 
     // ---------- uv ----------

@@ -240,7 +240,7 @@ fn per_path_app_gates_name_the_owning_app() {
     );
     assert_eq!(
         xcode::XcodeDerivedData.item_apps(Path::new("/x")),
-        vec!["Xcode"]
+        vec!["Xcode", "xcodebuild"]
     );
 }
 

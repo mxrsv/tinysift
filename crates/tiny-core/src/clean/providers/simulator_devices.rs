@@ -523,7 +523,7 @@ mod tests {
         let p = SimulatorDevices::with_runner(Arc::new(MockRunner::new()));
         assert!(known_category_ids().contains(&ID));
         assert_eq!(p.risk(), RiskLevel::Review);
-        assert_eq!(p.quit_apps(), vec!["Xcode", "Simulator"]);
+        assert_eq!(p.quit_apps(), vec!["Xcode", "Simulator", "xcodebuild"]);
     }
 }
 

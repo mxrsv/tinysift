@@ -88,12 +88,14 @@ along. Those overlapping selections are retained and explained in the final repo
   removed, and neither is one whose tracked files git cannot list (for example without the
   Command Line Tools).
 - Some categories are skipped while their app is open, and `tiny` tells you which app to quit:
-  the Xcode categories (Xcode), `ios-simulators`, `simulator-devices` and `simulator-runtimes`
-  (Xcode or Simulator), `mail-attachments` (Mail), `vscode` (VS Code), `android-sdk` (Android Studio),
-  `docker-volumes` (Docker Desktop), `bun-cache` (bun), `uv` (uv or uvx), `pnpm` (pnpm, including
+  the Xcode categories (Xcode; `xcode-derived` also `xcodebuild`), `ios-simulators`, `simulator-devices` and
+  `simulator-runtimes` (Xcode, Simulator or `xcodebuild`), `cargo` (cargo or rustc), `gradle-maven` (a Gradle daemon,
+  client or wrapper, checked right before the move), `mail-attachments` (Mail), `vscode` (VS Code), `android-sdk`
+  (Android Studio), `docker-volumes` (Docker Desktop), `bun-cache` (bun), `uv` (uv or uvx), `pnpm` (pnpm, including
   when Node runs it), `codex-runtimes` (ChatGPT), `codex-releases` (Codex) and
   `system-simulator-caches` (Xcode, Simulator, `xcodebuild`, `xctest`, `XCTRunner`,
   `simctl`, a booted simulator's `launchd_sim`, or any booted simulator).
+- `npm` offers only npm's package cache (`_cacache`), never `_npx`, where the packages `npx` runs live.
 - `puppeteer` leaves out just the builds of a browser that is running (Chrome for Testing or
   `chrome-headless-shell`), without a message.
 - `browser-caches`, `chat-caches`, `streaming-caches` and `user-caches` instead leave out
