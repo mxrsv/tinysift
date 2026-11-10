@@ -337,6 +337,32 @@ fn a_running_or_unknowable_app_moves_nothing() {
     }
     assert!(trash.moved().is_empty());
 }
+/// SS-2: the Installed list calls an app Running when any process runs from
+/// its bundle; the review and the run must agree, whatever that process is named.
+#[test]
+fn a_helper_running_from_the_bundle_keeps_the_app_running() {
+    use crate::clean::process::test_support::run_from;
+    let world = World::new();
+    let trash = TestTrash::new();
+    let mut helper = run_from(
+        &world.apps.join("App.app/Contents/Library/LoginItems"),
+        "tiny-fixture-agent",
+    );
+    let review = world.plan.app_running(&MockChecker::none());
+    let result = world.run_with(&[BUNDLE, CACHE], &MockChecker::none(), &trash, None);
+    let _ = helper.kill();
+    let _ = helper.wait();
+    assert_eq!(review, Some(Ok(true)));
+    assert_eq!(
+        result.unwrap_err(),
+        UninstallRefusal::AppRunning(EXE.into())
+    );
+    assert!(trash.moved().is_empty());
+    assert_eq!(
+        world.plan.app_running(&MockChecker::none()),
+        Some(Ok(false))
+    );
+}
 #[test]
 fn an_app_that_starts_mid_run_stops_the_run() {
     let world = World::new();

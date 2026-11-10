@@ -79,6 +79,37 @@ impl CheckedPlan {
     pub fn items(&self) -> &[CheckedItem] {
         &self.items
     }
+
+    /// Whether the app runs (`App::running`), or `None` when its process name
+    /// could not be read.
+    pub fn app_running(&self, probe: &dyn AppProbe) -> Option<Result<bool, String>> {
+        self.app().map(|app| app.running(probe))
+    }
+
+    fn app(&self) -> Option<App<'_>> {
+        Some(App {
+            name: self.executable.as_deref()?,
+            bundle: &self.target.path,
+        })
+    }
+}
+
+/// The app a running-app check asks about.
+#[derive(Clone, Copy)]
+struct App<'p> {
+    /// `CFBundleExecutable`, named in a refusal.
+    name: &'p str,
+    bundle: &'p Path,
+}
+
+impl App<'_> {
+    /// A process whose executable lies inside the bundle (the app, or a
+    /// helper it ships under another name), else a process with the app's
+    /// name (a copy started from elsewhere). Unknown is an error, never "not
+    /// running".
+    fn running(self, probe: &dyn AppProbe) -> Result<bool, String> {
+        Ok(probe.probe_bundle(self.bundle)? || probe.probe(self.name)?)
+    }
 }
 
 /// A run that was refused before anything moved.
@@ -323,16 +354,13 @@ fn execute_selected(
             ))
         })?;
     }
-    let app = plan
-        .executable
-        .as_deref()
-        .ok_or(UninstallRefusal::ExecutableUnknown)?;
-    match ctx.probe.probe(app) {
+    let app = plan.app().ok_or(UninstallRefusal::ExecutableUnknown)?;
+    match app.running(ctx.probe) {
         Ok(false) => {}
-        Ok(true) => return Err(UninstallRefusal::AppRunning(app.into())),
+        Ok(true) => return Err(UninstallRefusal::AppRunning(app.name.into())),
         Err(error) => {
             return Err(UninstallRefusal::AppCheckFailed {
-                name: app.into(),
+                name: app.name.into(),
                 error,
             })
         }
@@ -416,7 +444,7 @@ impl From<SkipReason> for Halt {
 
 fn act_on(
     item: &CheckedItem,
-    app: &str,
+    app: App<'_>,
     ctx: &UninstallContext<'_>,
     stopped: &mut Option<StopReason>,
     delete: Option<&dyn Delete>,
@@ -456,7 +484,7 @@ fn act_on(
 /// Everything that must hold immediately before `item` moves.
 fn check_item(
     item: &CheckedItem,
-    app: &str,
+    app: App<'_>,
     ctx: &UninstallContext<'_>,
     target: Option<&CheckedItem>,
 ) -> Result<(), Halt> {
@@ -465,9 +493,9 @@ fn check_item(
     }
     policy_unchanged(ctx.policy).map_err(|stop| Halt::Stop(stop.into()))?;
     protection_skip(ctx.policy, &item.path)?;
-    match ctx.probe.probe(app) {
+    match app.running(ctx.probe) {
         Ok(false) => {}
-        Ok(true) => return Err(Halt::Stop(StopReason::AppRunning(app.into()))),
+        Ok(true) => return Err(Halt::Stop(StopReason::AppRunning(app.name.into()))),
         Err(error) => return Err(Halt::Stop(StopReason::AppCheckFailed(error))),
     }
     if let Some(target) = target {

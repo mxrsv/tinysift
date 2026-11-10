@@ -2,7 +2,7 @@
 //! being reported as freshly measured zeroes.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
@@ -239,6 +239,24 @@ struct Seen {
     /// macOS's answer for the responsible process, read once per pid and start time: it is
     /// set when the process is spawned and does not change after.
     responsible: Option<u32>,
+}
+
+/// Whether any process's executable lies inside `folder` (by path
+/// components), as the folder is named or after resolving its links. A
+/// process whose executable cannot be read does not count.
+pub fn runs_from(folder: &Path) -> bool {
+    let real = std::fs::canonicalize(folder).ok();
+    let mut system = System::new();
+    system.refresh_processes_specifics(
+        ProcessesToUpdate::All,
+        true,
+        ProcessRefreshKind::new().with_exe(UpdateKind::Always),
+    );
+    system.processes().values().any(|process| {
+        process.exe().is_some_and(|exe| {
+            exe.starts_with(folder) || real.as_deref().is_some_and(|real| exe.starts_with(real))
+        })
+    })
 }
 
 /// The name a fresh lookup reports for `pid`, as `terminate` sees it.

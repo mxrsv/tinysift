@@ -647,7 +647,12 @@ mod tests {
         MockRunner::new()
             .with_which("pnpm")
             .with_exit("pnpm", &["store", "path"], 0, &printed(store))
-            .with_exit(PGREP, &["-f", "--", PNPM_COMMAND_LINE], pgrep_status, "")
+            .with_exit(
+                PGREP,
+                &["-a", "-f", "--", PNPM_COMMAND_LINE],
+                pgrep_status,
+                "",
+            )
     }
 
     #[test]
@@ -716,7 +721,7 @@ mod tests {
             .starts_with("running-pnpm check failed"));
         let failed = Arc::new(MockRunner::new().with_which("pnpm").with_output(
             PGREP,
-            &["-f", "--", PNPM_COMMAND_LINE],
+            &["-a", "-f", "--", PNPM_COMMAND_LINE],
             Err(crate::runner::CommandError::Timeout {
                 bin: PGREP.into(),
                 timeout_ms: 5000,

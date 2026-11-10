@@ -206,7 +206,7 @@ impl TinySession {
             .map_err(|r| refused(records::refusal(r, |i| i.to_string())))?;
         // Rules are read without the state lock (lock order).
         let policy = self.load_policy()?;
-        let run_state = run_state(probe, checked.executable());
+        let run_state = run_state(probe, &checked);
         let (leftovers_searched, leftovers_skipped_reason) = leftover_search(&app);
         let mut state = self.uninstall_state();
         let ttl = state.ttl.unwrap_or(PREVIEW_TTL);
@@ -465,13 +465,13 @@ fn leftover_search(app: &AppEntry) -> (bool, Option<String>) {
     }
 }
 
-fn run_state(probe: &dyn AppProbe, executable: Option<&str>) -> FfiAppRunState {
-    let Some(name) = executable else {
+fn run_state(probe: &dyn AppProbe, plan: &CheckedPlan) -> FfiAppRunState {
+    let Some(running) = plan.app_running(probe) else {
         return FfiAppRunState::Unknown {
             detail: "the app's process name could not be read".into(),
         };
     };
-    match probe.probe(name) {
+    match running {
         Ok(true) => FfiAppRunState::Running,
         Ok(false) => FfiAppRunState::NotRunning,
         Err(detail) => FfiAppRunState::Unknown { detail },

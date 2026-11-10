@@ -24,7 +24,9 @@ pub use ports::{
 };
 pub use pressure::MemoryPressure;
 pub use role::{ProcessRole, RoleCache};
-pub use snapshot::{LoadAverage, ProcessInfo, ProcessKey, ProcessSnapshot, Sampler, SystemUsage};
+pub use snapshot::{
+    runs_from, LoadAverage, ProcessInfo, ProcessKey, ProcessSnapshot, Sampler, SystemUsage,
+};
 pub use terminate::{
     refusal, terminate, Refusal, TerminateKind, TerminateOutcome, TerminateTarget,
 };

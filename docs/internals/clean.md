@@ -65,7 +65,8 @@ and failed categories vanish silently. The app keeps every outcome and also refu
 home folder, its ancestors and tool-printed paths outside home
 ([`protected_reason`](../../crates/tiny-core/src/clean/trash_plan.rs)).
 
-App gating has two mechanisms, both `pgrep -x` on a process name (`pnpm` adds a third check, below). `quit_apps()` (default
+App gating has two mechanisms, both `pgrep -a -x` on a process name (`pnpm` adds a third check, below). `-a` counts
+`pgrep`'s own ancestors, so `tiny clean` sees the terminal, editor, agent or package script it runs inside. `quit_apps()` (default
 `requires_app_quit()`) skips the whole category while its app runs. `browser-caches`,
 `chat-caches`, `streaming-caches` and `user-caches` instead drop only a running app's paths
 inside `discover()` (`ScanContext::known_running`). Right before each move the app re-checks
@@ -650,8 +651,9 @@ the rules. There are two: `execute_checked`, and
 [`execute_checked_uninstall`](../../crates/tiny-core/src/uninstall/checked.rs) for an app and its
 leftovers. The second takes a plan frozen at discovery (fingerprint, ownership and expected
 container per item) plus a set of item indexes, never a path. Report-only and uncertain items
-refuse the whole run; the app must not be running (its `CFBundleExecutable`, unknown means
-refuse); the bundle moves first, so a bundle that does not move leaves every leftover untouched.
+refuse the whole run; the app must not be running: no process with its `CFBundleExecutable` name and none whose
+executable lies inside the bundle, a helper of another name included, as the Installed list's Running pill counts
+(`CheckedPlan::app_running`; unknown means refuse); the bundle moves first, so a bundle that does not move leaves every leftover untouched.
 Leftovers-only runs are allowed. The bundle too must be on the home volume (Finder may delete
 permanently on a volume without a Trash). The plan must be built at discovery, because its
 fingerprints are taken there; build it only from a core-built `Plan`, never from client input.

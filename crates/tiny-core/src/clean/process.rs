@@ -1,10 +1,13 @@
 //! Running-app detection.
 //!
-//! Wraps `pgrep -x <name>` (exit 0 = at least one matching process) behind a
-//! `ProcessChecker` trait so tests can inject deterministic answers.
+//! Wraps `pgrep -a -x <name>` (exit 0 = at least one matching process) behind a
+//! `ProcessChecker` trait so tests can inject deterministic answers. `-a`: by
+//! default `pgrep` leaves out its own ancestors, so the terminal, editor or
+//! agent a command runs inside, and this app itself, would read as not running.
 //! `ProcessChecker` keeps the CLI's lenient semantics (a failed `pgrep` reads
 //! as "not running"); checked code uses the fallible `AppProbe`.
 
+use std::path::Path;
 use std::process::Command;
 use std::time::Duration;
 
@@ -18,15 +21,22 @@ const PROBE_TIMEOUT: Duration = Duration::from_secs(5);
 /// caller acting on the result must refuse rather than assume "not running".
 pub trait AppProbe {
     fn probe(&self, name: &str) -> Result<bool, String>;
+
+    /// Whether any process runs an executable inside `bundle`: the app or a
+    /// helper it ships, whatever their names. Read from the process table, so
+    /// a test probe gets the real answer unless it overrides this.
+    fn probe_bundle(&self, bundle: &Path) -> Result<bool, String> {
+        Ok(crate::processes::runs_from(bundle))
+    }
 }
 
-/// `pgrep -x` through the bounded runner: exit 0 = running, exit 1 = not
+/// `pgrep -a -x` through the bounded runner: exit 0 = running, exit 1 = not
 /// running, anything else (other exit, spawn failure, timeout) = unknown.
 pub struct RunnerProbe<'r>(pub &'r dyn CommandRunner);
 
 impl AppProbe for RunnerProbe<'_> {
     fn probe(&self, name: &str) -> Result<bool, String> {
-        pgrep(self.0, &["-x", "--", &escape_regex(name)])
+        pgrep(self.0, &["-a", "-x", "--", &escape_regex(name)])
     }
 }
 
@@ -34,7 +44,7 @@ impl AppProbe for RunnerProbe<'_> {
 /// `pattern`. For tools that run as a script (`node …/pnpm.cjs`), whose
 /// process name is the interpreter's. Unknown is an error, as in `RunnerProbe`.
 pub fn command_line_running(runner: &dyn CommandRunner, pattern: &str) -> Result<bool, String> {
-    pgrep(runner, &["-f", "--", pattern])
+    pgrep(runner, &["-a", "-f", "--", pattern])
 }
 
 fn pgrep(runner: &dyn CommandRunner, args: &[&str]) -> Result<bool, String> {
@@ -79,7 +89,7 @@ pub struct PgrepChecker;
 impl ProcessChecker for PgrepChecker {
     fn is_running(&self, name: &str) -> bool {
         Command::new("pgrep")
-            .args(["-x", name])
+            .args(["-a", "-x", name])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
@@ -103,6 +113,27 @@ pub fn any_running(checker: &dyn ProcessChecker, names: &[&str]) -> bool {
 pub mod test_support {
     use super::{AppProbe, ProcessChecker};
     use std::collections::HashSet;
+    use std::path::Path;
+    use std::process::{Child, Command};
+
+    /// A process named `name` whose executable sits in `folder`: a copy of
+    /// `/bin/sleep`, signed again, since macOS kills a copied system binary.
+    /// The caller kills it.
+    pub fn run_from(folder: &Path, name: &str) -> Child {
+        std::fs::create_dir_all(folder).unwrap();
+        let exe = folder.join(name);
+        std::fs::copy("/bin/sleep", &exe).unwrap();
+        let signed = Command::new("/usr/bin/codesign")
+            .args(["--force", "--sign", "-"])
+            .arg(&exe)
+            .output()
+            .unwrap();
+        assert!(signed.status.success(), "{signed:?}");
+        let child = Command::new(&exe).arg("30").spawn().unwrap();
+        // Until `exec` is done the process table may show the parent's image.
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        child
+    }
 
     /// A probe whose answer is always unknown.
     pub struct FailingProbe;
@@ -172,12 +203,12 @@ mod tests {
             })
         };
         let runner = MockRunner::new()
-            .with_output(PGREP, &["-x", "--", "Xcode"], exit(0))
-            .with_output(PGREP, &["-x", "--", "Mail"], exit(1))
-            .with_output(PGREP, &["-x", "--", "Bad"], exit(2))
+            .with_output(PGREP, &["-a", "-x", "--", "Xcode"], exit(0))
+            .with_output(PGREP, &["-a", "-x", "--", "Mail"], exit(1))
+            .with_output(PGREP, &["-a", "-x", "--", "Bad"], exit(2))
             .with_output(
                 PGREP,
-                &["-x", "--", "Slow"],
+                &["-a", "-x", "--", "Slow"],
                 Err(CommandError::Timeout {
                     bin: PGREP.into(),
                     timeout_ms: 5000,
@@ -202,6 +233,37 @@ mod tests {
         let _ = child.wait();
         assert_eq!(running, Ok(true));
         assert_eq!(absent, Ok(false));
+    }
+
+    /// RE2: `tiny clean` run from a terminal, an editor or an agent must see
+    /// that app. This test binary is `pgrep`'s parent.
+    #[test]
+    fn runner_probe_sees_its_own_ancestors() {
+        use crate::runner::RealRunner;
+        let exe = std::env::current_exe().unwrap();
+        let name = exe.file_name().unwrap().to_str().unwrap();
+        assert_eq!(RunnerProbe(&RealRunner).probe(name), Ok(true), "{name}");
+    }
+
+    /// SS-2: a helper of another name keeps the app running.
+    #[test]
+    fn bundle_probe_sees_a_helper_of_another_name() {
+        use crate::runner::RealRunner;
+        let dir = tempfile::tempdir().unwrap();
+        let bundle = dir.path().join("Fixture.app");
+        let mut helper = super::test_support::run_from(
+            &bundle.join("Contents/Library/LoginItems/Helper.app/Contents/MacOS"),
+            "tiny-fixture-helper",
+        );
+        let probe = RunnerProbe(&RealRunner);
+        let inside = probe.probe_bundle(&bundle);
+        let sibling = probe.probe_bundle(&dir.path().join("Fixture"));
+        let by_name = probe.probe("Fixture");
+        let _ = helper.kill();
+        let _ = helper.wait();
+        let after = probe.probe_bundle(&bundle);
+        assert_eq!((inside, sibling, by_name), (Ok(true), Ok(false), Ok(false)));
+        assert_eq!(after, Ok(false));
     }
 
     #[test]
