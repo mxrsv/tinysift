@@ -6,6 +6,29 @@ fn temp() -> tempfile::TempDir {
     tempfile::tempdir_in(root).unwrap()
 }
 
+/// What `files` take on disk together, as `stat` reports their blocks.
+fn on_disk(files: &[PathBuf]) -> u64 {
+    let blocks = |file: &PathBuf| allocated(&fs::symlink_metadata(file).unwrap());
+    files.iter().map(blocks).sum()
+}
+
+#[test]
+fn a_sparse_file_counts_the_space_it_takes_not_its_length() {
+    let dir = temp();
+    let image = dir.path().join("disk.raw");
+    let length = 64 * 1024 * 1024;
+    fs::File::create(&image).unwrap().set_len(length).unwrap();
+    fs::write(dir.path().join("held"), vec![1u8; 100_000]).unwrap();
+    let result = scan(dir.path(), None, None).unwrap();
+    assert_eq!(
+        result.root.bytes,
+        on_disk(&[image.clone(), dir.path().join("held")])
+    );
+    assert!(result.root.bytes < length, "{}", result.root.bytes);
+    // The file that holds data ranks above the empty image, however long that claims to be.
+    assert_eq!(result.root.children[0].name, "held");
+}
+
 fn find<'a>(node: &'a SpaceNode, name: &str) -> &'a SpaceNode {
     node.children.iter().find(|c| c.name == name).unwrap()
 }
@@ -18,7 +41,7 @@ fn lens_counts_nested_files_without_following_symlinks() {
     fs::write(outside.path().join("b"), b"secret").unwrap();
     std::os::unix::fs::symlink(outside.path(), dir.path().join("link")).unwrap();
     let result = scan(dir.path(), None, None).unwrap();
-    assert_eq!(result.root.bytes, 3);
+    assert_eq!(result.root.bytes, on_disk(&[dir.path().join("a")]));
     assert_eq!(result.files_scanned, 1);
     assert!(!result.incomplete && !result.cancelled);
     assert!(scan(&dir.path().join("link"), None, None).is_err());
@@ -32,21 +55,29 @@ fn omitted_children_keep_totals_and_are_summarized() {
     fs::create_dir(&big).unwrap();
     // More than twice the cap, so the streaming trim runs as well as the final one.
     let count = MAX_CHILDREN * 2 + 50;
-    for i in 0..count {
-        fs::write(big.join(format!("f{i:03}")), vec![0u8; i + 1]).unwrap();
+    let files: Vec<PathBuf> = (0..count).map(|i| big.join(format!("f{i:03}"))).collect();
+    // One file takes more blocks than the rest, wherever the walk meets it.
+    let largest = &files[count / 2];
+    for file in &files {
+        let length = if file == largest { 100_000 } else { 1 };
+        fs::write(file, vec![1u8; length]).unwrap();
     }
     let result = scan(dir.path(), None, None).unwrap();
     let node = find(&result.root, "big");
-    let total: u64 = (1..=count as u64).sum();
-    assert_eq!(node.bytes, total);
+    assert_eq!(node.bytes, on_disk(&files));
     assert_eq!(node.children.len(), MAX_CHILDREN);
     assert_eq!(node.omitted_count, (count - MAX_CHILDREN) as u64);
     let retained: u64 = node.children.iter().map(|c| c.bytes).sum();
     assert_eq!(retained + node.omitted_bytes, node.bytes);
     assert_eq!(
-        node.children[0].bytes, count as u64,
+        (node.children[0].path.as_str(), node.children[0].bytes),
+        (
+            largest.to_str().unwrap(),
+            on_disk(std::slice::from_ref(largest))
+        ),
         "largest entries are kept"
     );
+    assert!(node.children[0].bytes > node.children[1].bytes);
     assert!(!result.incomplete && result.depth_limited_count == 0);
 }
 
@@ -57,10 +88,11 @@ fn root_children_beyond_the_cap_are_summarized() {
         fs::write(dir.path().join(format!("f{i}")), b"x").unwrap();
     }
     let result = scan(dir.path(), None, None).unwrap();
-    assert_eq!(result.root.bytes, (MAX_CHILDREN + 5) as u64);
+    let each = on_disk(&[dir.path().join("f0")]);
+    assert_eq!(result.root.bytes, (MAX_CHILDREN + 5) as u64 * each);
     assert_eq!(result.root.children.len(), MAX_CHILDREN);
     assert_eq!(result.root.omitted_count, 5);
-    assert_eq!(result.root.omitted_bytes, 5);
+    assert_eq!(result.root.omitted_bytes, 5 * each);
 }
 
 #[test]
@@ -71,12 +103,13 @@ fn depth_limited_folder_reports_what_it_hides() {
     fs::write(deep.join("file"), b"12345").unwrap();
     let result = scan(dir.path(), None, None).unwrap();
     let b = find(find(&result.root, "a"), "b");
-    assert_eq!(b.bytes, 5);
+    let file = on_disk(&[deep.join("file")]);
+    assert_eq!(b.bytes, file);
     assert!(b.children.is_empty());
-    assert_eq!((b.omitted_count, b.omitted_bytes), (1, 5));
+    assert_eq!((b.omitted_count, b.omitted_bytes), (1, file));
     assert!(!result.incomplete && result.depth_limited_count == 0);
     let drilled = scan(&dir.path().join("a/b"), None, None).unwrap();
-    assert_eq!(find(&drilled.root, "c").bytes, 5);
+    assert_eq!(find(&drilled.root, "c").bytes, file);
 }
 
 struct Restore(Vec<PathBuf>);
@@ -107,7 +140,7 @@ fn unreadable_folder_is_a_lower_bound_not_zero() {
     assert!(node.unreadable && result.root.unreadable && result.incomplete);
     assert_eq!(result.skipped_count, 1);
     assert_eq!(result.skipped_paths, vec![locked.display().to_string()]);
-    assert_eq!(result.root.bytes, 3);
+    assert_eq!(result.root.bytes, on_disk(&[dir.path().join("ok")]));
 }
 
 #[test]
@@ -143,7 +176,11 @@ fn depth_stop_has_its_own_reason_and_stays_a_lower_bound() {
     );
     assert!(result.skipped_paths.is_empty());
     assert!(result.incomplete);
-    assert_eq!(result.root.bytes, 3, "the hidden file is not counted");
+    assert_eq!(
+        result.root.bytes,
+        on_disk(&[dir.path().join("ok")]),
+        "the hidden file is not counted"
+    );
 }
 
 #[test]
@@ -155,11 +192,9 @@ fn hard_links_count_once_inside_one_branch() {
     fs::hard_link(sub.join("orig"), sub.join("link")).unwrap();
     fs::write(sub.join("solo"), b"abc").unwrap();
     let result = scan(dir.path(), None, None).unwrap();
-    let single = fs::symlink_metadata(sub.join("orig")).unwrap();
-    assert_eq!(result.root.bytes, 5003);
     assert_eq!(
-        result.root.allocated_bytes,
-        allocated(&single) + allocated(&fs::symlink_metadata(sub.join("solo")).unwrap())
+        result.root.bytes,
+        on_disk(&[sub.join("orig"), sub.join("solo")])
     );
     assert_eq!(result.files_scanned, 2);
 }
@@ -177,7 +212,7 @@ fn hard_links_count_once_across_parallel_branches() {
     // Which branch gets the bytes is not deterministic, so only the root total is asserted.
     for _ in 0..20 {
         let result = scan(dir.path(), None, None).unwrap();
-        assert_eq!(result.root.bytes, 5000);
+        assert_eq!(result.root.bytes, on_disk(&[dir.path().join("a/orig")]));
         assert_eq!(result.files_scanned, 1);
     }
 }
@@ -187,7 +222,9 @@ fn single_link_files_are_never_deduplicated() {
     let dir = temp();
     fs::write(dir.path().join("x"), b"same").unwrap();
     fs::write(dir.path().join("y"), b"same").unwrap();
-    assert_eq!(scan(dir.path(), None, None).unwrap().root.bytes, 8);
+    let each = on_disk(&[dir.path().join("x")]);
+    assert!(each > 0);
+    assert_eq!(scan(dir.path(), None, None).unwrap().root.bytes, 2 * each);
 }
 
 fn shared_for<'a>(
@@ -268,7 +305,10 @@ fn other_volume_directories_are_counted_not_entered_or_unreadable() {
     assert_eq!((walker.skipped_count, walker.incomplete), (0, false));
     assert_eq!(counter.load(Ordering::Relaxed), 0);
     let result = scan(dir.path(), None, None).unwrap();
-    assert_eq!((result.other_volume_count, result.root.bytes), (0, 3));
+    assert_eq!(
+        (result.other_volume_count, result.root.bytes),
+        (0, on_disk(&[dir.path().join("mnt/f")]))
+    );
 }
 
 #[test]

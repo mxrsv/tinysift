@@ -29,15 +29,17 @@ const WALK_STACK_BYTES: usize = 16 * 1024 * 1024;
 /// On macOS the data volume is also reachable through firmlinks under `/`, with the same `st_dev`.
 const DATA_VOLUME: &str = "/System/Volumes/Data";
 
-/// One file or folder. `bytes` always covers the whole subtree that could be read,
-/// including children that are not retained in `children`.
+/// One file or folder. `bytes` is the space it takes on disk (the blocks
+/// allocated, not the length: a sparse disk image or a file not downloaded
+/// yet counts what it holds), and always covers the whole subtree that could
+/// be read, including children that are not retained in `children`. Blocks
+/// that clones share are counted once per file.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SpaceNode {
     pub name: String,
     pub path: String,
     pub bytes: u64,
-    pub allocated_bytes: u64,
     pub age_seconds: u64,
     pub is_directory: bool,
     pub children: Vec<SpaceNode>,
@@ -302,8 +304,7 @@ impl<'a> Walker<'a> {
         }
         let mut node = new_node(path, meta);
         self.shared.counter.fetch_add(1, Ordering::Relaxed);
-        node.bytes = meta.len();
-        node.allocated_bytes = allocated(meta);
+        node.bytes = allocated(meta);
         Visit::Node(node)
     }
 
@@ -384,7 +385,6 @@ fn new_node(path: &Path, meta: &fs::Metadata) -> SpaceNode {
             .unwrap_or_else(|| path.display().to_string()),
         path: path.display().to_string(),
         bytes: 0,
-        allocated_bytes: 0,
         age_seconds: meta
             .modified()
             .ok()
@@ -459,7 +459,6 @@ fn take(node: &mut SpaceNode, visit: Visit, depth: usize) {
 /// Adds `child` to `node`'s totals; keeps it as a child only when `retain`, else records it as omitted.
 fn absorb(node: &mut SpaceNode, child: SpaceNode, retain: bool) {
     node.bytes = node.bytes.saturating_add(child.bytes);
-    node.allocated_bytes = node.allocated_bytes.saturating_add(child.allocated_bytes);
     node.unreadable |= child.unreadable;
     node.depth_limited |= child.depth_limited;
     if retain {

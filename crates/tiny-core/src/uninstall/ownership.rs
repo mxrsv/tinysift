@@ -238,11 +238,8 @@ fn leftover_item(
             (Match::Exact(class), None) => Ownership::Owned { class },
         }
     };
-    let size = if meta.is_dir() {
-        crate::clean::fs_safe::dir_size_safe(&path)
-    } else {
-        meta.len()
-    };
+    // On disk, for a lone file as for a folder.
+    let size = crate::clean::fs_safe::dir_size_safe(&path);
     Some(RemovalItem {
         path,
         size,

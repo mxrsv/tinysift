@@ -22,13 +22,16 @@ pub struct FfiDiskCapacity {
     pub available_bytes: u64,
 }
 
-/// One file or folder. `bytes` covers everything readable below it, including
-/// entries omitted from `children`.
+/// One file or folder. `bytes` is the space taken on disk, not the length,
+/// and covers everything readable below it, including entries omitted from
+/// `children`.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FfiSpaceNode {
     pub name: String,
     pub path: String,
     pub bytes: u64,
+    /// The same as `bytes`, which was the length before. Kept so an app
+    /// pinned to either side of that change builds; goes once the pin moves.
     pub allocated_bytes: u64,
     pub age_seconds: u64,
     pub is_directory: bool,
@@ -75,7 +78,7 @@ impl From<SpaceNode> for FfiSpaceNode {
             name: node.name,
             path: node.path,
             bytes: node.bytes,
-            allocated_bytes: node.allocated_bytes,
+            allocated_bytes: node.bytes,
             age_seconds: node.age_seconds,
             is_directory: node.is_directory,
             children: node.children.into_iter().map(Self::from).collect(),

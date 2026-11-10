@@ -34,7 +34,12 @@ fn scan_converts_the_tree_and_reports_progress() {
     let report = session
         .scan_storage(&dir, &CancellationToken::default(), &listener)
         .unwrap();
-    assert_eq!(report.root.bytes, 8);
+    // Sizes are what the files take on disk, not their lengths.
+    let on_disk = |file: &str| {
+        use std::os::unix::fs::MetadataExt;
+        std::fs::symlink_metadata(dir.join(file)).unwrap().blocks() * 512
+    };
+    assert_eq!(report.root.bytes, on_disk("a") + on_disk("sub/b"));
     assert_eq!(report.files_scanned, 2);
     assert_eq!(report.root.path, dir.display().to_string());
     let sub = report
@@ -44,7 +49,7 @@ fn scan_converts_the_tree_and_reports_progress() {
         .find(|c| c.name == "sub")
         .unwrap();
     assert!(sub.is_directory);
-    assert_eq!(sub.children[0].bytes, 5);
+    assert_eq!(sub.children[0].bytes, on_disk("sub/b"));
     assert!(!report.incomplete);
     assert_eq!(
         (report.depth_limited_count, report.other_volume_count),
@@ -152,7 +157,6 @@ fn node(name: &str, seed: u64, children: Vec<SpaceNode>) -> SpaceNode {
         name: name.into(),
         path: format!("/root/{name}"),
         bytes: seed,
-        allocated_bytes: seed + 1,
         age_seconds: seed + 2,
         is_directory: seed.is_multiple_of(2),
         children,
@@ -168,7 +172,7 @@ fn expected(name: &str, seed: u64, children: Vec<FfiSpaceNode>) -> FfiSpaceNode 
         name: name.into(),
         path: format!("/root/{name}"),
         bytes: seed,
-        allocated_bytes: seed + 1,
+        allocated_bytes: seed,
         age_seconds: seed + 2,
         is_directory: seed.is_multiple_of(2),
         children,

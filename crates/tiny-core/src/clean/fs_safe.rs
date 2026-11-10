@@ -229,13 +229,14 @@ pub fn is_dir_safe(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Sums the logical length of every file under `root`, never following
-/// symlinks. Returns 0 if `root` does not exist. Uninstall's measure;
-/// cleanup sizes use `dir_size_checked`.
+/// Sums the space every file under `root` takes on disk (allocated blocks,
+/// not the length, so a sparse disk image counts what it holds), never
+/// following symlinks. Returns 0 if `root` does not exist. Uninstall's
+/// measure; cleanup sizes use `dir_size_checked`, which also knows clones.
 pub fn dir_size_safe(root: &Path) -> u64 {
     let mut total = 0u64;
     walk_files(root, &ScanContext::unchecked(), &mut |_, meta| {
-        total = total.saturating_add(meta.len());
+        total = total.saturating_add(meta.blocks().saturating_mul(512));
     });
     total
 }
@@ -389,13 +390,35 @@ mod tests {
         f.write_all(bytes).unwrap();
     }
 
+    /// What `file` takes on disk, as `stat` reports its blocks.
+    fn on_disk(file: &Path) -> u64 {
+        fs::symlink_metadata(file).unwrap().blocks() * 512
+    }
+
     #[test]
     fn dir_size_counts_files_recursively() {
         let dir = tempdir("size");
-        write_file(&dir.join("a"), b"hello"); // 5
+        write_file(&dir.join("a"), b"hello");
         fs::create_dir(dir.join("sub")).unwrap();
-        write_file(&dir.join("sub/b"), b"worldworld"); // 10
-        assert_eq!(dir_size_safe(&dir), 15);
+        write_file(&dir.join("sub/b"), b"worldworld");
+        let (a, b) = (on_disk(&dir.join("a")), on_disk(&dir.join("sub/b")));
+        assert!(a > 0 && b > 0);
+        assert_eq!(dir_size_safe(&dir), a + b);
+        let _ = remove_recursive_safe(&dir);
+    }
+
+    #[test]
+    fn dir_size_is_the_space_taken_not_the_length() {
+        let dir = tempdir("size-sparse");
+        let length = 64 * 1024 * 1024;
+        File::create(dir.join("disk.raw"))
+            .unwrap()
+            .set_len(length)
+            .unwrap();
+        assert!(
+            dir_size_safe(&dir) < length,
+            "a sparse image is not its length"
+        );
         let _ = remove_recursive_safe(&dir);
     }
 
@@ -463,11 +486,11 @@ mod tests {
         write_file(&outside.join("big"), &vec![0u8; 1024]);
 
         let inside = tempdir("size-inside");
-        write_file(&inside.join("small"), b"hi"); // 2
+        write_file(&inside.join("small"), b"hi");
         let link = inside.join("link");
         std::os::unix::fs::symlink(&outside, &link).unwrap();
 
-        assert_eq!(dir_size_safe(&inside), 2);
+        assert_eq!(dir_size_safe(&inside), on_disk(&inside.join("small")));
 
         let _ = remove_recursive_safe(&inside);
         let _ = remove_recursive_safe(&outside);
