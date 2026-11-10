@@ -288,16 +288,18 @@ fn home() -> Option<PathBuf> {
 /// offered whole: beside caches that holds Local History, the user's edit
 /// history, which nothing rebuilds. JetBrains' own is `jetbrains`'s to list;
 /// any other (`Google/AndroidStudio*`) is found by the history folder itself.
+/// A folder that cannot be listed could hold one, so it is not offered.
 // ponytail: the vendor's other caches (`Google/Chrome`) go unoffered with
 // it; list such a folder's children one by one if that space is missed.
 fn holds_ide_history(vendor: &Path) -> bool {
     vendor.file_name().is_some_and(|name| name == JETBRAINS)
         || is_dir_safe(&vendor.join(LOCAL_HISTORY))
-        || std::fs::read_dir(vendor).is_ok_and(|systems| {
-            systems
-                .flatten()
-                .any(|system| is_dir_safe(&system.path().join(LOCAL_HISTORY)))
-        })
+        || (is_dir_safe(vendor)
+            && std::fs::read_dir(vendor).map_or(true, |mut systems| {
+                systems.any(|system| {
+                    system.map_or(true, |s| is_dir_safe(&s.path().join(LOCAL_HISTORY)))
+                })
+            }))
 }
 
 /// System daemon caches (`com.apple.bird`, `CloudKit`, ...) are not the
@@ -443,6 +445,14 @@ mod tests {
             names(&caches.list_caches(&ctx, &root).unwrap()),
             ["Homebrew"]
         );
+        // A folder that cannot be listed might hold one: not offered either.
+        let locked = root.join("Homebrew");
+        let mode = |mode| std::fs::Permissions::from_mode(mode);
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&locked, mode(0o000)).unwrap();
+        let listed = names(&caches.list_caches(&ctx, &root).unwrap());
+        std::fs::set_permissions(&locked, mode(0o755)).unwrap();
+        assert!(listed.is_empty(), "{listed:?}");
         // Without an IDE's history in it, the vendor's folder is a cache like any other.
         std::fs::remove_dir(&history).unwrap();
         assert_eq!(

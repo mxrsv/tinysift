@@ -65,7 +65,10 @@ impl CleanProvider for JetBrains {
 /// The rebuilt folders of every system directory under `home`, then the logs.
 fn items_in(home: &Path, ctx: &ScanContext<'_>) -> Vec<CleanItem> {
     let mut items = Vec::new();
-    for system in list_children(&home.join(SYSTEMS), ctx) {
+    let systems = list_children(&home.join(SYSTEMS), ctx);
+    // A system directory moved elsewhere behind a symlink is not listed: its
+    // index would be sized and then refused for its symlinked ancestor.
+    for system in systems.iter().filter(|system| is_dir_safe(system)) {
         for path in REBUILT.iter().map(|name| system.join(name)) {
             if is_dir_safe(&path) {
                 items.push(CleanItem {
@@ -104,6 +107,14 @@ mod tests {
         std::fs::write(system.join("LocalHistory/changes.storageData"), b"edits").unwrap();
         let logs = home.path().join(LOGS).join("IntelliJIdea2025.2");
         std::fs::create_dir_all(&logs).unwrap();
+        // A system directory kept on another volume, behind a symlink.
+        let moved = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(moved.path().join("index")).unwrap();
+        std::os::unix::fs::symlink(
+            moved.path(),
+            home.path().join(SYSTEMS).join("PyCharm2025.2"),
+        )
+        .unwrap();
         let items = items_in(home.path(), &ScanContext::unchecked());
         let paths: Vec<_> = items.iter().map(|item| item.path.clone()).collect();
         assert_eq!(paths, [system.join("index"), logs]);
