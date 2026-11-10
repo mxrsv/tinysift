@@ -12,7 +12,8 @@ use crate::uninstall::UninstallState;
 use crate::FfiError;
 
 /// One per app session. Rejects overlapping scans and mutations instead of
-/// queueing or merging them; short read-only process queries bypass the gate.
+/// queueing or merging them. Process queries and `process_terminate` bypass
+/// the gate, so a scan never holds up Quit.
 #[derive(Default, uniffi::Object)]
 pub struct TinySession {
     busy: AtomicBool,

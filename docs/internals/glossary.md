@@ -136,8 +136,8 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   1, another user, a protected name, or a port owner that started after `lsof` ran. Also gates
   the app's Swift-side Quit.
 - **Busy** (`FfiError::Busy`) — The [session](../../crates/tiny-ffi/src/session.rs) gate is
-  held: one scan or mutation at a time, rejected rather than queued. A process signal does not
-  take it. Not: locked.
+  held: one scan or mutation at a time, rejected rather than queued. A process signal
+  ([`process_terminate`](../../crates/tiny-ffi/src/processes.rs)) does not take it. Not: locked.
 - **Network throughput** (`NetworkThroughput`, `FfiNetworkThroughput`) — Whole-machine bytes
   per second received and sent since the previous sample, summed over the ports and AirDrop
   links in [`network.rs`](../../crates/tiny-core/src/processes/network.rs) (`en*`, `awdl*`,

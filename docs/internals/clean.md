@@ -425,7 +425,7 @@ built like Clean's Trash path: Swift names IDs and never sends a path.
    started mid-run). The run-time `Kept` skip stays as defence in depth.
 
 List, preview and execute share the session gate with Clean and Storage; process reads and
-signals stay outside it. Preview and execute also take the `UntrustedHome` check and the saved-rules store;
+signals ([`processes.rs`](../../crates/tiny-ffi/src/processes.rs)) stay outside it. Preview and execute also take the `UntrustedHome` check and the saved-rules store;
 the list reads neither. Lock order is the gate, the
 rules lease, then the short uninstall-state lock, which is never held across a probe, Trash call
 or callback. Tests inject the inventory (`AppCatalog`), probe and Trash, so none reads

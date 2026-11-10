@@ -17,7 +17,7 @@ flag combinations before any I/O, as
 [`cli_validate.rs`](../../crates/tiny/src/render/clean/cli_validate.rs) does; core re-checks
 what the app can send too. To reach the app, add a `#[uniffi::export]` method on `TinySession`
 returning `Ffi*` records, claim the session gate (`begin()`) if it scans or mutates (a process
-signal shares no state with either and does not), regenerate
+signal, [`process_terminate`](../../crates/tiny-ffi/src/processes.rs), does not), regenerate
 the bindings with [`build-ffi.sh`](../../scripts/build-ffi.sh), and consume the matching generated interface in the native client.
 
 ## Read-only versus destructive

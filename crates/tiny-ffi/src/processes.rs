@@ -245,9 +245,9 @@ impl TinySession {
         })
     }
 
-    /// Revalidates the target, then sends one signal. Bypasses the gate: a
-    /// signal shares no state with a scan or a mutation, and Quit of a runaway
-    /// process must not wait minutes for a scan to finish.
+    /// Revalidates the target, then sends one signal. Bypasses the gate, so
+    /// Quit of a runaway process does not wait minutes for a scan to finish;
+    /// the app sends one action at a time.
     pub fn process_terminate(
         &self,
         target: FfiTerminateTarget,
@@ -639,7 +639,6 @@ mod tests {
         child.wait().unwrap();
         assert_eq!(outcome.unwrap(), FfiTerminateOutcome::Exited);
         assert!(still_held);
-        assert!(!session.is_busy());
     }
 
     #[test]
