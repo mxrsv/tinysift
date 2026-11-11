@@ -263,15 +263,16 @@ pub(crate) fn refuse_tracked(
 }
 
 /// `recheck_idle` for an item offered because its project was idle: the
-/// project of `manifest` must still be idle for `idle_days`, judged now.
-/// `npm install` keeps a folder's inode, so the fingerprint does not notice
-/// a project that came back into use after the scan.
+/// project of `manifest` must still be idle for `idle_days`, judged now,
+/// once per `run`. `npm install` keeps a folder's inode, so the fingerprint
+/// does not notice a project that came back into use after the scan.
 pub(crate) fn refuse_if_used_since(
     runner: &dyn CommandRunner,
     manifest: &Path,
     idle_days: u64,
+    run: &ScanContext<'_>,
 ) -> std::result::Result<(), String> {
-    match activity(runner, manifest, idle_days, &ScanContext::unchecked()) {
+    match activity(runner, manifest, idle_days, run) {
         Ok(now) if now.idle => Ok(()),
         Ok(_) => Err(USED_SINCE.into()),
         Err(e) => Err(e.to_string()),
@@ -1170,8 +1171,14 @@ mod tests {
         mark_repo(&root);
         let project = rust_project(&root, 40);
         let dir = project.1.parent().unwrap();
-        let recheck =
-            |runner: &MockRunner| refuse_if_used_since(runner, &project.1, BUILD_OUTPUT_SAFE_DAYS);
+        let recheck = |runner: &MockRunner| {
+            refuse_if_used_since(
+                runner,
+                &project.1,
+                BUILD_OUTPUT_SAFE_DAYS,
+                &ScanContext::unchecked(),
+            )
+        };
         assert_eq!(recheck(&mock_git(dir, 40, "")), Ok(()));
         assert_eq!(recheck(&mock_git(dir, 1, "")), Err(USED_SINCE.into()));
         assert_eq!(
@@ -1188,15 +1195,44 @@ mod tests {
         };
         let used = Arc::new(mock_git(dir, 1, ""));
         let provider = RustTargets::with_runner(IDLE_DAYS, used.clone());
-        assert_eq!(provider.recheck_idle(&safe), Err(USED_SINCE.into()));
+        assert_eq!(
+            provider.recheck_idle(&safe, &ScanContext::unchecked()),
+            Err(USED_SINCE.into())
+        );
         // Review build output is an active project the user ticked on purpose.
         let review = CleanItem {
             risk: RiskLevel::Review,
             ..safe
         };
         let calls = used.output_calls.lock().unwrap().len();
-        assert_eq!(provider.recheck_idle(&review), Ok(()));
+        assert_eq!(
+            provider.recheck_idle(&review, &ScanContext::unchecked()),
+            Ok(())
+        );
         assert_eq!(used.output_calls.lock().unwrap().len(), calls);
+    }
+
+    /// RP-13: one run asks git about a project once, however many of its
+    /// folders go (`node_modules` and `.next` share a `package.json`).
+    #[test]
+    fn a_run_judges_each_project_once() {
+        let root = tempdir("bo-recheck-once");
+        mark_repo(&root);
+        let project = rust_project(&root, 40);
+        let dir = project.1.parent().unwrap();
+        let runner = mock_git(dir, 40, "");
+        let calls = || runner.output_calls.lock().unwrap().len();
+        let run = ScanContext::unchecked();
+        let recheck = |run: &ScanContext<'_>| {
+            refuse_if_used_since(&runner, &project.1, BUILD_OUTPUT_SAFE_DAYS, run)
+        };
+        assert_eq!(recheck(&run), Ok(()));
+        let per_project = calls();
+        assert!(per_project > 0);
+        assert_eq!(recheck(&run), Ok(()));
+        assert_eq!(calls(), per_project, "the second folder asks no git");
+        assert_eq!(recheck(&ScanContext::unchecked()), Ok(()));
+        assert_eq!(calls(), 2 * per_project, "another run asks again");
     }
 
     /// CA1: the days chosen draw the Safe line for the manifest and the last
@@ -1445,7 +1481,7 @@ mod tests {
                     risk: Safe,
                     ..items[0].clone()
                 };
-                let rechecked = provider.recheck_idle(&safe);
+                let rechecked = provider.recheck_idle(&safe, &ScanContext::unchecked());
                 let still_idle = if expected == Safe {
                     Ok(())
                 } else {

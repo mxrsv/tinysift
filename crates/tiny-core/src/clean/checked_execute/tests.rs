@@ -90,7 +90,11 @@ impl CleanProvider for Fixture {
             _ => Ok(()),
         }
     }
-    fn recheck_idle(&self, item: &CleanItem) -> std::result::Result<(), String> {
+    fn recheck_idle(
+        &self,
+        item: &CleanItem,
+        _: &ScanContext<'_>,
+    ) -> std::result::Result<(), String> {
         match self.used_since {
             Some(name) if item.path.ends_with(name) => Err(format!("{name} was used")),
             _ => Ok(()),

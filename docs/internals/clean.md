@@ -114,7 +114,8 @@ A scan can be days old when Clean runs, and `npm install` keeps a folder's inode
 fingerprint does not notice a project back in use. Right before acting on build output offered
 as Safe, or on a virtualenv, the desktop executor asks `recheck_idle`, which judges the project
 again by the same rule (`refuse_if_used_since`) and skips it with "its project was used since the
-scan" ([`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)). Review build
+scan" ([`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)). One context
+lasts the whole run, so a project is judged once however many of its folders go. Review build
 output, an active project the user ticked on purpose, is not judged again. The scan itself still
 has no age: sizes and the Review sheet's idle days are the scan's.
 

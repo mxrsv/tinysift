@@ -27,6 +27,7 @@ use super::process::AppProbe;
 use super::protection::{Evaluation, Matcher, Relation, INTERNAL_ID_PREFIX};
 use super::protection_store::{StoreError, StoreLease};
 use super::providers::{desktop_report_only, CleanProvider, DesktopTool};
+use super::scan_context::ScanContext;
 use super::trash_plan::{
     inside_system, protected_reason, removal_for, DeleteMode, PlannedItem, Removal,
 };
@@ -94,7 +95,9 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
     let (as_admin, others): (Vec<usize>, Vec<usize>) = execution_order(plan)
         .into_iter()
         .partition(|&index| plan[index].removal == Removal::DeleteAsAdministrator);
-    delete_as_administrator(plan, &as_admin, ctx, &mut done, &mut stopped);
+    // One for the run: each project is judged idle again once.
+    let run = ScanContext::unchecked();
+    delete_as_administrator(plan, &as_admin, ctx, &run, &mut done, &mut stopped);
     // Finder may still be emptying after a failed or timed-out Empty Trash.
     let mut emptying_failed = false;
     for (step, index) in others.into_iter().enumerate() {
@@ -110,7 +113,7 @@ pub fn execute_checked(plan: &[PlannedItem], ctx: &ExecContext<'_>) -> CheckedEx
             done[index].0 = ItemOutcome::Skipped(reason);
             continue;
         }
-        let acted = act_on(planned, ctx, &mut stopped);
+        let acted = act_on(planned, ctx, &run, &mut stopped);
         // A denial means Finder never started emptying.
         emptying_failed |= planned.removal == Removal::EmptyTrash
             && matches!(
@@ -194,13 +197,14 @@ fn delete_as_administrator(
     plan: &[PlannedItem],
     indexes: &[usize],
     ctx: &ExecContext<'_>,
+    run: &ScanContext<'_>,
     done: &mut [Done],
     stopped: &mut Option<StopReason>,
 ) {
     let mut batch = Vec::new();
     for (step, &index) in indexes.iter().enumerate() {
         ctx.report_step(step, plan.len() as u64, &plan[index].item.path);
-        match prepare(&plan[index], ctx) {
+        match prepare(&plan[index], ctx, run) {
             Ok(before) => batch.push((index, before)),
             Err(Halt::Skip(reason)) => done[index].0 = ItemOutcome::Skipped(reason),
             Err(Halt::Stop(reason)) => {
@@ -272,13 +276,17 @@ enum Halt {
 
 /// Every check right before `planned` changes. Returns the item's freed
 /// bytes measured now when its removal frees space.
-fn prepare(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<Option<Measured>, Halt> {
+fn prepare(
+    planned: &PlannedItem,
+    ctx: &ExecContext<'_>,
+    run: &ScanContext<'_>,
+) -> Result<Option<Measured>, Halt> {
     if ctx.is_cancelled() {
         return Err(Halt::Stop(StopReason::Cancelled));
     }
     // Before the slow checks, so a changed policy never spends a probe.
     policy_unchanged(ctx.policy).map_err(Halt::Stop)?;
-    validate(planned, ctx).map_err(Halt::Skip)?;
+    validate(planned, ctx, run).map_err(Halt::Skip)?;
     // Measured among the slow checks, so the checks below also cover the
     // time its walk takes. A deletion counts what it unlinks instead.
     let before =
@@ -349,8 +357,13 @@ impl Acted {
     }
 }
 
-fn act_on(planned: &PlannedItem, ctx: &ExecContext<'_>, stopped: &mut Option<StopReason>) -> Acted {
-    let before = match prepare(planned, ctx) {
+fn act_on(
+    planned: &PlannedItem,
+    ctx: &ExecContext<'_>,
+    run: &ScanContext<'_>,
+    stopped: &mut Option<StopReason>,
+) -> Acted {
+    let before = match prepare(planned, ctx, run) {
         Ok(before) => before,
         Err(Halt::Skip(reason)) => return Acted::untouched(ItemOutcome::Skipped(reason)),
         Err(Halt::Stop(reason)) => {
@@ -513,7 +526,12 @@ fn skip_for(policy: &StoreLease<'_>, evaluation: &Evaluation) -> SkipReason {
 /// for the Trash row), volume, root containment and protected paths. Guards
 /// and app gates of every item merged into this one apply too, in every
 /// removal mode.
-pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), SkipReason> {
+/// `run` holds what this run already learned about each project's activity.
+pub fn validate(
+    planned: &PlannedItem,
+    ctx: &ExecContext<'_>,
+    run: &ScanContext<'_>,
+) -> Result<(), SkipReason> {
     let item = &planned.item;
     if inside_system(&item.path) {
         return Err(SkipReason::ProtectedPath(INSIDE_SYSTEM.into()));
@@ -552,7 +570,7 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
     let items = std::iter::once(&planned.item).chain(&planned.covers);
     for ((provider, _), item) in gated.iter().zip(items) {
         provider
-            .recheck_idle(item)
+            .recheck_idle(item, run)
             .map_err(SkipReason::ProviderGuard)?;
     }
     if !on_disk {

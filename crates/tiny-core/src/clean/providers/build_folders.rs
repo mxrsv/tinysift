@@ -96,13 +96,17 @@ impl CleanProvider for BuildFolders {
         }
         refuse_tracked(&*self.runner, path)
     }
-    fn recheck_idle(&self, item: &CleanItem) -> std::result::Result<(), String> {
+    fn recheck_idle(
+        &self,
+        item: &CleanItem,
+        run: &ScanContext<'_>,
+    ) -> std::result::Result<(), String> {
         if item.risk != RiskLevel::Safe {
             return Ok(());
         }
         let manifest =
             manifest_of(&item.path).ok_or("its project no longer names it as build output")?;
-        refuse_if_used_since(&*self.runner, &manifest, self.safe_days)
+        refuse_if_used_since(&*self.runner, &manifest, self.safe_days, run)
     }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
         let mut items = Vec::new();

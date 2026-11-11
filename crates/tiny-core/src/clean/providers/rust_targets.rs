@@ -88,12 +88,16 @@ impl CleanProvider for RustTargets {
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         refuse_tracked(&*self.runner, path)
     }
-    fn recheck_idle(&self, item: &CleanItem) -> std::result::Result<(), String> {
+    fn recheck_idle(
+        &self,
+        item: &CleanItem,
+        run: &ScanContext<'_>,
+    ) -> std::result::Result<(), String> {
         if item.risk != RiskLevel::Safe {
             return Ok(());
         }
         let manifest = item.path.with_file_name("Cargo.toml");
-        refuse_if_used_since(&*self.runner, &manifest, self.safe_days)
+        refuse_if_used_since(&*self.runner, &manifest, self.safe_days, run)
     }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
         let mut items = Vec::new();

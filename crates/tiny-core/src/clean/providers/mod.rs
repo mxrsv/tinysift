@@ -286,8 +286,13 @@ pub trait CleanProvider {
     /// Right before `item` is acted on: `Err` when what it was offered for
     /// no longer holds. Build output offered as Safe, and a virtualenv,
     /// were offered because their project was idle at the scan, which can be
-    /// days old; they are judged again now.
-    fn recheck_idle(&self, _item: &CleanItem) -> std::result::Result<(), String> {
+    /// days old; they are judged again now. `run` is one context for the
+    /// whole run, so a project is asked once however many items it holds.
+    fn recheck_idle(
+        &self,
+        _item: &CleanItem,
+        _run: &ScanContext<'_>,
+    ) -> std::result::Result<(), String> {
         Ok(())
     }
 

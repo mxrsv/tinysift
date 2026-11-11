@@ -53,7 +53,11 @@ impl CleanProvider for PythonCaches {
         RiskLevel::Review
     }
     /// A virtualenv was offered because its project was idle.
-    fn recheck_idle(&self, item: &CleanItem) -> std::result::Result<(), String> {
+    fn recheck_idle(
+        &self,
+        item: &CleanItem,
+        run: &ScanContext<'_>,
+    ) -> std::result::Result<(), String> {
         if !item.evidence.contains(&Evidence::VenvMarker) {
             return Ok(());
         }
@@ -62,7 +66,7 @@ impl CleanProvider for PythonCaches {
             .parent()
             .and_then(python_manifest)
             .ok_or("its project no longer has a Python manifest")?;
-        refuse_if_used_since(&*self.runner, &manifest, self.idle_days)
+        refuse_if_used_since(&*self.runner, &manifest, self.idle_days, run)
     }
     fn desktop_trash_paths(&self) -> bool {
         true
