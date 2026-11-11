@@ -22,7 +22,7 @@ pub use ports::{
     PORT_VISIBILITY_CAVEAT,
 };
 pub use pressure::MemoryPressure;
-pub use snapshot::{LoadAverage, ProcessInfo, ProcessSnapshot, Sampler, SystemUsage};
+pub use snapshot::{LoadAverage, ProcessInfo, ProcessKey, ProcessSnapshot, Sampler, SystemUsage};
 pub use terminate::{
     refusal, terminate, Refusal, TerminateKind, TerminateOutcome, TerminateTarget,
 };
@@ -143,8 +143,7 @@ mod tests {
             memory_bytes: Some(u64::from(pid)),
             footprint_bytes: None,
             cpu_time_ns: None,
-            responsible_pid: None,
-            responsible_start_time: None,
+            responsible: None,
             exe: None,
         }
     }

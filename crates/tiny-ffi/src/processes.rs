@@ -374,6 +374,13 @@ impl From<PortOwners> for FfiPortOwners {
 impl From<ProcessInfo> for FfiProcessInfo {
     fn from(info: ProcessInfo) -> Self {
         let refusal = processes::refusal(&info).map(Into::into);
+        // Both fields come from one `Option<ProcessKey>`, so they are `Some` or `None` together.
+        let responsible = info.responsible;
+        debug_assert_ne!(
+            responsible.map(|key| key.pid),
+            Some(info.pid),
+            "a process is never its own responsible process"
+        );
         Self {
             pid: info.pid,
             name: info.name,
@@ -388,8 +395,8 @@ impl From<ProcessInfo> for FfiProcessInfo {
                 .exe
                 .and_then(|path| path.into_os_string().into_string().ok()),
             cpu_time_ns: info.cpu_time_ns,
-            responsible_pid: info.responsible_pid,
-            responsible_start_time: info.responsible_start_time,
+            responsible_pid: responsible.map(|key| key.pid),
+            responsible_start_time: responsible.map(|key| key.start_time),
             refusal,
         }
     }
@@ -480,6 +487,7 @@ impl From<ListeningPort> for FfiListeningPort {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tiny_core::processes::ProcessKey;
 
     #[cfg(target_os = "macos")]
     #[test]
@@ -540,8 +548,7 @@ mod tests {
             memory_bytes: Some(4096),
             footprint_bytes,
             cpu_time_ns: None,
-            responsible_pid: None,
-            responsible_start_time: None,
+            responsible: None,
             exe: None,
         };
         assert_eq!(
@@ -567,8 +574,7 @@ mod tests {
             memory_bytes: Some(4096),
             footprint_bytes: Some(1024),
             cpu_time_ns,
-            responsible_pid: None,
-            responsible_start_time: None,
+            responsible: None,
             exe: None,
         };
         assert_eq!(
@@ -580,7 +586,7 @@ mod tests {
 
     #[test]
     fn responsible_process_crosses_the_boundary_and_none_stays_none() {
-        let info = |responsible: Option<(u32, u64)>| ProcessInfo {
+        let info = |responsible: Option<ProcessKey>| ProcessInfo {
             pid: 42,
             name: "VTDecoderXPCService".into(),
             user: None,
@@ -593,11 +599,13 @@ mod tests {
             memory_bytes: Some(4096),
             footprint_bytes: Some(1024),
             cpu_time_ns: None,
-            responsible_pid: responsible.map(|(pid, _)| pid),
-            responsible_start_time: responsible.map(|(_, start)| start),
+            responsible,
             exe: None,
         };
-        let joined = FfiProcessInfo::from(info(Some((7, 1_700_000_000))));
+        let joined = FfiProcessInfo::from(info(Some(ProcessKey {
+            pid: 7,
+            start_time: 1_700_000_000,
+        })));
         assert_eq!(
             (joined.responsible_pid, joined.responsible_start_time),
             (Some(7), Some(1_700_000_000))

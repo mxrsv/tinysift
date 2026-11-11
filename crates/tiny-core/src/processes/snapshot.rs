@@ -12,6 +12,14 @@ use super::network::{NetworkCounters, NetworkReading, NetworkThroughput};
 use super::pressure::{read_memory_pressure, MemoryPressure};
 use crate::sys::MemoryParts;
 
+/// One running process: its PID plus its start time, so a reused PID never matches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct ProcessKey {
+    pub pid: u32,
+    /// Seconds since the Unix epoch, 1 s granularity.
+    pub start_time: u64,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProcessInfo {
@@ -45,11 +53,10 @@ pub struct ProcessInfo {
     /// The process macOS holds responsible for this one (the app an XPC service or helper works
     /// for), with its start time so a reused PID never matches. Filled by `Sampler::snapshot`
     /// only when that process is in the same sample and is not this process; `None` otherwise,
-    /// including when macOS gives no answer. Native app only; preserve the CLI JSON contract.
+    /// including when macOS gives no answer. Native app only; preserve the CLI JSON contract
+    /// (`ProcessKey` has no `Serialize`, so dropping the `skip` does not compile).
     #[serde(skip)]
-    pub responsible_pid: Option<u32>,
-    #[serde(skip)]
-    pub responsible_start_time: Option<u64>,
+    pub responsible: Option<ProcessKey>,
     #[serde(skip)]
     pub exe: Option<PathBuf>,
 }
@@ -206,8 +213,7 @@ pub(crate) fn to_info(raw: RawProcess, cpu_measured: bool, current_uid: u32) -> 
         memory_bytes: readable.then_some(raw.memory),
         footprint_bytes: None,
         cpu_time_ns: None,
-        responsible_pid: None,
-        responsible_start_time: None,
+        responsible: None,
         exe: raw.exe,
     }
 }
@@ -364,10 +370,13 @@ impl Sampler {
 
     /// The responsible process of `pid` as a PID plus start time, when it is in this sample and
     /// is not `pid` itself.
-    fn responsible_of(&self, pid: u32) -> Option<(u32, u64)> {
+    fn responsible_of(&self, pid: u32) -> Option<ProcessKey> {
         let responsible = self.seen.get(&pid)?.responsible.filter(|r| *r != pid)?;
-        let start = self.seen.get(&responsible)?.start;
-        Some((responsible, start))
+        let start_time = self.seen.get(&responsible)?.start;
+        Some(ProcessKey {
+            pid: responsible,
+            start_time,
+        })
     }
 
     fn snapshot(&self) -> ProcessSnapshot {
@@ -393,12 +402,10 @@ impl Sampler {
                     .memory_bytes
                     .map(|_| super::footprint::read(info.pid))
                     .unwrap_or_default();
-                let responsible = self.responsible_of(info.pid);
                 ProcessInfo {
                     footprint_bytes: usage.footprint_bytes,
                     cpu_time_ns: usage.cpu_time_ns,
-                    responsible_pid: responsible.map(|(pid, _)| pid),
-                    responsible_start_time: responsible.map(|(_, start)| start),
+                    responsible: self.responsible_of(info.pid),
                     ..info
                 }
             })
@@ -778,18 +785,14 @@ mod tests {
         let expected = super::super::responsible::read(std::process::id())
             .filter(|responsible| *responsible != pid)
             .and_then(find)
-            .map(|p| (p.pid, p.start_time));
-        assert_eq!(
-            child.responsible_pid.zip(child.responsible_start_time),
-            expected
-        );
-        // A process never names itself, and a PID always comes with its start time.
+            .map(|p| ProcessKey {
+                pid: p.pid,
+                start_time: p.start_time,
+            });
+        assert_eq!(child.responsible, expected);
+        // A process never names itself.
         for process in &sample.processes {
-            assert_ne!(process.responsible_pid, Some(process.pid));
-            assert_eq!(
-                process.responsible_pid.is_some(),
-                process.responsible_start_time.is_some()
-            );
+            assert_ne!(process.responsible.map(|key| key.pid), Some(process.pid));
         }
     }
 
@@ -822,10 +825,14 @@ mod tests {
     }
 
     #[test]
-    fn cli_json_keeps_resident_memory_and_hides_the_footprint() {
+    fn cli_json_keeps_resident_memory_and_hides_the_native_fields() {
         let info = ProcessInfo {
             footprint_bytes: Some(1024),
             cpu_time_ns: Some(2048),
+            responsible: Some(ProcessKey {
+                pid: 7,
+                start_time: 1,
+            }),
             ..to_info(raw(4096, 501), true, 501)
         };
         let snapshot = ProcessSnapshot {
@@ -839,6 +846,7 @@ mod tests {
         assert_eq!(process["memoryBytes"], 4096);
         assert!(process.get("footprintBytes").is_none());
         assert!(process.get("cpuTimeNs").is_none());
+        assert!(process.get("responsible").is_none());
     }
 
     #[test]

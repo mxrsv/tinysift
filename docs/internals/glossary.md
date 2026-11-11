@@ -150,8 +150,8 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   with the footprint in one `proc_pid_rusage` call
   ([`footprint.rs`](../../crates/tiny-core/src/processes/footprint.rs)). Native app only;
   `None` exactly when the footprint is. Not: `cpu_percent`, a rate over the last sample interval.
-- **Responsible process** (`responsible_pid` plus `responsible_start_time` on `ProcessInfo` and
-  `FfiProcessInfo`) — The process macOS holds responsible for another: the app an XPC service,
+- **Responsible process** (`responsible: Option<ProcessKey>` on `ProcessInfo`; `responsible_pid`
+  plus `responsible_start_time` on `FfiProcessInfo`, both set from that one key) — The process macOS holds responsible for another: the app an XPC service,
   helper or video decoder works for (`VTDecoderXPCService` → Google Chrome, `WebContent` →
   Safari), read once per process through the private `responsibility_get_pid_responsible_for_pid`
   ([`responsible.rs`](../../crates/tiny-core/src/processes/responsible.rs)). Native app only;
