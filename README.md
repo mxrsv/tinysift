@@ -91,7 +91,8 @@ cargo install --path crates/tiny
 tiny clean --dry-run
 ```
 
-The dry run lists each category with its size and safety level, then the full plan, path by path:
+The dry run lists each category with its size and safety level, then the plan, path by path (up
+to 20 per category):
 
 ```text
 Cleanup candidates

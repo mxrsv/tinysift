@@ -43,7 +43,8 @@ levels.
 
 ## `.tinyignore`
 
-Put a `.tinyignore` in a scanned folder or in your home folder to skip more:
+Put a `.tinyignore` at the top of a scanned folder (not in its subfolders) or in your home
+folder to skip more:
 
 ```
 # any folder named Archive
@@ -58,6 +59,7 @@ whole scan.
 
 ## JSON output
 
-`--json` prints one JSON object on stdout with `roots`, `thresholds`, `large_files`,
-`old_files` and `totals`, plus `by_extension` and `duplicates` when those flags are set.
+`--json` prints one JSON object on stdout with `roots`, `thresholds`, `sort`, `limit`,
+`large_files`, `old_files` and `totals`, plus `by_extension` when `--by-ext` is set and
+`duplicates` with `duplicate_total_wasted_bytes` when `--duplicates` is set.
 `--limit` applies to the lists here too.

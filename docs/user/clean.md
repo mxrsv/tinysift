@@ -19,7 +19,7 @@ Run `--dry-run` first on a new machine.
 
 ## Categories
 
-47 categories in three families. Each has a risk level that decides whether you see it by
+46 categories in three families. Each has a risk level that decides whether you see it by
 default.
 
 **Dev caches** — `cargo`, `npm`, `pnpm`, `yarn`, `uv`, `bun-cache`, `pip-cache`, `puppeteer`,
@@ -80,8 +80,8 @@ along. Those overlapping selections are retained and explained in the final repo
 - `build-folders` lists only folders a manifest beside them proves are generated: `.next` beside
   `package.json`, `Pods` beside a `Podfile`, `build` beside `build.gradle` or
   `build.gradle.kts`, and `build` or `dist` when `package.json` names it in `main`, `module`,
-  `types`, `typings`, `browser`, `bin`, `exports` or `files`, or `tsconfig.json`'s `outDir` is
-  `dist` ([`build_folders.rs`](../../crates/tiny-core/src/clean/providers/build_folders.rs)).
+  `types`, `typings`, `browser`, `bin`, `exports` or `files`, or, beside a `package.json`,
+  `tsconfig.json`'s `outDir` is `dist` ([`build_folders.rs`](../../crates/tiny-core/src/clean/providers/build_folders.rs)).
   A `build` or `dist` folder without such proof is never listed: many projects keep sources
   there.
 - A `node_modules`, `target/` or build folder that holds a file git tracks is never listed or
@@ -163,10 +163,10 @@ private-looking downloads and never ticks them for you.
 > Move to Trash is still deletion if macOS empties the Trash automatically
 > (System Settings → General → Storage). Turn that off or use `--dry-run` first.
 
-A failed category scan or unreadable candidate size is reported on stderr and stops the CLI
-before cleanup; a missing optional tool is reported as unavailable. Naming an unavailable
-category explicitly also fails. A cleanup with failed or refused items exits nonzero after
-printing the per-item report. See [discovery](../../crates/tiny-core/src/clean/discover.rs)
+A failed category scan, a failed running-app check or an unreadable candidate size is reported
+on stderr and stops the CLI before cleanup; a missing optional tool is only reported as
+unavailable. Naming an unavailable category explicitly, or one whose app is running, also
+fails. A cleanup with failed or refused items exits nonzero after printing the per-item report. See [discovery](../../crates/tiny-core/src/clean/discover.rs)
 and [CLI results](../../crates/tiny/src/render/clean/mod.rs).
 
 The [executor](../../crates/tiny-core/src/clean/execute.rs) holds the kept-path store's lease

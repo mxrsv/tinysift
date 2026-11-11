@@ -190,7 +190,7 @@ widens: a cache folder that holds a path which only goes to the Trash goes to th
 
 | `Removal` | Chosen when | Sink |
 | --- | --- | --- |
-| `MoveToTrash` | Trash mode; Your files always; a uv or pnpm cache in Trash mode | [`NativeTrash`](../../crates/tiny-core/src/clean/native_trash.rs): `NSFileManager trashItemAtURL`, no Finder, no Put Back |
+| `MoveToTrash` | Trash mode; Your files always; a uv, pnpm, Bun or pip cache in Trash mode | [`NativeTrash`](../../crates/tiny-core/src/clean/native_trash.rs): `NSFileManager trashItemAtURL`, no Finder, no Put Back |
 | `Delete` | Permanent mode and the item and all it covers are Rebuilt or Project build output | `SafeDelete` ([`fs_safe.rs`](../../crates/tiny-core/src/clean/fs_safe.rs)): no symlinks, no other volume |
 | `RunTool(Prune)` | uv, pnpm, Bun, pip in Permanent mode, tool found | the category's tool |
 | `RunTool(Request)` | simulator runtimes, both modes (no Trash route) | `simctl runtime delete` |
@@ -463,8 +463,8 @@ skips as `KeepUncertain`. The preview still lists it.
 Swift never writes rules and never sends a path: it names a discovered candidate ID to
 keep, or a rule ID to remove, with the revision it last read
 ([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The
-[CLI executor](../../crates/tiny-core/src/clean/execute.rs) loads the rules read-only before
-acting, reports every item they do not allow as kept, and refuses the whole run when they
+[CLI executor](../../crates/tiny-core/src/clean/execute.rs) takes the same exclusive lease before
+acting, reports every item the rules do not allow as kept, and refuses the whole run when they
 cannot be read.
 
 ### The store

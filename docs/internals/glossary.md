@@ -58,7 +58,8 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   including outside git (`NotGitRepo`).
 - **Section** (`Section`, `FfiCleanSection`) — Where the app groups a category's movable items by
   what to expect afterwards: **Rebuilt automatically**, **Project build output** (`node-modules`,
-  `rust-targets`, which a build or install recreates but which hold a project's work) or **Your
+  `rust-targets`, `build-folders`, which a build or install recreates but which hold a project's
+  work) or **Your
   files**. Derived by `category_section` from `comes_back`; report-only categories are grouped by
   their desktop action instead. Not: family, risk.
 - **Dev search roots** — `~/Documents`, `~/Projects`, `~/Code`, `~/Developer`, `~/Workspace`:
@@ -72,8 +73,10 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 - **Always keep** — A saved desktop rule: an exact path and a scope, `File` (that path) or
   `Directory` (also everything inside it). It also keeps a containing folder from moving. Not:
   a protected path (`protected_reason`: the root, the home folder and its ancestors, which no
-  cleanup moves), and not used by the CLI
-  ([rules](../../crates/tiny-core/src/clean/protection.rs)).
+  cleanup moves). Only the app edits rules; `tiny clean` and `tiny uninstall` obey them too
+  ([rules](../../crates/tiny-core/src/clean/protection.rs),
+  [clean](../../crates/tiny-core/src/clean/execute.rs),
+  [uninstall](../../crates/tiny-core/src/uninstall.rs)).
 - **Kept path** — The path a rule names; the UI says "kept" (`Kept`, `HoldsKept`). Missing
   paths stay kept and apply again if they return; renames are not followed. Not: excluded
   paths (the CLI's per-run review choice).
@@ -90,14 +93,14 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   `comes_back()`. It also decides the **Section**.
 - **Report only** (`ReportOnly`) — A category the app shows but does not act on per path, with one
   of five reasons: `Destructive` (permanent or Empty Trash), `NotPerPathTrash` (cleanup is a tool
-  command), `UnreliableMatch`, `NeedsAdministrator` (no unprivileged route) or
-  `XcodeNotInstalled` (only System Settings removes the simulator runtimes). It names why a
-  path-by-path move is not offered; the **Trash row**, tool commands and **deletion as
-  administrator** are separate routes that a provider flag opens. `NeedsAdministrator` is no longer
-  sent over FFI, where such categories are `DeleteAsAdministrator`. Not: skipped, disabled.
+  command), `UnreliableMatch`, `NeedsAdministrator` (root owns the items and macOS denies their
+  deletion even as administrator) or `XcodeNotInstalled` (only System Settings removes the
+  simulator runtimes). It names why a path-by-path move is not offered; the **Trash row** and tool
+  commands are separate routes that a provider flag opens. Not: skipped, disabled.
 - **`needs_admin`** — The provider flag for a category whose items root owns (the system simulator
-  caches). The desktop deletes them only as administrator; the CLI leaves them out of its default
-  selection and refuses them.
+  caches). The desktop reports them as `ReportOnly { NeedsAdministrator }`
+  ([`desktop_report_only`](../../crates/tiny-core/src/clean/providers/mod.rs)); the CLI leaves them
+  out of its default selection and refuses them.
 - **Preview** — The app's reviewed selection, built in Rust from candidate IDs; single-use,
   expires after 15 minutes (`PREVIEW_TTL` in [`clean.rs`](../../crates/tiny-ffi/src/clean.rs)).
   It freezes each item's **Removal** and the **Delete mode**. Not: plan. The uninstall flow has
@@ -115,13 +118,15 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   moved to the Trash (`bytes_moved_to_trash`: still on disk) and
   requested (`bytes_requested`: a tool finishes it in the background). Not: one total.
 - **Failure cause** — The one reason an item, or part of it, stayed: no permission, in use, needs
-  an administrator, protected by macOS, changed since the scan, already gone, other
+  an administrator, protected by macOS, changed since the scan, Automation denied, already gone,
+  other
   ([`failure_cause.rs`](../../crates/tiny-core/src/clean/failure_cause.rs)). Not: the raw error,
   which is kept beside it for the run report.
 - **Deletion as administrator** — Root deleting `needs_admin` items through one `osascript`
   authentication dialog per Clean, with nothing installed
-  ([contract](clean.md#deletion-as-administrator)). `FfiPreview.bytes_needing_admin` is the part of
-  `bytes_to_free` that needs it, so a client knows the dialog will appear.
+  ([contract](clean.md#deletion-as-administrator)). No category is routed there: macOS denies the
+  deletion even as root. `FfiPreview.bytes_needing_admin`, the part of `bytes_to_free` that would
+  need it, is therefore 0.
 - **Authentication cancelled** (`FfiRemovalReport.authentication_cancelled`) — The user dismissed
   the administrator dialog: nothing changed and every item is `NotAttempted`.
 - **Checked execute** — The app's removal, revalidating each path right before it changes
@@ -132,7 +137,8 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 
 - **Identity** — PID plus start time, also name and executable when known; a mismatch returns
   `IdentityChanged` ([`terminate.rs`](../../crates/tiny-core/src/processes/terminate.rs)). Not:
-  PID alone.
+  PID alone, nor `ProcessKey` (PID plus start time only, naming a process in a sample, as the
+  **Responsible process** does).
 - **Refusal** (`Refusal`) — Why TinySift will not signal a process: itself or its parent, PID 0 or
   1, another user, a protected name, or a port owner that started after `lsof` ran. Also gates
   the app's Swift-side Quit.

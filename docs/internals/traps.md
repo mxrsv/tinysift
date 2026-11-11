@@ -123,8 +123,10 @@ Things that are not obvious from reading one file.
 - **Spelling depends on the volume.** Revalidate native case and Unicode matching on both
   case-sensitive and case-insensitive volumes; in-memory checks alone do not verify the
   host filesystem's behavior ([tests](../../crates/tiny-core/src/clean/protection.rs)).
-- **The CLI ignores the rules.** Nothing in `tiny` or [`execute.rs`](../../crates/tiny-core/src/clean/execute.rs)
-  reads the store, so `tiny clean` can still move a path the desktop keeps.
+- **The CLI obeys the rules and holds the store's lock.** `tiny clean`
+  ([`execute.rs`](../../crates/tiny-core/src/clean/execute.rs)) and `tiny uninstall`
+  ([`uninstall.rs`](../../crates/tiny-core/src/uninstall.rs)) take the exclusive lease before
+  acting, so an unreadable store stops them and a running app Clean makes them fail as busy.
 - **An unreadable store is not an empty one.** Do not "repair" it by writing empty rules: moving,
   saving and removing stay blocked until the original settings read again
   ([clean](clean.md#desktop-persistent-protection)).

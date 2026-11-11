@@ -11,14 +11,10 @@ satisfy.
 
 | Item | Rule | Example |
 | --- | --- | --- |
-| Tag | `app-v<MAJOR>.<MINOR>.<PATCH>`, on the core commit pinned by the app (`core-revision`) | `app-v0.1.2` |
-| Title | `TinySift app <version> (beta)` while the app is in beta | `TinySift app 0.1.2 (beta)` |
-| Asset | exactly one `TinySift-<version>.dmg` | `TinySift-0.1.2.dmg` |
-| Flag | mark as **pre-release** until the app leaves beta | |
-
-GitHub's repository sidebar only shows a non-pre-release as "Latest", so while every release is a
-pre-release the sidebar shows tags only. Link users to the
-[Releases page](https://github.com/mxrsv/tinysift/releases) instead of relying on the sidebar.
+| Tag | `app-v<MAJOR>.<MINOR>.<PATCH>`, on the core commit pinned by the app (`core-revision`) | `app-v0.7.2` |
+| Title | `TinySift app <version>` | `TinySift app 0.7.2` |
+| Asset | exactly one `TinySift-<version>.dmg` | `TinySift-0.7.2.dmg` |
+| Flag | a full release, not a pre-release, so the newest is GitHub's "Latest" | |
 
 Versions follow [SemVer](https://semver.org). The app version is independent of the crate
 versions in [Cargo.toml](../../Cargo.toml); never reuse or move a published tag.
@@ -42,7 +38,7 @@ versions in [Cargo.toml](../../Cargo.toml); never reuse or move a published tag.
 
 ```bash
 gh release create app-v<version> TinySift-<version>.dmg --repo mxrsv/tinysift \
-  --target <pinned-core-commit> --prerelease --title "TinySift app <version> (beta)" \
+  --target <pinned-core-commit> --title "TinySift app <version>" \
   --notes-file notes.md
 ```
 
@@ -54,7 +50,7 @@ gh release create app-v<version> TinySift-<version>.dmg --repo mxrsv/tinysift \
 
 Write in English, in this order:
 
-1. One sentence naming the release (`Third beta of the TinySift Mac app. Free to use.`).
+1. One sentence naming the release (`TinySift 0.7.2 for Mac fixes the high CPU use that 0.7.1 introduced.`).
 2. User-visible changes as short bullets. No internal refactors.
 3. Requirements: minimum macOS version and supported CPU architectures.
 4. A **What the app sends** paragraph whenever network behavior changes.

@@ -37,10 +37,12 @@ what it will do, asks, then acts.
   through [`remove_recursive_safe`](../../crates/tiny-core/src/clean/fs_safe.rs), bottom-up and never
   following a symlink; tool-backed categories run their tool instead. In the app, the client's
   delete mode decides: Permanent deletes Rebuilt automatically and Project build output through
-  `SafeDelete` (never entering another volume) and prunes uv and pnpm caches with their tool. Some
-  removals are permanent in either mode: Finder's Empty Trash for the Trash row, a simulator
-  runtime's `simctl` removal, and root-owned simulator caches behind one administrator dialog
-  ([routing](clean.md#the-desktops-checked-removal)).
+  `SafeDelete` (never entering another volume) and prunes uv, pnpm, Bun and pip caches with their
+  tool. Some removals are permanent in either mode: Finder's Empty Trash for the Trash row, a
+  simulator runtime's `simctl` removal, and the tool removals of Homebrew, Docker and unavailable
+  simulator devices ([routing](clean.md#the-desktops-checked-removal)). Root-owned simulator caches
+  are report only: macOS denies their deletion even as administrator
+  ([why](clean.md#deletion-as-administrator)).
 - **Confirmation** is a separate prompt for a permanent action chosen interactively. With `-y`
   there is none: `clean --hard -y` demands `TINY_CONFIRM_HARD=1`, `processes quit --force -y`
   demands `TINY_CONFIRM_FORCE=1` ([`processes.rs`](../../crates/tiny/src/render/processes.rs)),
@@ -67,7 +69,13 @@ before releasing the scan worker.
 `clean`, `uninstall` and port lookups assume macOS tools: Finder, `pgrep`, `mdls`, `tmutil`,
 `xcrun`, `lsof`, `git`. Code the app reaches spawns them by absolute path or through
 `ToolLookup::app`, because a Finder-launched app gets a minimal `PATH`
-([`runner.rs`](../../crates/tiny-core/src/runner.rs)). Outside macOS-only tests, the only
-`cfg(target_os)` gate is the memory-pressure sysctl, which reads `None` elsewhere
-([`pressure.rs`](../../crates/tiny-core/src/processes/pressure.rs)); on other platforms the
-workspace fails at run time wherever it shells out to a macOS tool, and no CI checks it there.
+([`runner.rs`](../../crates/tiny-core/src/runner.rs)). Direct macOS calls sit behind
+`cfg(target_os = "macos")` with a fallback elsewhere: memory pressure
+([`pressure.rs`](../../crates/tiny-core/src/processes/pressure.rs)), footprint and CPU time
+([`footprint.rs`](../../crates/tiny-core/src/processes/footprint.rs)), the responsible process
+([`responsible.rs`](../../crates/tiny-core/src/processes/responsible.rs)) and working directory
+read `None`, used memory is sysinfo's figure with no split ([`sys.rs`](../../crates/tiny-core/src/sys.rs)),
+APFS sharing reads unknown ([`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs)) and
+the native Trash fails ([`native_trash.rs`](../../crates/tiny-core/src/clean/native_trash.rs)). On
+other platforms the workspace also fails at run time wherever it shells out to a macOS tool, and
+no CI checks it there.
