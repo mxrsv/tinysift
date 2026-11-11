@@ -27,8 +27,9 @@ struct ToolFixture {
     guard: Option<&'static str>,
     /// What `tool_freeable` measures, as Homebrew sizes its dry run's paths.
     freeable: Option<PathBuf>,
-    /// What `tool_touches` names, as Homebrew names its download cache.
-    touches: Vec<PathBuf>,
+    /// What `tool_touches` names, as Homebrew names its download cache
+    /// and the kegs its dry run lists; `Err` when it cannot tell.
+    touches: std::result::Result<Vec<PathBuf>, String>,
     log: Arc<Mutex<Vec<String>>>,
 }
 
@@ -43,7 +44,7 @@ fn tool(id: &'static str, tool: DesktopTool, sinks: &Sinks) -> ToolFixture {
         app: None,
         guard: None,
         freeable: None,
-        touches: Vec::new(),
+        touches: Ok(Vec::new()),
         log: sinks.log.clone(),
     }
 }
@@ -86,7 +87,7 @@ impl CleanProvider for ToolFixture {
         let dir = self.freeable.as_ref()?;
         Some(Ok(dir_size_checked(dir, &ScanContext::unchecked())))
     }
-    fn tool_touches(&self) -> Vec<PathBuf> {
+    fn tool_touches(&self) -> std::result::Result<Vec<PathBuf>, String> {
         self.touches.clone()
     }
     fn run_desktop_tool(&self, item: &CleanItem) -> std::result::Result<(), String> {
@@ -674,10 +675,14 @@ fn a_kept_folder_a_placeholder_tool_works_in_skips_the_tool() {
     let root = fs::canonicalize(dir.path()).unwrap();
     let downloads = root.join("Caches/Homebrew/downloads");
     fs::create_dir_all(&downloads).unwrap();
+    // An old version `brew cleanup` deletes from the prefix, as its dry run
+    // lists it.
+    let keg = root.join("Cellar/python@3.11/3.11.6");
+    fs::create_dir_all(keg.join("bin")).unwrap();
     let sinks = Sinks::default();
     let run = |store: &TempStore| {
         let mut brew = tool("homebrew", DesktopTool::Remove { sure: true }, &sinks);
-        brew.touches = vec![root.join("Caches/Homebrew")];
+        brew.touches = Ok(vec![root.join("Caches/Homebrew"), keg.clone()]);
         let mut plan = runtime(0);
         plan.item.category_id = "homebrew".into();
         plan.removal = Removal::RunTool(DesktopTool::Remove { sure: true });
@@ -694,6 +699,9 @@ fn a_kept_folder_a_placeholder_tool_works_in_skips_the_tool() {
         (root.join("Caches/Homebrew"), RuleScope::Directory),
         (root.join("Caches"), RuleScope::Directory),
         (downloads.clone(), RuleScope::Directory),
+        (keg.clone(), RuleScope::Directory),
+        (root.join("Cellar"), RuleScope::Directory),
+        (keg.join("bin"), RuleScope::Directory),
     ] {
         let store = TempStore::new();
         store.keep(&kept, scope);
@@ -715,4 +723,35 @@ fn a_kept_folder_a_placeholder_tool_works_in_skips_the_tool() {
         outcomes(&report)
     );
     assert_eq!(sinks.log().len(), 1);
+}
+
+/// A placeholder tool that cannot tell what it would delete (Homebrew's
+/// dry run failed) is never run: no rule could be checked.
+#[test]
+fn a_tool_that_cannot_name_what_it_deletes_is_skipped() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let sinks = Sinks::default();
+    let mut brew = tool("homebrew", DesktopTool::Remove { sure: true }, &sinks);
+    brew.touches = Err("brew cleanup --dry-run failed: no error output".into());
+    let mut plan = runtime(0);
+    plan.item.category_id = "homebrew".into();
+    plan.removal = Removal::RunTool(DesktopTool::Remove { sure: true });
+    let report = run_tools(
+        &TempStore::new(),
+        &root,
+        &[plan],
+        vec![Box::new(brew)],
+        &MockChecker::none(),
+        &sinks,
+    );
+    assert!(
+        matches!(
+            outcomes(&report)[0],
+            ItemOutcome::Skipped(SkipReason::KeepUncertain(_))
+        ),
+        "{:?}",
+        outcomes(&report)
+    );
+    assert!(sinks.log().is_empty(), "{:?}", sinks.log());
 }

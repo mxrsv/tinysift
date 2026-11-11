@@ -559,8 +559,9 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
         // A tool's placeholder: only its tool, after the checks above, acts
         // on it, and never inside a folder the user kept.
         for (provider, _) in &gated {
-            for folder in provider.tool_touches() {
-                protection_skip(ctx.policy, &folder)?;
+            let touched = provider.tool_touches().map_err(SkipReason::KeepUncertain)?;
+            for path in touched {
+                protection_skip(ctx.policy, &path)?;
             }
         }
         return Ok(());

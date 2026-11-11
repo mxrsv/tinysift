@@ -153,8 +153,9 @@ pub(super) fn split_protected(
     let mut allowed = Vec::new();
     let mut excluded = Vec::new();
     for (id, plan) in planned {
-        // A tool's placeholder names no file; a rule on a folder its tool
-        // works in skips it at run time (`CleanProvider::tool_touches`).
+        // A tool's placeholder names no file; a rule on a path its tool
+        // deletes or works in skips it at run time
+        // (`CleanProvider::tool_touches`).
         let found = match plan.item.path.is_absolute() {
             true => guards(policy, &policy.evaluate(&matcher, &plan.item.path)),
             false => Vec::new(),

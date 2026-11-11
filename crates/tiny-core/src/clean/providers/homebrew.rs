@@ -194,13 +194,21 @@ impl CleanProvider for Homebrew {
         self.owns_tool_id(&item.path)
             .then(|| self.freeable(home().as_deref()))
     }
-    /// `brew cleanup` deletes old downloads and logs in these folders;
-    /// Homebrew's own variables move them.
-    fn tool_touches(&self) -> Vec<PathBuf> {
-        let Some(home) = home() else {
-            return Vec::new();
+    /// `brew cleanup` deletes what its dry run lists (old kegs in the
+    /// prefix, the vendored Ruby) and old downloads and logs in two folders
+    /// Homebrew's own variables move. The list leaves out the download
+    /// cache, so the folders are named whole. The list is the one the run
+    /// is measured by: the scan's while fresh, a new dry run's otherwise.
+    fn tool_touches(&self) -> std::result::Result<Vec<PathBuf>, String> {
+        let home = home();
+        let listed = match self.fresh_list() {
+            Some(paths) => paths,
+            None => self.list(home.as_deref())?,
         };
-        [
+        let Some(home) = home else {
+            return Ok(listed);
+        };
+        let folders = [
             ("HOMEBREW_CACHE", "Library/Caches/Homebrew"),
             ("HOMEBREW_LOGS", "Library/Logs/Homebrew"),
         ]
@@ -210,8 +218,8 @@ impl CleanProvider for Homebrew {
                 .map(PathBuf::from)
                 .filter(|path| path.is_absolute())
                 .unwrap_or_else(|| home.join(default))
-        })
-        .collect()
+        });
+        Ok(folders.chain(listed).collect())
     }
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         match self.owns_tool_id(path) {
@@ -254,12 +262,44 @@ mod tests {
     use crate::runner::test_support::MockRunner;
 
     #[test]
-    fn cleanup_names_the_download_cache_and_logs_it_deletes_in() {
-        let touches = Homebrew::with_runner(Arc::new(MockRunner::new())).tool_touches();
-        assert_eq!(touches.len(), 2);
-        assert!(touches
+    fn cleanup_names_the_download_cache_logs_and_every_listed_path() {
+        let (dir, keg, ruby, cached) = fixture();
+        let stdout = dry_run(&lines(&keg, &ruby, &cached));
+        let runner = Arc::new(
+            MockRunner::new()
+                .with_which(BREW)
+                .with_exit(BREW, DRY_RUN, 0, &stdout),
+        );
+        let brew = Homebrew::isolated(runner.clone());
+        brew.list(Some(&dir.path().join("home"))).unwrap();
+        let touches = brew.tool_touches().unwrap();
+        assert_eq!(touches.len(), 4, "{touches:?}");
+        assert!(touches[..2]
             .iter()
             .all(|path| path.is_absolute() && path.ends_with("Homebrew")));
+        assert_eq!(touches[2..], [keg, ruby]);
+        assert_eq!(
+            runner.output_calls.lock().unwrap().len(),
+            1,
+            "the fresh list is reused"
+        );
+    }
+
+    /// Without a fresh list the dry run is asked; when it fails, what the
+    /// cleanup would delete cannot be told and the run is refused.
+    #[test]
+    fn a_stale_list_is_asked_again_and_a_failed_dry_run_names_nothing() {
+        let failing = Arc::new(
+            MockRunner::new()
+                .with_which(BREW)
+                .with_exit(BREW, DRY_RUN, 1, ""),
+        );
+        let brew = Homebrew::isolated(failing.clone());
+        assert!(brew.tool_touches().is_err());
+        assert_eq!(
+            failing.output_calls.lock().unwrap().clone(),
+            ["brew cleanup --prune=30 --dry-run"]
+        );
     }
 
     fn dry_run(lines: &[String]) -> String {

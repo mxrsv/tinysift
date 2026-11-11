@@ -291,11 +291,12 @@ pub trait CleanProvider {
         Ok(())
     }
 
-    /// For an item that names no file: the folders its tool may delete
-    /// inside. A saved "Always keep" rule on, inside or above one skips the
-    /// run, since no path of the item itself can carry the rule.
-    fn tool_touches(&self) -> Vec<std::path::PathBuf> {
-        Vec::new()
+    /// For an item that names no file: the paths its tool may delete, or
+    /// delete inside. A saved "Always keep" rule on, inside or above one
+    /// skips the run, since no path of the item itself can carry the rule.
+    /// `Err` says why they cannot be told, which skips the run too.
+    fn tool_touches(&self) -> std::result::Result<Vec<std::path::PathBuf>, String> {
+        Ok(Vec::new())
     }
 
     /// True when acting on the items needs administrator rights. The

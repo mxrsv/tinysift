@@ -453,9 +453,11 @@ path returns. Equivalent spellings on a volume that folds case or Unicode are de
 real directory entries; anything that cannot be decided (unreadable parent, several entries
 for one inode) counts as held, not as free. Tiny's own store, lock and staging paths are
 internal rules, so cleanup never moves them or an ancestor that holds them. A tool item that
-names no file (Homebrew's cleanup) is held at run time when a rule touches a folder its tool
-deletes inside ([`tool_touches`](../../crates/tiny-core/src/clean/providers/homebrew.rs)): the
-run skips as `Kept` and `brew` never starts. The preview still lists it.
+names no file (Homebrew's cleanup) is held at run time when a rule touches a path its tool
+deletes or deletes inside ([`tool_touches`](../../crates/tiny-core/src/clean/providers/homebrew.rs):
+the download cache and logs folders, and every old version the dry run lists): the run skips as
+`Kept` and `brew` never starts. When the dry run fails, those paths cannot be told and the run
+skips as `KeepUncertain`. The preview still lists it.
 
 Swift never writes rules and never sends a path: it names a discovered candidate ID to
 keep, or a rule ID to remove, with the revision it last read
