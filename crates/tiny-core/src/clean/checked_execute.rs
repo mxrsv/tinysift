@@ -548,6 +548,13 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
             .check_item(path)
             .map_err(SkipReason::ProviderGuard)?;
     }
+    // `gated` is in this order: the item, then what it covers.
+    let items = std::iter::once(&planned.item).chain(&planned.covers);
+    for ((provider, _), item) in gated.iter().zip(items) {
+        provider
+            .recheck_idle(item)
+            .map_err(SkipReason::ProviderGuard)?;
+    }
     if !on_disk {
         // A tool's placeholder: only its tool, after the checks above, acts
         // on it, and never inside a folder the user kept.

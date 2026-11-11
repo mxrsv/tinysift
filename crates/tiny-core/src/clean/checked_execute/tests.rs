@@ -29,6 +29,8 @@ struct Fixture {
     risk: RiskLevel,
     app: Option<&'static str>,
     guard: Option<&'static str>,
+    /// `recheck_idle` refuses paths ending in it, as for a project used since the scan.
+    used_since: Option<&'static str>,
     tool: bool,
     empties_trash: bool,
     admin: bool,
@@ -41,6 +43,7 @@ fn fixture(id: &'static str) -> Fixture {
         risk: RiskLevel::Safe,
         app: None,
         guard: None,
+        used_since: None,
         tool: false,
         empties_trash: false,
         admin: false,
@@ -84,6 +87,12 @@ impl CleanProvider for Fixture {
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         match self.guard {
             Some(name) if path.ends_with(name) => Err(format!("{name} is protected")),
+            _ => Ok(()),
+        }
+    }
+    fn recheck_idle(&self, item: &CleanItem) -> std::result::Result<(), String> {
+        match self.used_since {
+            Some(name) if item.path.ends_with(name) => Err(format!("{name} was used")),
             _ => Ok(()),
         }
     }
@@ -551,6 +560,26 @@ fn items_on_another_volume_than_home_are_refused() {
         &outcomes(&report)[0],
         ItemOutcome::Skipped(SkipReason::SafetyCheckFailed(_))
     ));
+    assert!(trash.moved.lock().unwrap().is_empty());
+    let _ = remove_recursive_safe(&root);
+}
+
+/// SC2: each item, and each it covers, is judged again right before it goes.
+#[test]
+fn an_item_offered_as_idle_is_judged_again_before_it_goes() {
+    let root = fixture_root("used-since", &["cache", "target"]);
+    let providers = || -> Vec<Box<dyn CleanProvider>> {
+        let mut builds = fixture("rust-targets");
+        builds.used_since = Some("target");
+        vec![Box::new(fixture("caches")), Box::new(builds)]
+    };
+    let mut covering = plan("caches", &root, "cache");
+    covering.covers = vec![plan("rust-targets", &root, "target").item];
+    let items = [plan("rust-targets", &root, "target"), covering];
+    let trash = FakeTrash::default();
+    let report = run(&items, providers(), &MockChecker::none(), &trash, None);
+    let refused = ItemOutcome::Skipped(SkipReason::ProviderGuard("target was used".into()));
+    assert_eq!(outcomes(&report), vec![refused.clone(), refused]);
     assert!(trash.moved.lock().unwrap().is_empty());
     let _ = remove_recursive_safe(&root);
 }

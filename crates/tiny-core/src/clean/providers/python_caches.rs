@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use crate::error::Result;
 
-use super::project_activity::assess;
+use super::project_activity::{assess, refuse_if_used_since};
 use super::project_walk::{project_walk, Walker};
 use super::{dev_search_roots, execute_per_item, is_idle, CleanProvider};
 use crate::clean::fs_safe::dir_size_checked;
@@ -51,6 +51,18 @@ impl CleanProvider for PythonCaches {
     }
     fn risk(&self) -> RiskLevel {
         RiskLevel::Review
+    }
+    /// A virtualenv was offered because its project was idle.
+    fn recheck_idle(&self, item: &CleanItem) -> std::result::Result<(), String> {
+        if !item.evidence.contains(&Evidence::VenvMarker) {
+            return Ok(());
+        }
+        let manifest = item
+            .path
+            .parent()
+            .and_then(python_manifest)
+            .ok_or("its project no longer has a Python manifest")?;
+        refuse_if_used_since(&*self.runner, &manifest, self.idle_days)
     }
     fn desktop_trash_paths(&self) -> bool {
         true

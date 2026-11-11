@@ -58,6 +58,8 @@ pub const BUILD_OUTPUT_SAFE_DAYS: u64 = 7;
 /// Why build output is not offered when git cannot list its tracked files.
 /// The app shows refusal reasons as they are.
 const UNLISTED: &str = "git could not tell whether it holds tracked files";
+/// Why an item offered as idle is refused at run time.
+const USED_SINCE: &str = "its project was used since the scan; scan again";
 /// Bound on the git error quoted in that reason.
 const DETAIL_CHARS: usize = 200;
 
@@ -259,6 +261,22 @@ pub(crate) fn refuse_tracked(
     }
 }
 
+/// `recheck_idle` for an item offered because its project was idle: the
+/// project of `manifest` must still be idle for `idle_days`, judged now.
+/// `npm install` keeps a folder's inode, so the fingerprint does not notice
+/// a project that came back into use after the scan.
+pub(crate) fn refuse_if_used_since(
+    runner: &dyn CommandRunner,
+    manifest: &Path,
+    idle_days: u64,
+) -> std::result::Result<(), String> {
+    match activity(runner, manifest, idle_days, &ScanContext::unchecked()) {
+        Ok(now) if now.idle => Ok(()),
+        Ok(_) => Err(USED_SINCE.into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Looks for `.git` (a directory, or a file for linked work trees) in
 /// `dir` and its ancestors without running git.
 fn in_git_work_tree(dir: &Path) -> bool {
@@ -439,6 +457,7 @@ pub(crate) mod test_support {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::clean::types::CleanItem;
     use crate::runner::test_support::MockRunner;
     use std::fs;
     use std::path::PathBuf;
@@ -1124,6 +1143,43 @@ mod tests {
                 Evidence::WorkTreeClean
             ]
         ));
+    }
+
+    /// SC2, RP-13: the scan can be days old, so a project judged idle then
+    /// is judged again right before its build output goes.
+    #[test]
+    fn a_project_used_since_the_scan_is_refused_at_run_time() {
+        let root = tempdir("bo-recheck");
+        mark_repo(&root);
+        let project = rust_project(&root, 40);
+        let dir = project.1.parent().unwrap();
+        let recheck =
+            |runner: &MockRunner| refuse_if_used_since(runner, &project.1, BUILD_OUTPUT_SAFE_DAYS);
+        assert_eq!(recheck(&mock_git(dir, 40, "")), Ok(()));
+        assert_eq!(recheck(&mock_git(dir, 1, "")), Err(USED_SINCE.into()));
+        assert_eq!(
+            recheck(&mock_git(dir, 40, " M src/lib.rs\n")),
+            Err(USED_SINCE.into())
+        );
+        let safe = CleanItem {
+            category_id: "rust-targets".into(),
+            category_label: "rust-targets".into(),
+            path: project.0.clone(),
+            size: 1,
+            risk: RiskLevel::Safe,
+            evidence: Vec::new(),
+        };
+        let used = Arc::new(mock_git(dir, 1, ""));
+        let provider = RustTargets::with_runner(IDLE_DAYS, used.clone());
+        assert_eq!(provider.recheck_idle(&safe), Err(USED_SINCE.into()));
+        // Review build output is an active project the user ticked on purpose.
+        let review = CleanItem {
+            risk: RiskLevel::Review,
+            ..safe
+        };
+        let calls = used.output_calls.lock().unwrap().len();
+        assert_eq!(provider.recheck_idle(&review), Ok(()));
+        assert_eq!(used.output_calls.lock().unwrap().len(), calls);
     }
 
     #[test]

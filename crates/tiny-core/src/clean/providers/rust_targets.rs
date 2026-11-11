@@ -3,7 +3,9 @@ use std::sync::Arc;
 
 use crate::error::Result;
 
-use super::project_activity::{assess_build_output, refuse_tracked, BUILD_OUTPUT_SAFE_DAYS};
+use super::project_activity::{
+    assess_build_output, refuse_if_used_since, refuse_tracked, BUILD_OUTPUT_SAFE_DAYS,
+};
 use super::project_walk::{project_walk, Walker};
 use super::{dev_search_roots, execute_per_item, is_idle, CleanProvider};
 use crate::clean::fs_safe::dir_size_checked;
@@ -81,6 +83,13 @@ impl CleanProvider for RustTargets {
     }
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         refuse_tracked(&*self.runner, path)
+    }
+    fn recheck_idle(&self, item: &CleanItem) -> std::result::Result<(), String> {
+        if item.risk != RiskLevel::Safe {
+            return Ok(());
+        }
+        let manifest = item.path.with_file_name("Cargo.toml");
+        refuse_if_used_since(&*self.runner, &manifest, BUILD_OUTPUT_SAFE_DAYS)
     }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
         let mut items = Vec::new();

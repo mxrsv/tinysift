@@ -283,6 +283,14 @@ pub trait CleanProvider {
         None
     }
 
+    /// Right before `item` is acted on: `Err` when what it was offered for
+    /// no longer holds. Build output offered as Safe, and a virtualenv,
+    /// were offered because their project was idle at the scan, which can be
+    /// days old; they are judged again now.
+    fn recheck_idle(&self, _item: &CleanItem) -> std::result::Result<(), String> {
+        Ok(())
+    }
+
     /// For an item that names no file: the folders its tool may delete
     /// inside. A saved "Always keep" rule on, inside or above one skips the
     /// run, since no path of the item itself can carry the rule.
