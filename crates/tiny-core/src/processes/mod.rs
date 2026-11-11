@@ -5,6 +5,7 @@ pub mod machine;
 pub mod network;
 pub mod ports;
 pub mod pressure;
+mod responsible;
 pub mod snapshot;
 pub mod terminate;
 pub mod working_dir;
@@ -142,6 +143,8 @@ mod tests {
             memory_bytes: Some(u64::from(pid)),
             footprint_bytes: None,
             cpu_time_ns: None,
+            responsible_pid: None,
+            responsible_start_time: None,
             exe: None,
         }
     }

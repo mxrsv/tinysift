@@ -317,6 +317,8 @@ mod tests {
             memory_bytes: None,
             footprint_bytes: None,
             cpu_time_ns: None,
+            responsible_pid: None,
+            responsible_start_time: None,
             exe: None,
         }
     }

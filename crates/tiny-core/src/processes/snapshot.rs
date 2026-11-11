@@ -42,6 +42,14 @@ pub struct ProcessInfo {
     /// Native app only; preserve the existing CLI JSON contract.
     #[serde(skip)]
     pub cpu_time_ns: Option<u64>,
+    /// The process macOS holds responsible for this one (the app an XPC service or helper works
+    /// for), with its start time so a reused PID never matches. Filled by `Sampler::snapshot`
+    /// only when that process is in the same sample and is not this process; `None` otherwise,
+    /// including when macOS gives no answer. Native app only; preserve the CLI JSON contract.
+    #[serde(skip)]
+    pub responsible_pid: Option<u32>,
+    #[serde(skip)]
+    pub responsible_start_time: Option<u64>,
     #[serde(skip)]
     pub exe: Option<PathBuf>,
 }
@@ -198,6 +206,8 @@ pub(crate) fn to_info(raw: RawProcess, cpu_measured: bool, current_uid: u32) -> 
         memory_bytes: readable.then_some(raw.memory),
         footprint_bytes: None,
         cpu_time_ns: None,
+        responsible_pid: None,
+        responsible_start_time: None,
         exe: raw.exe,
     }
 }
@@ -215,6 +225,9 @@ struct Seen {
     /// The name after an `exec` under the same pid and start time, which the
     /// shared `System` would otherwise keep from before it.
     name: Option<String>,
+    /// macOS's answer for the responsible process, read once per pid and start time: it is
+    /// set when the process is spawned and does not change after.
+    responsible: Option<u32>,
 }
 
 /// The name a fresh lookup reports for `pid`, as `terminate` sees it.
@@ -312,6 +325,7 @@ impl Sampler {
                 Some(previous) if previous.start == start => Seen {
                     start,
                     count: previous.count + 1,
+                    responsible: previous.responsible,
                     // `sysinfo` keeps a known process's name across `exec`;
                     // only a fresh lookup reads the new one.
                     name: if previous.exe.is_some() && previous.exe != exe {
@@ -326,6 +340,7 @@ impl Sampler {
                     count: 1,
                     exe,
                     name: None,
+                    responsible: super::responsible::read(pid),
                 },
             };
             seen.insert(pid, entry);
@@ -345,6 +360,14 @@ impl Sampler {
 
     fn system_usage(&self) -> SystemUsage {
         usage_of(&self.system, self.system_cpu_samples, self.network_reading)
+    }
+
+    /// The responsible process of `pid` as a PID plus start time, when it is in this sample and
+    /// is not `pid` itself.
+    fn responsible_of(&self, pid: u32) -> Option<(u32, u64)> {
+        let responsible = self.seen.get(&pid)?.responsible.filter(|r| *r != pid)?;
+        let start = self.seen.get(&responsible)?.start;
+        Some((responsible, start))
     }
 
     fn snapshot(&self) -> ProcessSnapshot {
@@ -370,9 +393,12 @@ impl Sampler {
                     .memory_bytes
                     .map(|_| super::footprint::read(info.pid))
                     .unwrap_or_default();
+                let responsible = self.responsible_of(info.pid);
                 ProcessInfo {
                     footprint_bytes: usage.footprint_bytes,
                     cpu_time_ns: usage.cpu_time_ns,
+                    responsible_pid: responsible.map(|(pid, _)| pid),
+                    responsible_start_time: responsible.map(|(_, start)| start),
                     ..info
                 }
             })
@@ -731,6 +757,40 @@ mod tests {
         // so a name kept from before the exec would read as a changed identity.
         assert_ne!(before.name, "sleep");
         assert_eq!(after.name, "sleep");
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn a_child_reports_the_tests_responsible_process_with_its_start_time() {
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let sample = Sampler::new().sample();
+        child.kill().unwrap();
+        child.wait().unwrap();
+        let find = |pid| sample.processes.iter().find(|p| p.pid == pid);
+        let child = find(pid).expect("the child is sampled");
+        let expected = super::super::responsible::read(std::process::id())
+            .filter(|responsible| *responsible != pid)
+            .and_then(find)
+            .map(|p| (p.pid, p.start_time));
+        assert_eq!(
+            child.responsible_pid.zip(child.responsible_start_time),
+            expected
+        );
+        // A process never names itself, and a PID always comes with its start time.
+        for process in &sample.processes {
+            assert_ne!(process.responsible_pid, Some(process.pid));
+            assert_eq!(
+                process.responsible_pid.is_some(),
+                process.responsible_start_time.is_some()
+            );
+        }
     }
 
     #[test]

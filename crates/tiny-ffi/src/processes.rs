@@ -32,6 +32,14 @@ pub struct FfiProcessInfo {
     /// `memory_bytes` is: another user's process, or one that is gone. Never zero for unread.
     #[uniffi(default = None)]
     pub cpu_time_ns: Option<u64>,
+    /// The process macOS holds responsible for this one (the app an XPC service, helper or
+    /// decoder works for), as its PID plus start time. Both are `None` when macOS gives no
+    /// answer (the lookup is private API), the responsible process is not in the same sample,
+    /// or it is this process; the app then groups by the parent chain.
+    #[uniffi(default = None)]
+    pub responsible_pid: Option<u32>,
+    #[uniffi(default = None)]
+    pub responsible_start_time: Option<u64>,
     /// Why `process_terminate` would refuse this process, if anything. Lets
     /// the UI disable Quit up front instead of offering a refused action.
     pub refusal: Option<FfiRefusal>,
@@ -380,6 +388,8 @@ impl From<ProcessInfo> for FfiProcessInfo {
                 .exe
                 .and_then(|path| path.into_os_string().into_string().ok()),
             cpu_time_ns: info.cpu_time_ns,
+            responsible_pid: info.responsible_pid,
+            responsible_start_time: info.responsible_start_time,
             refusal,
         }
     }
@@ -530,6 +540,8 @@ mod tests {
             memory_bytes: Some(4096),
             footprint_bytes,
             cpu_time_ns: None,
+            responsible_pid: None,
+            responsible_start_time: None,
             exe: None,
         };
         assert_eq!(
@@ -555,6 +567,8 @@ mod tests {
             memory_bytes: Some(4096),
             footprint_bytes: Some(1024),
             cpu_time_ns,
+            responsible_pid: None,
+            responsible_start_time: None,
             exe: None,
         };
         assert_eq!(
@@ -562,6 +576,37 @@ mod tests {
             Some(1_500_000_000)
         );
         assert_eq!(FfiProcessInfo::from(info(None)).cpu_time_ns, None);
+    }
+
+    #[test]
+    fn responsible_process_crosses_the_boundary_and_none_stays_none() {
+        let info = |responsible: Option<(u32, u64)>| ProcessInfo {
+            pid: 42,
+            name: "VTDecoderXPCService".into(),
+            user: None,
+            uid: None,
+            is_current_user: true,
+            parent_pid: Some(1),
+            start_time: 1,
+            cpu_percent: None,
+            cpu_measured: false,
+            memory_bytes: Some(4096),
+            footprint_bytes: Some(1024),
+            cpu_time_ns: None,
+            responsible_pid: responsible.map(|(pid, _)| pid),
+            responsible_start_time: responsible.map(|(_, start)| start),
+            exe: None,
+        };
+        let joined = FfiProcessInfo::from(info(Some((7, 1_700_000_000))));
+        assert_eq!(
+            (joined.responsible_pid, joined.responsible_start_time),
+            (Some(7), Some(1_700_000_000))
+        );
+        let alone = FfiProcessInfo::from(info(None));
+        assert_eq!(
+            (alone.responsible_pid, alone.responsible_start_time),
+            (None, None)
+        );
     }
 
     #[test]

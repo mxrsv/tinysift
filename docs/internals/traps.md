@@ -178,6 +178,11 @@ Things that are not obvious from reading one file.
   [`footprint.rs`](../../crates/tiny-core/src/processes/footprint.rs) converts through
   `mach_timebase_info`; its macOS tests compare a busy child against `ps -o time=` and the
   child's own `getrusage`.
+- **The responsible process comes from private API.** `responsibility_get_pid_responsible_for_pid`
+  is not in any public header; [`responsible.rs`](../../crates/tiny-core/src/processes/responsible.rs)
+  looks it up with `dlsym` once and answers `None` when a future macOS drops it, as it does for
+  `-1` (some processes answer it, for example one of two `VTDecoderXPCService`s on 2026-11-11).
+  Every caller keeps a fallback: the app groups by the parent chain when the field is `None`.
 
 ## Native integration
 
