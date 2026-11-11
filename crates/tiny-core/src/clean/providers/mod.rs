@@ -283,6 +283,13 @@ pub trait CleanProvider {
         None
     }
 
+    /// For an item that names no file: the folders its tool may delete
+    /// inside. A saved "Always keep" rule on, inside or above one skips the
+    /// run, since no path of the item itself can carry the rule.
+    fn tool_touches(&self) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
     /// True when acting on the items needs administrator rights. The
     /// desktop never moves or deletes them unprivileged
     /// (`desktop_report_only`), only as administrator

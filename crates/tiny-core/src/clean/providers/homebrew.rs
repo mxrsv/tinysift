@@ -194,6 +194,25 @@ impl CleanProvider for Homebrew {
         self.owns_tool_id(&item.path)
             .then(|| self.freeable(home().as_deref()))
     }
+    /// `brew cleanup` deletes old downloads and logs in these folders;
+    /// Homebrew's own variables move them.
+    fn tool_touches(&self) -> Vec<PathBuf> {
+        let Some(home) = home() else {
+            return Vec::new();
+        };
+        [
+            ("HOMEBREW_CACHE", "Library/Caches/Homebrew"),
+            ("HOMEBREW_LOGS", "Library/Logs/Homebrew"),
+        ]
+        .into_iter()
+        .map(|(variable, default)| {
+            std::env::var_os(variable)
+                .map(PathBuf::from)
+                .filter(|path| path.is_absolute())
+                .unwrap_or_else(|| home.join(default))
+        })
+        .collect()
+    }
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         match self.owns_tool_id(path) {
             true => Ok(()),
@@ -233,6 +252,15 @@ fn size_of(path: &Path) -> u64 {
 mod tests {
     use super::*;
     use crate::runner::test_support::MockRunner;
+
+    #[test]
+    fn cleanup_names_the_download_cache_and_logs_it_deletes_in() {
+        let touches = Homebrew::with_runner(Arc::new(MockRunner::new())).tool_touches();
+        assert_eq!(touches.len(), 2);
+        assert!(touches
+            .iter()
+            .all(|path| path.is_absolute() && path.ends_with("Homebrew")));
+    }
 
     fn dry_run(lines: &[String]) -> String {
         let mut out = lines.join("\n");

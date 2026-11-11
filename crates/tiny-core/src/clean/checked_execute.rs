@@ -549,7 +549,13 @@ pub fn validate(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), Skip
             .map_err(SkipReason::ProviderGuard)?;
     }
     if !on_disk {
-        // A tool's placeholder: only its tool, after the checks above, acts on it.
+        // A tool's placeholder: only its tool, after the checks above, acts
+        // on it, and never inside a folder the user kept.
+        for (provider, _) in &gated {
+            for folder in provider.tool_touches() {
+                protection_skip(ctx.policy, &folder)?;
+            }
+        }
         return Ok(());
     }
     same_file(planned, ctx)?;

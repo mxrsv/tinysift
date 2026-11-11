@@ -27,6 +27,8 @@ struct ToolFixture {
     guard: Option<&'static str>,
     /// What `tool_freeable` measures, as Homebrew sizes its dry run's paths.
     freeable: Option<PathBuf>,
+    /// What `tool_touches` names, as Homebrew names its download cache.
+    touches: Vec<PathBuf>,
     log: Arc<Mutex<Vec<String>>>,
 }
 
@@ -41,6 +43,7 @@ fn tool(id: &'static str, tool: DesktopTool, sinks: &Sinks) -> ToolFixture {
         app: None,
         guard: None,
         freeable: None,
+        touches: Vec::new(),
         log: sinks.log.clone(),
     }
 }
@@ -82,6 +85,9 @@ impl CleanProvider for ToolFixture {
     fn tool_freeable(&self, _: &CleanItem) -> Option<std::result::Result<u64, String>> {
         let dir = self.freeable.as_ref()?;
         Some(Ok(dir_size_checked(dir, &ScanContext::unchecked())))
+    }
+    fn tool_touches(&self) -> Vec<PathBuf> {
+        self.touches.clone()
     }
     fn run_desktop_tool(&self, item: &CleanItem) -> std::result::Result<(), String> {
         let entry = match item.path.is_absolute() {
@@ -658,4 +664,55 @@ fn a_tool_removal_runs_after_the_moves_to_the_trash() {
         "results stay in plan order"
     );
     let _ = remove_recursive_safe(&root);
+}
+
+/// RE1: Homebrew's cleanup names no file, so a rule on its download cache
+/// was never asked and `brew cleanup` deleted inside the kept folder.
+#[test]
+fn a_kept_folder_a_placeholder_tool_works_in_skips_the_tool() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = fs::canonicalize(dir.path()).unwrap();
+    let downloads = root.join("Caches/Homebrew/downloads");
+    fs::create_dir_all(&downloads).unwrap();
+    let sinks = Sinks::default();
+    let run = |store: &TempStore| {
+        let mut brew = tool("homebrew", DesktopTool::Remove { sure: true }, &sinks);
+        brew.touches = vec![root.join("Caches/Homebrew")];
+        let mut plan = runtime(0);
+        plan.item.category_id = "homebrew".into();
+        plan.removal = Removal::RunTool(DesktopTool::Remove { sure: true });
+        run_tools(
+            store,
+            &root,
+            &[plan],
+            vec![Box::new(brew)],
+            &MockChecker::none(),
+            &sinks,
+        )
+    };
+    for (kept, scope) in [
+        (root.join("Caches/Homebrew"), RuleScope::Directory),
+        (root.join("Caches"), RuleScope::Directory),
+        (downloads.clone(), RuleScope::Directory),
+    ] {
+        let store = TempStore::new();
+        store.keep(&kept, scope);
+        let report = run(&store);
+        assert!(
+            matches!(
+                outcomes(&report)[0],
+                ItemOutcome::Skipped(SkipReason::Kept { .. } | SkipReason::HoldsKept { .. })
+            ),
+            "{kept:?}: {:?}",
+            outcomes(&report)
+        );
+    }
+    assert!(sinks.log().is_empty(), "{:?}", sinks.log());
+    let report = run(&TempStore::new());
+    assert!(
+        !matches!(outcomes(&report)[0], ItemOutcome::Skipped(_)),
+        "{:?}",
+        outcomes(&report)
+    );
+    assert_eq!(sinks.log().len(), 1);
 }
