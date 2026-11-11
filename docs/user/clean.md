@@ -131,7 +131,10 @@ private-looking downloads and never ticks them for you.
   `docker` prunes unused images and build cache, and its size is
   what Docker calls reclaimable, not the images' whole size (Docker's daemon must be running,
   so it is not skipped while Docker Desktop is open);
-  `docker-volumes` prunes unused volumes, which hold container data such as databases;
+  `docker-volumes` prunes unused volumes, which hold container data such as databases. Both
+  read and prune only an engine on this Mac: when `DOCKER_HOST` or the current Docker context
+  points elsewhere (`ssh://`, `tcp://`), they report an error and prune nothing
+  ([`docker.rs`](../../crates/tiny-core/src/clean/providers/docker.rs));
   `time-machine-local` deletes local snapshots; `simulator-devices` deletes, one by one with
   `xcrun simctl delete`, the simulators that Xcode reports unavailable; `simulator-runtimes` deletes runtimes no simulator uses (`simctl`
   finishes the removal in the background); `uv` runs `uv cache prune` and `pnpm` runs

@@ -593,8 +593,17 @@ fn relative_files_cannot_impersonate_a_tool_identifier() {
 fn provider_owned_tool_ids_pass_policy_without_becoming_filesystem_paths() {
     use crate::clean::providers::docker::Docker;
     use crate::runner::test_support::MockRunner;
-    let runner =
-        Arc::new(MockRunner::new().with_response("docker", &["image", "prune", "-af"], true, ""));
+    let context = [
+        "context",
+        "inspect",
+        "--format",
+        "{{.Endpoints.docker.Host}}",
+    ];
+    let runner = Arc::new(
+        MockRunner::new()
+            .with_exit("docker", &context, 0, "unix:///var/run/docker.sock")
+            .with_response("docker", &["image", "prune", "-af"], true, ""),
+    );
     let providers: Vec<Box<dyn CleanProvider>> =
         vec![Box::new(Docker::with_runner(runner.clone()))];
     let group = group_with(vec![item("<docker:images>", "docker")], "docker");

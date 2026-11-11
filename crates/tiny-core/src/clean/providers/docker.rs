@@ -31,6 +31,13 @@ const VOLUME_KINDS: &[DfKind] = &[DfKind::Volumes];
 /// so its Reclaimable figure is only a ceiling of what these free.
 const DESKTOP_IMAGES_PRUNE: &[&str] = &["image", "prune", "-af", "--filter", "until=168h"];
 const DESKTOP_BUILD_PRUNE: &[&str] = &["builder", "prune", "-f", "--filter", "until=168h"];
+/// The engine the current context talks to, as `unix:///…`, `ssh://…` or `tcp://…`.
+const CONTEXT_ARGS: &[&str] = &[
+    "context",
+    "inspect",
+    "--format",
+    "{{.Endpoints.docker.Host}}",
+];
 
 /// Images and build cache: Docker pulls or rebuilds them on demand. Not
 /// gated on Docker Desktop: its daemon runs only while the app does, and
@@ -106,6 +113,8 @@ impl CleanProvider for Docker {
         let args = cache_kind(&item.path)?
             .desktop_prune_args()
             .ok_or("Docker volumes are never pruned from the app")?;
+        // The context may have changed since the scan.
+        local_engine(self.runner.as_ref())?;
         run_tool_command(self.runner.as_ref(), "docker", args)
     }
     /// Reclaimable of the item's kind now, from `docker system df`.
@@ -195,6 +204,39 @@ impl CleanProvider for DockerVolumes {
     }
 }
 
+/// `Ok` only when Docker talks to an engine on this Mac: `DOCKER_HOST` when
+/// set, else the current context's endpoint, is a `unix://` socket. A remote
+/// engine would make the figure another machine's and the prune delete its
+/// images. A context Docker cannot inspect is not local.
+fn require_local_engine(
+    runner: &dyn CommandRunner,
+    docker_host: Option<&str>,
+) -> std::result::Result<(), String> {
+    let host = match docker_host.filter(|host| !host.is_empty()) {
+        Some(host) => host.to_string(),
+        None => {
+            let out = run_tool(runner, "docker", CONTEXT_ARGS).map_err(|e| e.to_string())?;
+            if !out.success() {
+                return Err(format!(
+                    "docker context inspect failed: {}",
+                    out.stderr.trim()
+                ));
+            }
+            out.stdout.trim().to_string()
+        }
+    };
+    if host.starts_with("unix://") {
+        return Ok(());
+    }
+    Err(format!(
+        "Docker points at {host}, not this Mac, so nothing is listed or pruned"
+    ))
+}
+
+fn local_engine(runner: &dyn CommandRunner) -> std::result::Result<(), String> {
+    require_local_engine(runner, std::env::var("DOCKER_HOST").ok().as_deref())
+}
+
 /// Lists the resource types in `kinds` from `docker system df --format
 /// '{{json .}}'`, which emits one JSON object per type (Images,
 /// Containers, Local Volumes, Build Cache). Daemon down → non-zero exit →
@@ -206,6 +248,7 @@ fn discover_kinds(
     label: &str,
     risk: RiskLevel,
 ) -> Result<Vec<CleanItem>> {
+    local_engine(runner).map_err(|e| engine_error!("{e}"))?;
     let out = run_tool(
         runner,
         "docker",
@@ -250,9 +293,15 @@ fn prune(
         return Err(engine_error!("{} provider does not accept EmptyTrash", id));
     }
     let mut report = ExecReport::default();
+    // Asked once, before the first prune: the context may have changed since the scan.
+    let mut engine = None;
     for item in items {
         match DfKind::from_placeholder(&item.path).filter(|k| kinds.contains(k)) {
             Some(kind) => {
+                if let Err(reason) = engine.get_or_insert_with(|| local_engine(runner)) {
+                    report.failed.push((item.path.clone(), reason.clone()));
+                    continue;
+                }
                 let args = kind.prune_args();
                 if runner.run("docker", args).success {
                     report.removed_paths.push(item.path.clone());
@@ -497,7 +546,63 @@ mod tests {
     fn df_runner() -> MockRunner {
         MockRunner::new()
             .with_which("docker")
+            .with_exit(
+                "docker",
+                CONTEXT_ARGS,
+                0,
+                "unix:///Users/me/.docker/run/docker.sock\n",
+            )
             .with_exit("docker", DF_ARGS, 0, DF_OUT)
+    }
+
+    /// RP-08: a context on another machine would make the figure that
+    /// machine's and the prune delete its images.
+    #[test]
+    fn a_remote_docker_context_is_neither_listed_nor_pruned() {
+        let runner = Arc::new(
+            MockRunner::new()
+                .with_which("docker")
+                .with_exit("docker", CONTEXT_ARGS, 0, "ssh://deploy@prod\n")
+                .with_exit("docker", DF_ARGS, 0, DF_OUT)
+                .with_exit("docker", DESKTOP_IMAGES_PRUNE, 0, "")
+                .with_exit("docker", &["image", "prune", "-af"], 0, ""),
+        );
+        let p = Docker::with_runner(runner.clone());
+        let error = p.discover(&ScanContext::unchecked()).unwrap_err();
+        assert!(error.to_string().contains("ssh://deploy@prod"), "{error}");
+        let item = CleanItem {
+            category_id: ID.into(),
+            category_label: LABEL.into(),
+            path: PathBuf::from(PLACEHOLDER_IMAGES),
+            size: 1,
+            risk: RiskLevel::Review,
+            evidence: Vec::new(),
+        };
+        assert!(p.run_desktop_tool(&item).is_err());
+        let report = p
+            .execute(std::slice::from_ref(&item), ExecAction::HardDelete)
+            .unwrap();
+        assert!(report.removed_paths.is_empty());
+        assert!(!ran(&runner, "prune"), "{:?}", calls(&runner));
+        assert!(!ran(&runner, "system df"), "{:?}", calls(&runner));
+        let volumes = DockerVolumes::with_runner(runner.clone());
+        assert!(volumes.discover(&ScanContext::unchecked()).is_err());
+    }
+
+    #[test]
+    fn docker_host_wins_over_the_context_and_must_be_a_local_socket() {
+        let local =
+            MockRunner::new().with_exit("docker", CONTEXT_ARGS, 0, "unix:///var/run/docker.sock");
+        assert_eq!(require_local_engine(&local, None), Ok(()));
+        assert!(require_local_engine(&local, Some("tcp://10.0.0.5:2375")).is_err());
+        assert_eq!(
+            require_local_engine(&MockRunner::new(), Some("unix:///tmp/d.sock")),
+            Ok(())
+        );
+        assert!(
+            require_local_engine(&MockRunner::new(), None).is_err(),
+            "no answer is not local"
+        );
     }
 
     /// Every command the provider ran, bounded or not.
