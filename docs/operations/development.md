@@ -14,7 +14,9 @@ cargo clippy --workspace --all-targets --locked -- -D warnings
 ```
 
 [CI](../../.github/workflows/ci.yml) runs these gates on macOS only, the one platform TinySift
-ships on; nothing checks that the workspace builds or passes its tests elsewhere.
+ships on; nothing checks that the workspace builds or passes its tests elsewhere. It runs on pushes
+to `main` and on pull requests, never on tags or other branch pushes, with Rust 1.99.0, the
+toolchain the app builds with; move both together when updating Rust.
 The [CLI smoke tests](../../crates/tiny/tests/) use dry runs and owned disposable processes;
 tests must never delete real user data. A real home-directory discovery can take several minutes.
 
