@@ -62,7 +62,7 @@ global pool behind any scan that uses it. Scans keep to bounded pools of their o
 [Storage scans](../../crates/tiny-core/src/space_lens.rs) and the desktop's
 [`node_modules` sizing](../../crates/tiny-core/src/clean/providers/node_modules.rs) each use
 four threads, since more threads did not walk faster and cost twice the kernel CPU.
-The [sampler contention regression](../../crates/tiny-core/src/processes/snapshot.rs)
+The [sampler contention regression](../../crates/tiny-core/src/processes/snapshot/tests.rs)
 holds the global pool busy in an isolated test process and requires a real sample to finish
 before releasing the scan worker.
 
