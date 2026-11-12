@@ -234,7 +234,8 @@ impl TinySession {
     /// Reads only `pids`, leaving out any that is gone, for a panel that follows one app between
     /// full `process_list` samples. Has its own CPU interval, so it never shortens
     /// `process_list`'s: a PID's CPU is measured from the third consecutive call that includes
-    /// it, as the average since the previous one. Responsible processes are named only within
+    /// it, as the average since the previous one; calls need to be at least 0.2 s apart, or the
+    /// CPU interval of the call before is reused. Responsible processes are named only within
     /// `pids`, so group by the last `process_list`. Bypasses the gate.
     pub fn process_list_for(&self, pids: Vec<u32>) -> Vec<FfiProcessInfo> {
         self.sampler()
