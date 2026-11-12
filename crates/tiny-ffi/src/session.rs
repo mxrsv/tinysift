@@ -8,6 +8,7 @@ use tiny_core::processes::{MachineSampler, Sampler};
 
 use crate::cask::CaskState;
 use crate::clean::CleanState;
+use crate::large_files::LargeFilesState;
 use crate::uninstall::UninstallState;
 use crate::FfiError;
 
@@ -21,6 +22,7 @@ pub struct TinySession {
     machine: Mutex<MachineSampler>,
     pub(crate) clean: Mutex<CleanState>,
     pub(crate) uninstall: Mutex<UninstallState>,
+    pub(crate) large_files: Mutex<LargeFilesState>,
     pub(crate) cask: Mutex<CaskState>,
 }
 

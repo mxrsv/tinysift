@@ -4,7 +4,7 @@
 //! know such an item; it can still be dragged back out of the Trash.
 //! Emptying the Trash stays with Finder ([`FinderTrash`]).
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::finder_trash::{refuse_symlink, FinderTrash, Trash, TrashError};
 
@@ -21,8 +21,12 @@ impl Default for NativeTrash {
 
 impl<E: Trash> Trash for NativeTrash<E> {
     fn move_to_trash(&self, path: &Path) -> Result<(), TrashError> {
+        self.move_to_trash_reporting(path).map(|_| ())
+    }
+
+    fn move_to_trash_reporting(&self, path: &Path) -> Result<Option<PathBuf>, TrashError> {
         refuse_symlink(path)?;
-        trash_item(path).map(|_| ())
+        trash_item(path)
     }
 
     fn empty_trash(&self) -> Result<(), TrashError> {

@@ -47,7 +47,7 @@ Full Disk Access. Watch this repository's releases to hear about new versions.
 | **Agents** | Every Claude Code and Codex session, grouped by repository, with its CPU and memory. |
 | **Menu bar** | The same readings in a popover; right-click for Smart Clean, Settings and updates. |
 | **Clean** | Developer caches, logs and leftovers: Xcode DerivedData, simulators, `node_modules`, npm, pnpm, cargo and [more](docs/user/clean.md#categories). |
-| **Storage** | What fills the disk, folder by folder. It only reads ([scan](docs/user/scan.md)). |
+| **Storage** | What fills the disk, folder by folder (Folders only reads, [scan](docs/user/scan.md)), and the large files worth removing (Large Files moves only what you pick, to the Trash: [contract](docs/internals/clean.md#large-files)). |
 | **Apps** | Installed apps by size, and Homebrew updates; Uninstall moves an app and the files it left to the Trash ([uninstall contract](docs/internals/clean.md#the-desktops-checked-uninstall)). |
 
 ## How it compares

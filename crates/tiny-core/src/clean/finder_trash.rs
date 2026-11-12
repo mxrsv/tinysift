@@ -5,7 +5,7 @@
 //!
 //! [`NativeTrash`]: super::native_trash::NativeTrash
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use crate::runner::{CommandRunner, RealRunner};
@@ -54,6 +54,13 @@ pub enum TrashError {
 pub trait Trash: Send + Sync {
     /// Moves `path` to the user's Trash. On `Err` the source is left as is.
     fn move_to_trash(&self, path: &Path) -> Result<(), TrashError>;
+
+    /// `move_to_trash`, plus where the item went when the route says. A route
+    /// that does not know returns `None`: the move still succeeded, but
+    /// nothing can be put back by path (Large Files' Undo).
+    fn move_to_trash_reporting(&self, path: &Path) -> Result<Option<PathBuf>, TrashError> {
+        self.move_to_trash(path).map(|()| None)
+    }
 
     /// Empties the user's Trash for good. A route that cannot refuses.
     fn empty_trash(&self) -> Result<(), TrashError> {

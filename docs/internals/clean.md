@@ -453,6 +453,59 @@ rules lease, then the short uninstall-state lock, which is never held across a p
 or callback. Tests inject the inventory (`AppCatalog`), probe and Trash, so none reads
 `/Applications`, calls `defaults`/`mdls` or Finder.
 
+## Large Files
+
+[`tiny-ffi/src/large_files.rs`](../../crates/tiny-ffi/src/large_files.rs) is the app's Large Files tab (Storage Explorer),
+built on [`tiny-core/src/clean/large_files/`](../../crates/tiny-core/src/clean/large_files/mod.rs). It follows Clean's
+consent contract and adds no second removal path: Swift names file, preview and move IDs, never a path to act on, and
+every move goes through `Trash` (the app passes `NativeTrash`). Nothing here deletes for good.
+
+| Call | Gate | What it does |
+| --- | --- | --- |
+| `large_files_scan(token, progress)` | takes it | Read-only. Replaces the earlier scan and any preview. Returns `FfiLargeFile` records (`id`, `path`, `name`, `group`, `reason`, `frees_bytes`, `frees_is_exact`, `matched_app_path`) and `unreadable_folders`. |
+| `large_files_preview(file_ids)` | none | Builds the one preview from IDs of the current scan. Unknown IDs and an empty list are refused; a file a saved "always keep" rule holds is returned in `held_ids` and left out. Unreadable rules fail it (`ProtectionUnavailable`). Replaces any earlier preview. |
+| `large_files_move(preview_id, token, progress)` | takes it | Spends the preview, then moves. Returns one result per item (`FfiItemOutcome`, `FfiFailureCause`, `bytes_moved`, `trashed_path`) and a `move_id`. |
+| `large_files_undo(move_id)` | takes it | Puts the move's files back. One outcome per file. |
+
+**Preview and session.** A preview expires after `PREVIEW_TTL` (15 minutes, on two clocks), is spent before the first
+move (a replay is `PreviewInvalid`, "already used"), is stale once a rescan replaces the list, and is dropped
+(`ProtectionChanged`) when the saved rules differ from those it was authorised against. The lease on the saved rules is
+taken before the preview is spent, so a busy or unreadable store fails without spending it. Only the preview's IDs
+move; a move that is `Busy` leaves the preview usable. Lock order: session gate, saved-rules lease, then a short state
+lock that never spans a Trash call or callback.
+
+**Checks before each file** ([`move_run.rs`](../../crates/tiny-core/src/clean/large_files/move_run.rs)), in Clean's
+order and with its pieces: cancellation, the rules unchanged, `/System`, the saved rules for the path, the path still
+the file the scan saw (`PathFingerprint`: a file's size and mtime), not a symlink, on the home volume, inside a folder the
+scan listed through real folders, and not a protected path; then the rules again and cancellation. A refusal is a skip
+with its RM2 cause (`failure_cause.rs`) and the run goes on; cancellation, a denied Automation or a changed rule set
+stops it and the rest are `NotAttempted`. The open-file check and a running-app check are not done (an installer has no
+owning app; the open-file check is the plan's backlog item).
+
+**What a move reports.** A move frees nothing by itself (FG3). `bytes_moved` is the file's private allocated bytes
+measured right before the move (`private_allocated_bytes`: blocks shared with an APFS clone do not count, a hard link
+counts once), i.e. what emptying the Trash frees; `bytes_moved_is_upper_bound` is set when the volume could not vouch
+for every block. `frees_is_exact` on a record has the same meaning.
+
+**Undo** ([`undo.rs`](../../crates/tiny-core/src/clean/large_files/undo.rs)) uses the Trash location the move
+reported (`Trash::move_to_trash_reporting`; `NativeTrash` returns Foundation's resulting URL) and the file's
+fingerprint from the move. Per item it refuses, and says why, when the location is not in a `.Trash`/`.Trashes`, the
+item is gone from the Trash, something else is there now, the original folder is gone, or the original path is taken.
+It renames with `renamex_np(RENAME_EXCL)`, so a file created between the check and the move is never replaced. Items
+that went back return to the scan's list (same IDs); items that did not stay in the move and can be tried again. A
+later move replaces what Undo takes. Emptying the Trash (the app asks Finder through the Trash row) ends Undo.
+
+**Scan, step 1: Installers** ([`installers.rs`](../../crates/tiny-core/src/clean/large_files/installers.rs)). Direct
+children of `~/Downloads` and `~/Desktop` ending in `.dmg`, `.pkg`, `.iso` or `.xip` (regular files, not symlinks) whose
+private bytes are at least `INSTALLER_MIN_BYTES` (100 MB). A file is listed only when an app bundle directly inside
+`/Applications` or `~/Applications` has the same normalised name
+([`name_match.rs`](../../crates/tiny-core/src/clean/large_files/name_match.rs): lower case, separators ignored, version,
+architecture and "installer" tokens cut after the first word). The reason is `<App> is installed in Applications`, or
+`A newer <App> is installed in Applications` only when both versions parse and the installed
+`CFBundleShortVersionString` (read with `plutil`) is higher. Anything else is not this group's. A file that frees
+0 bytes is not offered. Tests inject the roots, the threshold and the version table (`InstallerRoots`,
+`scan_installers_above`, `AppVersions`), so they never read the real home.
+
 ## Desktop persistent protection
 
 Always keep is a policy owned by Rust; only the desktop app edits it. A

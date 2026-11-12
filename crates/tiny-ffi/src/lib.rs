@@ -12,6 +12,7 @@ uniffi::setup_scaffolding!();
 
 pub mod cask;
 pub mod clean;
+pub mod large_files;
 pub mod processes;
 pub mod session;
 pub mod storage;
