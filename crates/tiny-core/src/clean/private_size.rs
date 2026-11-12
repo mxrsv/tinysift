@@ -1,6 +1,8 @@
 //! The bytes removing one path would free on its own: its private allocated
 //! bytes. Blocks shared with an APFS clone do not count, and a hard-linked
-//! inode counts once.
+//! inode counts once, and only when every one of its links lies inside the
+//! measured path: a link left outside keeps the blocks, so removing this
+//! path frees nothing for them (the rule `freed_size` applies to cleanup).
 //!
 //! This answers for a single path. [`super::freed_size`] owns the rule for
 //! cleanup items, which also credits clone families removed together.
@@ -14,7 +16,7 @@
 //! - A folder is walked with `symlink_metadata`; symlinks are never followed.
 
 use super::freed_size::{sharing_of, Sharing};
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -38,7 +40,8 @@ pub fn private_allocated_bytes(path: &Path) -> io::Result<PrivateSize> {
         bytes: 0,
         exact: true,
     };
-    let mut seen: HashSet<(u64, u64)> = HashSet::new();
+    // Per inode: links met inside the path, its link count, and what it counts.
+    let mut linked: HashMap<(u64, u64), (u64, u64, u64)> = HashMap::new();
     let mut pending: Vec<(PathBuf, fs::Metadata)> = vec![(path.to_path_buf(), root)];
     while let Some((current, meta)) = pending.pop() {
         let kind = meta.file_type();
@@ -54,7 +57,12 @@ pub fn private_allocated_bytes(path: &Path) -> io::Result<PrivateSize> {
                 }
                 Err(_) => total.exact = false,
             }
-        } else if kind.is_file() && seen.insert((meta.dev(), meta.ino())) {
+        } else if kind.is_file() {
+            let key = (meta.dev(), meta.ino());
+            if let Some(entry) = linked.get_mut(&key) {
+                entry.0 += 1;
+                continue;
+            }
             let allocated = meta.blocks().saturating_mul(512);
             let (bytes, exact) = match sharing_of(&current) {
                 Sharing::Unshared => (allocated, true),
@@ -62,8 +70,13 @@ pub fn private_allocated_bytes(path: &Path) -> io::Result<PrivateSize> {
                 Sharing::Clone { .. } => (0, true),
                 Sharing::Unknown => (allocated, false),
             };
-            total.bytes = total.bytes.saturating_add(bytes);
             total.exact &= exact;
+            linked.insert(key, (1, meta.nlink(), bytes));
+        }
+    }
+    for (seen, nlink, bytes) in linked.into_values() {
+        if seen >= nlink {
+            total.bytes = total.bytes.saturating_add(bytes);
         }
     }
     Ok(total)
@@ -159,6 +172,24 @@ mod tests {
         fs::hard_link(&file, dir.path().join("two")).unwrap();
         let size = private_allocated_bytes(dir.path()).unwrap();
         assert_eq!(size.bytes, allocated(&file));
+    }
+
+    #[test]
+    fn a_hard_link_with_its_twin_outside_the_path_frees_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let (inside, outside) = (dir.path().join("in"), dir.path().join("out"));
+        fs::create_dir(&inside).unwrap();
+        fs::create_dir(&outside).unwrap();
+        write(&inside.join("one"), SIZE);
+        fs::hard_link(inside.join("one"), outside.join("two")).unwrap();
+        assert_eq!(
+            private_allocated_bytes(&inside.join("one")).unwrap().bytes,
+            0
+        );
+        assert_eq!(private_allocated_bytes(&inside).unwrap().bytes, 0);
+        // Measured from the folder that holds both links, it counts once.
+        let both = private_allocated_bytes(dir.path()).unwrap();
+        assert_eq!(both.bytes, allocated(&inside.join("one")));
     }
 
     #[test]

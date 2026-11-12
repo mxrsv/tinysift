@@ -1,11 +1,13 @@
 //! What CP1 needs to know about a video, read from the container's header
 //! only: its length, its picture size and how many audio tracks it has.
 //! `matroska` reads MKV and `mp4` reads MP4/MOV/M4V; neither decodes anything.
+//! An MKV is bounds-checked first ([`super::mkv_guard`]): `matroska` allocates
+//! from declared sizes and a failed allocation aborts the process.
 //! A file either cannot read, or that lacks any of the three facts, has no
 //! facts, and a file without facts is never a copy.
 
 use std::fs::File;
-use std::io::BufReader;
+use std::io::{BufReader, Seek};
 use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::Path;
 
@@ -33,7 +35,15 @@ pub fn read_video_facts(path: &Path) -> Option<VideoFacts> {
 }
 
 fn read_matroska(path: &Path) -> Option<VideoFacts> {
-    let file = matroska::Matroska::open(BufReader::new(File::open(path).ok()?)).ok()?;
+    let source = File::open(path).ok()?;
+    let len = source.metadata().ok()?.len();
+    let mut reader = BufReader::new(source);
+    // The crate allocates from sizes a damaged file declares: look first.
+    if !super::mkv_guard::is_safe(&mut reader, len) {
+        return None;
+    }
+    reader.rewind().ok()?;
+    let file = matroska::Matroska::open(reader).ok()?;
     let duration = file.info.duration?;
     let video = file.video_tracks().next()?;
     let matroska::Settings::Video(picture) = &video.settings else {

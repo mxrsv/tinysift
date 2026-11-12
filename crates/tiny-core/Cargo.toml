@@ -20,7 +20,7 @@ mp4 = "0.14"
 # Automation permission is needed.
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", default-features = false, features = ["std"] }
-objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL"] }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL", "NSValue"] }
 
 [dev-dependencies]
 bytes = "1"

@@ -553,11 +553,14 @@ impl TinySession {
             }
         }
         let move_id = (!moved.is_empty()).then(|| format!("lm{}", state.next_id()));
-        state.undo = move_id.as_ref().map(|id| StoredMove {
-            id: id.clone(),
-            scan_id,
-            items: moved,
-        });
+        // A run that moved nothing leaves the previous move's Undo as it was.
+        if let Some(id) = &move_id {
+            state.undo = Some(StoredMove {
+                id: id.clone(),
+                scan_id,
+                items: moved,
+            });
+        }
         FfiLargeFilesMoveReport {
             move_id,
             bytes_moved_to_trash: executed.bytes_moved(),

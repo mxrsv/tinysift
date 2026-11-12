@@ -5,7 +5,9 @@
 //!
 //! What the walk never enters or lists (NL1): anything outside the home
 //! (symlinks are not followed), `~/Library` (app libraries are [`super::elsewhere`]'s),
-//! app bundles and package libraries, VM bundles, hidden folders (tool
+//! app bundles, packages (what macOS calls one, plus a fixed list for those
+//! whose app is not installed) and package libraries, VM bundles, another
+//! volume's mount point, hidden folders (tool
 //! caches, `.Trash`), Smart Clean's build-output folder names, a folder with
 //! a `.git` inside (a git work tree), and an iCloud placeholder.
 //!
@@ -26,6 +28,7 @@ use crate::progress::{report, ProgressCallback};
 
 use super::copies::{find_pairs, CopyOf, VideoEntry, COPY_MIN_BYTES};
 use super::last_used::LastUsed;
+use super::package_dir::is_package;
 use super::{FreesNothing, Group, LargeFile};
 
 /// 500 MB, decimal (GR3), judged on private bytes like every threshold here.
@@ -137,6 +140,20 @@ pub fn scan_home(
     cancel: Option<&AtomicBool>,
     progress: ProgressCallback<'_>,
 ) -> HomeScan {
+    // A home that cannot be read has no device; every listing then fails alike.
+    let device = fs::metadata(walk.home).map_or(0, |meta| meta.dev());
+    scan_home_on(walk, device, cancel, progress)
+}
+
+/// `scan_home` on the volume `device`: a folder on another one (a mounted
+/// disk or share inside the home) is left alone (NL1). Split so a test can
+/// name a device without mounting one.
+pub(super) fn scan_home_on(
+    walk: &HomeWalk<'_>,
+    device: u64,
+    cancel: Option<&AtomicBool>,
+    progress: ProgressCallback<'_>,
+) -> HomeScan {
     let mut scan = HomeScan::default();
     let mut seen_inodes: HashSet<(u64, u64)> = HashSet::new();
     let mut pending = vec![walk.home.to_path_buf()];
@@ -178,7 +195,10 @@ pub fn scan_home(
                 report(progress, "scan", scan.visited, None, &dir.to_string_lossy());
             }
             if meta.is_dir() {
-                if !skips_folder(&path, &name, walk.home) && !is_dataless(&meta) {
+                if meta.dev() == device
+                    && !skips_folder(&path, &name, walk.home)
+                    && !is_dataless(&meta)
+                {
                     pending.push(path);
                 }
             } else if meta.is_file() && !is_dataless(&meta) {
@@ -292,6 +312,7 @@ fn skips_folder(path: &Path, name: &str, home: &Path) -> bool {
         .extension()
         .and_then(|e| e.to_str())
         .is_some_and(|e| OPAQUE_EXTENSIONS.contains(&e.to_lowercase().as_str()))
+        || is_package(path)
     {
         return true;
     }
@@ -311,6 +332,7 @@ fn candidate(
     }
     // A file that frees nothing is no group's row; group 5 explains it (FN1).
     // Judged before the age test: its size and that it frees 0 are the facts.
+    // A hard-linked file frees 0 as well: its other link keeps the blocks.
     let frees = private_allocated_bytes(path).ok()?;
     if frees.bytes == 0 {
         if seen_inodes.insert((meta.dev(), meta.ino())) {
@@ -339,10 +361,6 @@ fn candidate(
         Group::OnlyCopy => video_reason(days_between(modified, walk.now)),
         _ => other_reason(path, extension.as_deref(), modified, walk)?,
     };
-    // A hard link counts once: its twin is the same blocks.
-    if !seen_inodes.insert((meta.dev(), meta.ino())) {
-        return None;
-    }
     if frees.bytes < min_bytes {
         return None;
     }

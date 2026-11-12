@@ -190,6 +190,9 @@ fn frees_nothing_row(
         (None, Sharing::Clone { .. }) => {
             "Frees nothing: another copy on this Mac uses the same space".to_string()
         }
+        (None, _) if has_other_links(&file.path) => {
+            "Frees nothing: another link to the same file stays on this Mac".to_string()
+        }
         (None, _) => "Frees nothing: its space is shared with other files".to_string(),
     };
     let (app, app_running) = partner.map_or((None, false), |item| app_of(item.library));
@@ -228,6 +231,11 @@ fn frees_nothing_row(
         }),
         copy: None,
     }
+}
+
+/// True for a regular file that has more than one hard link.
+fn has_other_links(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && m.nlink() > 1)
 }
 
 /// The bundles of every library, library by library, in name order.

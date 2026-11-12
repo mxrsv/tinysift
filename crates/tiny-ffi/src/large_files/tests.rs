@@ -550,6 +550,28 @@ fn a_later_move_replaces_what_undo_takes() {
     );
 }
 
+#[test]
+fn a_run_that_moved_nothing_keeps_the_previous_moves_undo() {
+    let world = World::new();
+    let (cap, first, _) = moved_cap(&world);
+    let zed = world.installer("Zed", "Zed.dmg");
+    let scan = world.scan();
+    let preview = world.session.preview_large_files(&ids(&scan)).unwrap();
+    let mut trash = world.trash();
+    trash.fail = Some(TrashError::Os {
+        code: EBUSY,
+        detail: "busy".into(),
+    });
+    let second = world.run(&preview.preview_id, &trash).unwrap();
+    assert!(second.move_id.is_none() && zed.exists());
+    let undo = world
+        .session
+        .large_files_undo(first.move_id.unwrap())
+        .unwrap();
+    assert_eq!(undo.restored_count, 1);
+    assert!(cap.exists());
+}
+
 // ---------- groups 3 and 4: the home walk ----------
 
 mod home_walk {

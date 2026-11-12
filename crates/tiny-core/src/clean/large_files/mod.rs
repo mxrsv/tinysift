@@ -13,8 +13,10 @@ mod discovery;
 pub mod elsewhere;
 mod installers;
 pub mod last_used;
+mod mkv_guard;
 pub mod move_run;
 mod name_match;
+mod package_dir;
 pub mod undo;
 pub mod video_facts;
 

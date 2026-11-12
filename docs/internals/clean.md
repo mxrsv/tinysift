@@ -483,8 +483,8 @@ stops it and the rest are `NotAttempted`. The open-file check and a running-app 
 owning app; the open-file check is the plan's backlog item).
 
 **What a move reports.** A move frees nothing by itself (FG3). `bytes_moved` is the file's private allocated bytes
-measured right before the move (`private_allocated_bytes`: blocks shared with an APFS clone do not count, a hard link
-counts once), i.e. what emptying the Trash frees; `bytes_moved_is_upper_bound` is set when the volume could not vouch
+measured right before the move (`private_allocated_bytes`: blocks shared with an APFS clone do not count, and a
+hard-linked inode counts only when all its links lie inside the measured path, otherwise 0), i.e. what emptying the Trash frees; `bytes_moved_is_upper_bound` is set when the volume could not vouch
 for every block. `frees_is_exact` on a record has the same meaning.
 
 **Undo** ([`undo.rs`](../../crates/tiny-core/src/clean/large_files/undo.rs)) uses the Trash location the move
@@ -510,8 +510,8 @@ architecture and "installer" tokens cut after the first word). The reason is `<A
 ([`discovery.rs`](../../crates/tiny-core/src/clean/large_files/discovery.rs)). One read-only walk of the home
 (`scan_home`): folder listings and file metadata only, nothing hashed, cancellable, progress every 2000 entries. A file
 is looked at only when its allocated blocks reach the smaller threshold; then its private bytes must be above 0 and reach
-the group's threshold, and a hard link's twin counts once (a file whose private bytes are 0 goes to group 5 instead, see
-step 3). A video (`mp4 mov mkv m4v avi webm`) of 500 MB or more is
+the group's threshold, and a file whose private bytes are 0 (a full clone, or a hard link with another link elsewhere) goes to group 5
+instead, see step 3. A video (`mp4 mov mkv m4v avi webm`) of 500 MB or more is
 `OnlyCopy` ("only_copy"), reason `Video · changed N days ago`; the spec fixes no threshold for this group, so it takes
 group 4's. Any other file of 500 MB or more whose modification date is 90 days old is `OtherLarge` ("other_large"),
 reason `<kind> · not changed for N days`; Spotlight's last-used date (`mdls`, asked only for a file that already passed
@@ -519,7 +519,9 @@ every other test) wins when newer, and then the reason says `not used for N days
 (`Disk image`, `Archive`, ... or `<EXT> file`). A file an installer row claimed is left out; an installer with no
 installed app can land in group 4. Never listed (NL1), and never entered: symlinks (nothing outside the home is
 reached), hidden names, `~/Library`, `~/Music/Music`, `~/Movies/TV`, app bundles and package libraries by extension
-(`app photoslibrary musiclibrary tvlibrary fcpbundle imovielibrary ...`), VM bundles (`utm vmwarevm pvm sparsebundle`),
+(`app photoslibrary musiclibrary tvlibrary fcpbundle imovielibrary ...`) and any folder with an extension that macOS
+treats as a package (`NSURLIsPackageKey`, [`package_dir.rs`](../../crates/tiny-core/src/clean/large_files/package_dir.rs);
+a bundle-bit package without an extension is still walked), a folder on another volume than the home (`st_dev`), VM bundles (`utm vmwarevm pvm sparsebundle`),
 Smart Clean's build-output folder names (`node_modules target build DerivedData Pods ...`), a folder with a `.git` entry
 (the home itself is exempt, so a dotfiles repo does not hide everything), and an iCloud placeholder (`SF_DATALESS`).
 The walk is added to the move's scanned roots, so a group 3 or 4 file moves and undoes through the same checks.
@@ -531,7 +533,11 @@ Tests inject the limits, "now", the Spotlight table and the claimed set (`Limits
 decided inside `scan_home`, after the walk: the walk keeps every video (`mp4 mov mkv m4v avi webm`) whose allocated
 blocks reach `Limits::copy_min_bytes` (100 MB), and `find_pairs` groups them by stem and parent's parent folder (one
 folder, or sibling folders such as `Raw/x.mp4` and `Backup_MKV/x.mkv`). Headers are read only for a group of two or more:
-`matroska` for `.mkv`, `mp4` for `.mp4 .mov .m4v`, header only, never decoding. The facts are length, picture size of the
+`matroska` for `.mkv`, `mp4` for `.mp4 .mov .m4v`, header only, never decoding. An MKV first passes
+[`mkv_guard.rs`](../../crates/tiny-core/src/clean/large_files/mkv_guard.rs): a declared size past its parent or the file,
+nesting deeper than 16 or a SeekHead chain longer than 8 makes it unreadable, since the crate allocates a declared size
+before checking it (an allocation failure aborts; `catch_unwind` only covers panics). `mp4` already bounds every box by
+its parent and the file. The facts are length, picture size of the
 first video track and audio-track count; a file the parser cannot read, that panics (caught) or that lacks one fact
 (an MKV without a Duration, an MP4 without `moov`) is never in a pair. A pair needs lengths under 500 ms apart and equal
 size and track count. The file that stays: `.mp4`, else `.mov`, else the larger file (two of one kind: the larger, then

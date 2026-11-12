@@ -360,3 +360,22 @@ fn sizes_read_as_the_app_writes_them() {
     );
     assert!(rows[0].elsewhere.as_ref().unwrap().kind == "File");
 }
+
+#[test]
+fn a_hard_linked_file_says_another_link_stays() {
+    let world = World::new();
+    let path = world.write("Documents/linked.bin", 1);
+    fs::hard_link(&path, world.home.join("Documents/twin.bin")).unwrap();
+    let file = FreesNothing {
+        allocated: 1 << 20,
+        modified: None,
+        fingerprint: PathFingerprint::of(&fs::symlink_metadata(&path).unwrap()),
+        path,
+    };
+    let rows = world.scan(&quiet(), vec![file]);
+    assert!(
+        rows[0].reason.contains("another link"),
+        "{}",
+        rows[0].reason
+    );
+}

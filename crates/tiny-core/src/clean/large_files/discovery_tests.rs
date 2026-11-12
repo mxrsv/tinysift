@@ -11,7 +11,7 @@ use std::time::{Duration, SystemTime};
 
 use tempfile::TempDir;
 
-use super::discovery::flags_are_dataless;
+use super::discovery::{flags_are_dataless, scan_home_on};
 use super::last_used::{parse_mdls_date, LastUsed, NoLastUsed};
 use super::*;
 
@@ -64,6 +64,23 @@ impl Home {
             claimed,
         };
         scan_home(&walk, None, None)
+    }
+
+    fn scan_on(&self, device: u64) -> HomeScan {
+        let claimed = HashSet::new();
+        let walk = HomeWalk {
+            home: &self.root,
+            limits: Limits {
+                copy_min_bytes: MB as u64,
+                only_copy_min_bytes: MB as u64,
+                other_min_bytes: MB as u64,
+                other_min_age_days: 90,
+            },
+            last_used: &NoLastUsed,
+            now: self.now,
+            claimed: &claimed,
+        };
+        scan_home_on(&walk, device, None, None)
     }
 
     fn scan(&self) -> HomeScan {
@@ -303,11 +320,7 @@ fn an_icloud_placeholder_is_never_listed() {
 }
 
 #[test]
-fn a_hard_link_counts_once_and_a_file_that_frees_nothing_is_not_offered() {
-    let home = Home::new();
-    let first = home.file("Documents/a.zip", 2, 400);
-    fs::hard_link(&first, home.root.join("Documents/b.zip")).unwrap();
-    assert_eq!(home.scan().files.len(), 1);
+fn a_file_that_frees_nothing_is_not_offered() {
     // A full APFS clone frees 0 bytes (the volume answers on macOS only).
     #[cfg(target_os = "macos")]
     {
@@ -329,6 +342,45 @@ fn a_hard_link_counts_once_and_a_file_that_frees_nothing_is_not_offered() {
             assert!(home.scan().files.is_empty());
         }
     }
+}
+
+#[test]
+fn a_hard_linked_file_frees_nothing_while_a_link_stays_and_is_listed_once_for_group_5() {
+    let home = Home::new();
+    let first = home.file("Documents/a.zip", 2, 400);
+    fs::hard_link(&first, home.root.join("Documents/b.zip")).unwrap();
+    let scan = home.scan();
+    assert!(scan.files.is_empty(), "{:?}", home.names(&scan));
+    assert_eq!(scan.frees_nothing.len(), 1);
+    // The other link outside the home changes nothing.
+    let alone = Home::new();
+    let one = alone.file("Documents/c.zip", 2, 400);
+    let outside = alone._dir.path().join("elsewhere.zip");
+    fs::hard_link(&one, &outside).unwrap();
+    let scan = alone.scan();
+    assert!(scan.files.is_empty());
+    assert_eq!(scan.frees_nothing.len(), 1);
+}
+
+#[test]
+fn a_folder_on_another_volume_is_not_entered() {
+    use std::os::unix::fs::MetadataExt;
+    let home = Home::new();
+    home.file("Documents/big.zip", 2, 400);
+    let device = fs::metadata(&home.root).unwrap().dev();
+    assert_eq!(home.names(&home.scan_on(device)), ["big"]);
+    // Every subfolder now reads as a mount of some other volume.
+    assert!(home.scan_on(device + 1).files.is_empty());
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_package_macos_knows_is_never_entered_even_off_the_list() {
+    let home = Home::new();
+    // `.rtfd` is a package type the system declares; it is not in the list.
+    home.file("Documents/Letter.rtfd/video.zip", 2, 400);
+    home.file("Documents/plain/big.zip", 2, 400);
+    assert_eq!(home.names(&home.scan()), ["big"]);
 }
 
 #[test]

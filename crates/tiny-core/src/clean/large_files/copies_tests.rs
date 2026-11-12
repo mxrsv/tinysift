@@ -365,3 +365,52 @@ fn clone_file(from: &Path, to: &Path) -> bool {
 fn clone_file(_: &Path, _: &Path) -> bool {
     false
 }
+
+/// Sets the declared size of the first element that starts with `id`.
+fn declare_size(bytes: &mut [u8], id: &[u8], size: u64) {
+    let at = bytes.windows(id.len()).position(|w| w == id).unwrap() + id.len();
+    assert_eq!(bytes[at], 0x01, "an 8-byte size");
+    bytes[at + 1..at + 8].copy_from_slice(&size.to_be_bytes()[1..]);
+}
+
+#[test]
+fn a_damaged_mkv_has_no_facts_and_never_reaches_the_allocator() {
+    let home = Home::new();
+    let clip = || Clip::new(995_333);
+    // Info claims 2^48 bytes (the crate reads children until the file ends).
+    let mut bytes = mkv_bytes(&clip(), true);
+    declare_size(&mut bytes, &[0x15, 0x49, 0xA9, 0x66], 1 << 48);
+    assert!(read_video_facts(&home.put("big-info.mkv", &bytes)).is_none());
+    // A string element inside Tracks (CodecID, 0x86 in place of TrackType)
+    // claims 2^48: unguarded, the crate allocates a leaf's declared size and
+    // the failed allocation aborts the process.
+    let mut bytes = mkv_bytes(&clip(), true);
+    let at = bytes
+        .windows(9)
+        .position(|w| w == [0x83, 0x01, 0, 0, 0, 0, 0, 0, 0x08])
+        .unwrap();
+    bytes[at] = 0x86;
+    bytes[at + 2..at + 9].copy_from_slice(&(1u64 << 48).to_be_bytes()[1..]);
+    assert!(read_video_facts(&home.put("big-leaf.mkv", &bytes)).is_none());
+    // Cut off inside the header part.
+    let bytes = mkv_bytes(&clip(), true);
+    assert!(read_video_facts(&home.put("cut.mkv", &bytes[..80])).is_none());
+    // And the intact file still reads.
+    assert!(read_video_facts(&home.mkv("fine.mkv", clip())).is_some());
+}
+
+#[test]
+fn an_mp4_with_a_box_larger_than_the_file_has_no_facts() {
+    let home = Home::new();
+    let mut bytes = mp4_bytes(&Clip::new(1_195_300));
+    // `moov`'s 32-bit size becomes enormous (the crate checks it against the file).
+    let at = bytes.windows(4).position(|w| w == b"moov").unwrap() - 4;
+    bytes[at..at + 4].copy_from_slice(&u32::MAX.to_be_bytes());
+    assert!(read_video_facts(&home.put("big-box.mp4", &bytes)).is_none());
+    // A 64-bit size too.
+    let mut bytes = mp4_bytes(&Clip::new(1_195_300));
+    let at = bytes.windows(4).position(|w| w == b"moov").unwrap() - 4;
+    bytes.splice(at..at + 4, [0, 0, 0, 1]);
+    bytes.splice(at + 8..at + 8, (1u64 << 48).to_be_bytes());
+    assert!(read_video_facts(&home.put("big-box64.mp4", &bytes)).is_none());
+}
