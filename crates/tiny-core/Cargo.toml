@@ -13,6 +13,8 @@ sysinfo = { version = "0.32", default-features = false, features = ["component",
 libc = "0.2"
 thiserror = "2"
 rayon = "1.11"
+matroska = "0.30"
+mp4 = "0.14"
 
 # Clean's moves to the Trash: NSFileManager's trashItemAtURL, so no Finder
 # Automation permission is needed.
@@ -21,4 +23,5 @@ objc2 = { version = "0.6", default-features = false, features = ["std"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSDictionary", "NSError", "NSFileManager", "NSString", "NSURL"] }
 
 [dev-dependencies]
+bytes = "1"
 tempfile = "3"

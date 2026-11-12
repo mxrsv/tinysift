@@ -162,6 +162,7 @@ fn installer(
         matched_app: Some(app.path.clone()),
         fingerprint: PathFingerprint::of(&meta),
         elsewhere: None,
+        copy: None,
     })
 }
 

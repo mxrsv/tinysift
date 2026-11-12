@@ -54,6 +54,7 @@ impl Home {
         let walk = HomeWalk {
             home: &self.root,
             limits: Limits {
+                copy_min_bytes: MB as u64,
                 only_copy_min_bytes: MB as u64,
                 other_min_bytes: MB as u64,
                 other_min_age_days: 90,
@@ -355,6 +356,7 @@ fn a_cancelled_walk_stops_and_a_finished_one_reports_done() {
     let walk = HomeWalk {
         home: &home.root,
         limits: Limits {
+            copy_min_bytes: MB as u64,
             only_copy_min_bytes: MB as u64,
             other_min_bytes: MB as u64,
             other_min_age_days: 90,

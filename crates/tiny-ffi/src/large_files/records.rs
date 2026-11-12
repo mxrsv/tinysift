@@ -56,6 +56,26 @@ pub struct FfiLargeFile {
     /// Group 5: the newest change in the item, in seconds since 1970.
     #[uniffi(default = None)]
     pub last_changed: Option<i64>,
+    /// Group 1 (CP1): the file that stays when this copy goes.
+    #[uniffi(default = None)]
+    pub keeper_path: Option<String>,
+    #[uniffi(default = None)]
+    pub keeper_bytes: Option<u64>,
+    /// Why that file stays: "mp4", "mov" or "larger".
+    #[uniffi(default = None)]
+    pub keep_rule: Option<String>,
+    /// Group 1: this file's length in milliseconds, its picture size and its
+    /// audio-track count; the file that stays has the same size and count.
+    #[uniffi(default = None)]
+    pub duration_ms: Option<u64>,
+    #[uniffi(default = None)]
+    pub keeper_duration_ms: Option<u64>,
+    #[uniffi(default = None)]
+    pub width: Option<u32>,
+    #[uniffi(default = None)]
+    pub height: Option<u32>,
+    #[uniffi(default = None)]
+    pub audio_tracks: Option<u32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -155,6 +175,7 @@ fn unix_seconds(time: SystemTime) -> i64 {
 
 pub(super) fn file_record(id: &str, file: &LargeFile) -> FfiLargeFile {
     let facts = file.elsewhere.as_ref();
+    let copy = file.copy.as_ref();
     FfiLargeFile {
         id: id.to_string(),
         path: file.path.to_string_lossy().into_owned(),
@@ -177,6 +198,14 @@ pub(super) fn file_record(id: &str, file: &LargeFile) -> FfiLargeFile {
         shared_bytes: facts.and_then(|e| e.shared_bytes),
         shared_with: facts.and_then(|e| e.shared_with.clone()),
         last_changed: facts.and_then(|e| e.last_changed).map(unix_seconds),
+        keeper_path: copy.map(|c| c.keeper.to_string_lossy().into_owned()),
+        keeper_bytes: copy.map(|c| c.keeper_bytes),
+        keep_rule: copy.map(|c| c.keep_rule.id().to_string()),
+        duration_ms: copy.map(|c| c.facts.duration_ms),
+        keeper_duration_ms: copy.map(|c| c.keeper_duration_ms),
+        width: copy.map(|c| c.facts.width),
+        height: copy.map(|c| c.facts.height),
+        audio_tracks: copy.map(|c| c.facts.audio_tracks),
     }
 }
 

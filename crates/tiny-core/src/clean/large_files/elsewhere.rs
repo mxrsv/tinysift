@@ -145,6 +145,7 @@ pub fn scan_elsewhere(
                 shared_with: None,
                 last_changed: newest_change(&item.path),
             }),
+            copy: None,
         });
     }
     if !frees_nothing.is_empty() && !cancelled() {
@@ -225,6 +226,7 @@ fn frees_nothing_row(
             shared_with: partner.map(|item| item.phrase.clone()),
             last_changed: file.modified,
         }),
+        copy: None,
     }
 }
 

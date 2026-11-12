@@ -132,6 +132,7 @@ impl World {
                 &HomeWalk {
                     home: &self.home,
                     limits: Limits {
+                        copy_min_bytes: MB as u64,
                         only_copy_min_bytes: MB as u64,
                         other_min_bytes: MB as u64,
                         other_min_age_days: 90,

@@ -568,6 +568,7 @@ mod home_walk {
 
     fn scan(world: &World) -> FfiLargeFilesScan {
         let limits = Limits {
+            copy_min_bytes: MB as u64,
             only_copy_min_bytes: MB as u64,
             other_min_bytes: MB as u64,
             other_min_age_days: 90,
@@ -682,5 +683,80 @@ mod home_walk {
             .preview_large_files(std::slice::from_ref(&other.id))
             .is_ok());
         assert!(vm.exists());
+    }
+
+    fn el(id: &[u8], body: &[u8]) -> Vec<u8> {
+        let mut out = id.to_vec();
+        out.push(0x01);
+        out.extend_from_slice(&(body.len() as u64).to_be_bytes()[1..]);
+        out.extend_from_slice(body);
+        out
+    }
+
+    /// A readable MKV (1920x1080, 60 s, no audio) padded to `megabytes`.
+    fn mkv(world: &World, relative: &str, megabytes: usize) -> PathBuf {
+        let mut info = el(&[0x2A, 0xD7, 0xB1], &1_000_000u64.to_be_bytes());
+        info.extend(el(&[0x44, 0x89], &60_000f64.to_be_bytes()));
+        let mut entry = el(&[0xD7], &1u64.to_be_bytes());
+        entry.extend(el(&[0x73, 0xC5], &1u64.to_be_bytes()));
+        entry.extend(el(&[0x83], &1u64.to_be_bytes()));
+        let mut picture = el(&[0xB0], &1920u64.to_be_bytes());
+        picture.extend(el(&[0xBA], &1080u64.to_be_bytes()));
+        entry.extend(el(&[0xE0], &picture));
+        let mut segment = el(&[0x15, 0x49, 0xA9, 0x66], &info);
+        segment.extend(el(&[0x16, 0x54, 0xAE, 0x6B], &el(&[0xAE], &entry)));
+        segment.extend(el(&[0xEC], &vec![0u8; megabytes * MB]));
+        let mut file = el(&[0x1A, 0x45, 0xDF, 0xA3], &el(&[0x42, 0x82], b"matroska"));
+        file.extend(el(&[0x18, 0x53, 0x80, 0x67], &segment));
+        let path = world.home.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, file).unwrap();
+        path
+    }
+
+    #[test]
+    fn a_copy_row_carries_its_facts_and_never_moves_with_the_file_that_stays() {
+        let world = World::new();
+        let stays = mkv(&world, "Videos/Raw/talk.mkv", 3);
+        let copy = mkv(&world, "Videos/Backup/talk.mkv", 2);
+        let scan = scan(&world);
+        let row = scan.files.iter().find(|f| f.group == "copies").unwrap();
+        assert_eq!(row.path, copy.to_string_lossy());
+        assert_eq!(row.keeper_path.as_deref(), stays.to_str());
+        assert_eq!(row.keep_rule.as_deref(), Some("larger"));
+        assert_eq!(
+            (row.duration_ms, row.keeper_duration_ms),
+            (Some(60_000), Some(60_000))
+        );
+        assert_eq!(
+            (row.width, row.height, row.audio_tracks),
+            (Some(1920), Some(1080), Some(0))
+        );
+        let keeper = scan
+            .files
+            .iter()
+            .find(|f| f.path == stays.to_string_lossy())
+            .unwrap();
+        assert_eq!(keeper.group, "only_copy");
+        // Both in one move would lose the recording: refused, nothing spent.
+        assert!(matches!(
+            world
+                .session
+                .preview_large_files(&[row.id.clone(), keeper.id.clone()]),
+            Err(FfiError::InvalidInput { .. })
+        ));
+        let preview = world
+            .session
+            .preview_large_files(std::slice::from_ref(&row.id))
+            .unwrap();
+        // The file that stays disappears before the move: the copy is kept.
+        fs::remove_file(&stays).unwrap();
+        let report = world.run(&preview.preview_id, &world.trash()).unwrap();
+        assert_eq!(
+            (report.moved_count, report.skipped_count),
+            (0, 1),
+            "{report:?}"
+        );
+        assert!(copy.exists());
     }
 }

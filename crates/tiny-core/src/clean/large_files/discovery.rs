@@ -24,6 +24,7 @@ use crate::clean::fs_safe::PathFingerprint;
 use crate::clean::private_size::private_allocated_bytes;
 use crate::progress::{report, ProgressCallback};
 
+use super::copies::{find_pairs, CopyOf, VideoEntry, COPY_MIN_BYTES};
 use super::last_used::LastUsed;
 use super::{FreesNothing, Group, LargeFile};
 
@@ -88,6 +89,7 @@ const HOME_LIBRARY_FOLDERS: &[&str] = &["Library", "Music/Music", "Movies/TV"];
 /// The numbers a scan judges by, injectable so tests need no 500 MB files.
 #[derive(Debug, Clone, Copy)]
 pub struct Limits {
+    pub copy_min_bytes: u64,
     pub only_copy_min_bytes: u64,
     pub other_min_bytes: u64,
     pub other_min_age_days: u64,
@@ -96,6 +98,7 @@ pub struct Limits {
 impl Default for Limits {
     fn default() -> Self {
         Self {
+            copy_min_bytes: COPY_MIN_BYTES,
             only_copy_min_bytes: ONLY_COPY_MIN_BYTES,
             other_min_bytes: OTHER_MIN_BYTES,
             other_min_age_days: OTHER_MIN_AGE_DAYS,
@@ -141,6 +144,8 @@ pub fn scan_home(
         .limits
         .only_copy_min_bytes
         .min(walk.limits.other_min_bytes);
+    // Videos big enough to be half of a Copies pair (CP1).
+    let mut videos: Vec<VideoEntry> = Vec::new();
     while let Some(dir) = pending.pop() {
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries.flatten().collect::<Vec<_>>(),
@@ -176,7 +181,17 @@ pub fn scan_home(
                 if !skips_folder(&path, &name, walk.home) && !is_dataless(&meta) {
                     pending.push(path);
                 }
-            } else if meta.is_file() && allocated(&meta) >= min_bytes && !is_dataless(&meta) {
+            } else if meta.is_file() && !is_dataless(&meta) {
+                if allocated(&meta) >= walk.limits.copy_min_bytes && is_video(&path) {
+                    videos.push(VideoEntry {
+                        path: path.clone(),
+                        bytes: meta.len(),
+                        fingerprint: PathFingerprint::of(&meta),
+                    });
+                }
+                if allocated(&meta) < min_bytes {
+                    continue;
+                }
                 let found = candidate(
                     &path,
                     &meta,
@@ -188,10 +203,60 @@ pub fn scan_home(
             }
         }
     }
+    add_copies(&mut scan, &videos, walk.limits.copy_min_bytes);
     scan.files
         .sort_by(|a, b| b.frees.bytes.cmp(&a.frees.bytes).then(a.path.cmp(&b.path)));
     report(progress, "scan", scan.visited, None, "Done");
     scan
+}
+
+/// Group 1 (CP1): a pair's row leaves groups 3 and 4, which it would
+/// otherwise sit in; the file that stays is left wherever it was. A row
+/// that frees less than `min_bytes` privately (or nothing: FN1 explains it)
+/// is not offered.
+fn add_copies(scan: &mut HomeScan, videos: &[VideoEntry], min_bytes: u64) {
+    for pair in find_pairs(videos) {
+        let Ok(frees) = private_allocated_bytes(&pair.row.path) else {
+            continue;
+        };
+        if frees.bytes < min_bytes {
+            continue;
+        }
+        let Some(stem) = pair.row.path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let keeper_name = pair
+            .keeper
+            .path
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        scan.files.retain(|f| f.path != pair.row.path);
+        scan.files.push(LargeFile {
+            path: pair.row.path.clone(),
+            name: stem.to_string(),
+            group: Group::Copies,
+            // Words only: the app builds the sentence with the numbers (LR1).
+            reason: format!("Same length and resolution as {keeper_name}"),
+            frees,
+            matched_app: None,
+            fingerprint: pair.row.fingerprint,
+            elsewhere: None,
+            copy: Some(CopyOf {
+                keeper: pair.keeper.path,
+                keeper_bytes: pair.keeper.bytes,
+                keeper_fingerprint: pair.keeper.fingerprint,
+                keep_rule: pair.keep_rule,
+                facts: pair.facts,
+                keeper_duration_ms: pair.keeper_duration_ms,
+            }),
+        });
+    }
+}
+
+fn is_video(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e.to_lowercase().as_str()))
 }
 
 fn allocated(meta: &Metadata) -> u64 {
@@ -291,6 +356,7 @@ fn candidate(
         matched_app: None,
         fingerprint: PathFingerprint::of(meta),
         elsewhere: None,
+        copy: None,
     })
 }
 

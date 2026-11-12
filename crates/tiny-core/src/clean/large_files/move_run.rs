@@ -32,6 +32,10 @@ use crate::progress::ProgressCallback;
 pub struct PlannedMove {
     pub path: PathBuf,
     pub fingerprint: PathFingerprint,
+    /// A file that must still be there, unchanged, when this one moves: the
+    /// original of a Copies row (CP1). Without it the move is skipped, so a
+    /// copy never goes while its original is gone.
+    pub must_remain: Option<(PathBuf, PathFingerprint)>,
 }
 
 /// Everything a run needs besides the plan.
@@ -231,6 +235,12 @@ fn check(planned: &PlannedMove, ctx: &MoveContext<'_>) -> Result<(), SkipReason>
     }
     if PathFingerprint::of(&meta) != planned.fingerprint {
         return Err(SkipReason::Changed);
+    }
+    if let Some((keeper, fingerprint)) = &planned.must_remain {
+        match fs::symlink_metadata(keeper) {
+            Ok(m) if m.is_file() && PathFingerprint::of(&m) == *fingerprint => {}
+            _ => return Err(SkipReason::Changed),
+        }
     }
     if meta.dev() != home_device(Some(ctx.home))? {
         return Err(SkipReason::NotOnHomeVolume);

@@ -358,6 +358,7 @@ impl Run {
             .map(|path| PlannedMove {
                 path: (*path).clone(),
                 fingerprint: crate::clean::fs_safe::fingerprint(path).unwrap(),
+                must_remain: None,
             })
             .collect()
     }
@@ -405,6 +406,32 @@ fn picked_files_move_with_their_trash_location_and_measured_bytes() {
         report.bytes_moved(),
         first.bytes_moved + report.results[1].bytes_moved
     );
+}
+
+#[test]
+fn a_copy_stays_put_when_the_file_that_stays_is_gone_or_changed() {
+    let run = Run::new();
+    let copy = run.fixture.download("Copy.dmg", 2);
+    let keeper = run.fixture.download("Keeper.dmg", 2);
+    let mut plan = run.plan(&[&copy]);
+    plan[0].must_remain = Some((
+        keeper.clone(),
+        crate::clean::fs_safe::fingerprint(&keeper).unwrap(),
+    ));
+    let trash = FakeTrash::new(&run.fixture);
+    fs::write(&keeper, vec![1u8; MB]).unwrap();
+    let report = run.run(&plan, &trash, None);
+    assert_eq!(
+        report.results[0].outcome,
+        MoveOutcome::Skipped(SkipReason::Changed)
+    );
+    assert!(copy.exists());
+    fs::remove_file(&keeper).unwrap();
+    assert_eq!(
+        run.run(&plan, &trash, None).results[0].outcome,
+        MoveOutcome::Skipped(SkipReason::Changed)
+    );
+    assert!(copy.exists() && trash.moved.lock().unwrap().is_empty());
 }
 
 #[test]

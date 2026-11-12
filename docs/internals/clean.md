@@ -462,7 +462,7 @@ every move goes through `Trash` (the app passes `NativeTrash`). Nothing here del
 
 | Call | Gate | What it does |
 | --- | --- | --- |
-| `large_files_scan(token, progress)` | takes it | Read-only. Replaces the earlier scan and any preview. Returns `FfiLargeFile` records (`id`, `path`, `name`, `group`, `reason`, `frees_bytes`, `frees_is_exact`, `matched_app_path`, and for group 5 `kind`, `app_name`, `app_bundle_id`, `app_running`, `preview_path`, `shared_bytes`, `last_changed`) and `unreadable_folders`. |
+| `large_files_scan(token, progress)` | takes it | Read-only. Replaces the earlier scan and any preview. Returns `FfiLargeFile` records (`id`, `path`, `name`, `group`, `reason`, `frees_bytes`, `frees_is_exact`, `matched_app_path`, and for group 5 `kind`, `app_name`, `app_bundle_id`, `app_running`, `preview_path`, `shared_bytes`, `last_changed`, and for group 1 `keeper_path`, `keeper_bytes`, `keep_rule`, `duration_ms`, `keeper_duration_ms`, `width`, `height`, `audio_tracks`) and `unreadable_folders`. |
 | `large_files_preview(file_ids)` | none | Builds the one preview from IDs of the current scan. Unknown IDs and an empty list are refused; a file a saved "always keep" rule holds is returned in `held_ids` and left out. Unreadable rules fail it (`ProtectionUnavailable`). Replaces any earlier preview. |
 | `large_files_move(preview_id, token, progress)` | takes it | Spends the preview, then moves. Returns one result per item (`FfiItemOutcome`, `FfiFailureCause`, `bytes_moved`, `trashed_path`) and a `move_id`. |
 | `large_files_undo(move_id)` | takes it | Puts the move's files back. One outcome per file. |
@@ -524,6 +524,24 @@ Smart Clean's build-output folder names (`node_modules target build DerivedData 
 (the home itself is exempt, so a dotfiles repo does not hide everything), and an iCloud placeholder (`SF_DATALESS`).
 The walk is added to the move's scanned roots, so a group 3 or 4 file moves and undoes through the same checks.
 Tests inject the limits, "now", the Spotlight table and the claimed set (`Limits`, `HomeWalk`, `LastUsed`).
+
+**Scan, step 2b: Copies, the original stays**
+([`copies.rs`](../../crates/tiny-core/src/clean/large_files/copies.rs),
+[`video_facts.rs`](../../crates/tiny-core/src/clean/large_files/video_facts.rs)). `Group::Copies` ("copies") is
+decided inside `scan_home`, after the walk: the walk keeps every video (`mp4 mov mkv m4v avi webm`) whose allocated
+blocks reach `Limits::copy_min_bytes` (100 MB), and `find_pairs` groups them by stem and parent's parent folder (one
+folder, or sibling folders such as `Raw/x.mp4` and `Backup_MKV/x.mkv`). Headers are read only for a group of two or more:
+`matroska` for `.mkv`, `mp4` for `.mp4 .mov .m4v`, header only, never decoding. The facts are length, picture size of the
+first video track and audio-track count; a file the parser cannot read, that panics (caught) or that lacks one fact
+(an MKV without a Duration, an MP4 without `moov`) is never in a pair. A pair needs lengths under 500 ms apart and equal
+size and track count. The file that stays: `.mp4`, else `.mov`, else the larger file (two of one kind: the larger, then
+the path); `KeepRule` names which. The other file is the row (`copy: Some(CopyOf)`): it leaves groups 3 and 4, needs
+100 MB of private bytes (a clone that frees nothing stays in group 5), and `reason` is words only
+(`Same length and resolution as <file name>`); the app builds its sentence from the `FfiLargeFile` fields
+`keeper_path`, `keeper_bytes`, `keep_rule`, `duration_ms`, `keeper_duration_ms`, `width`, `height`, `audio_tracks`. The
+file that stays remains in whatever group it was in. Both halves need 100 MB, so a small proxy is not an original. Safety:
+`PlannedMove::must_remain` makes the move skip (`Changed`) when the file that stays is gone or changed since the scan, and
+`large_files_preview` refuses a request that holds a copy together with its keeper (`InvalidInput`).
 
 **Scan, step 3: Remove these elsewhere**
 ([`elsewhere.rs`](../../crates/tiny-core/src/clean/large_files/elsewhere.rs)). `Group::Elsewhere` ("elsewhere") is

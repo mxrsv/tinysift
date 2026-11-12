@@ -355,6 +355,17 @@ impl TinySession {
                     detail: "that item is managed elsewhere and cannot be moved from here".into(),
                 });
             }
+            // The file that stays must not go in the same move (CP1).
+            if file_ids.iter().any(|other| {
+                scan.files
+                    .get(other)
+                    .and_then(|f| f.copy.as_ref())
+                    .is_some_and(|c| c.keeper == file.path)
+            }) {
+                return Err(FfiError::InvalidInput {
+                    detail: "that file is the one that stays for a copy picked with it".into(),
+                });
+            }
             if !policy.evaluate(&matcher, &file.path).allows_move() {
                 held.push(id.clone());
                 continue;
@@ -365,6 +376,10 @@ impl TinySession {
                 PlannedMove {
                     path: file.path.clone(),
                     fingerprint: file.fingerprint.clone(),
+                    must_remain: file
+                        .copy
+                        .as_ref()
+                        .map(|c| (c.keeper.clone(), c.keeper_fingerprint.clone())),
                 },
             ));
         }
