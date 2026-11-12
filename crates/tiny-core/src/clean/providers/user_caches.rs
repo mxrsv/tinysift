@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use super::never_cache::holds_user_data;
 use super::purged_caches::{real_pip, PIP_FOLDER};
 use super::{execute_per_item, run_tool, CleanProvider};
 use crate::clean::fs_safe::{dir_size_checked, is_dir_safe, list_children};
@@ -202,7 +203,7 @@ impl UserCaches {
         }
     }
 
-    fn list_caches(&self, ctx: &ScanContext<'_>, root: &Path) -> Result<Vec<CleanItem>> {
+    pub(super) fn list_caches(&self, ctx: &ScanContext<'_>, root: &Path) -> Result<Vec<CleanItem>> {
         // pip's folder is `pip-cache`'s when a real pip3 can empty it, so
         // one path never belongs to a tool and to a plain move at once.
         let pip_owned = real_pip(self.runner.as_ref()).is_some();
@@ -211,7 +212,10 @@ impl UserCaches {
             .into_iter()
             .filter_map(|path| {
                 let name = path.file_name()?.to_str()?.to_string();
-                let offered = !is_apple_cache(&name) && !owned(&name) && !holds_ide_history(&path);
+                let offered = !is_apple_cache(&name)
+                    && !owned(&name)
+                    && !holds_ide_history(&path)
+                    && holds_user_data(&path).is_none();
                 offered.then_some((path, name))
             })
             .collect();

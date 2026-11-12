@@ -20,6 +20,7 @@ mod elevated;
 mod measured;
 mod protection;
 mod races;
+mod recheck;
 mod removal;
 mod tools;
 

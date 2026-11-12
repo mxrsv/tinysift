@@ -312,6 +312,18 @@ for an answer ([`runner.rs`](../../crates/tiny-core/src/runner.rs)).
 directory's mtime (`PathFingerprint::of_listing`), so a Trash that changed since discovery is
 skipped instead of emptying files the user never saw.
 
+**User data in cache-looking places (SF1).** `user-caches`, `npm` and `yarn` skip the entries of
+[`never_cache.rs`](../../crates/tiny-core/src/clean/providers/never_cache.rs) (Spotify, Cypress,
+Playwright, Camoufox, Buzz, llama.cpp, Kitty, Poetry virtualenvs, renv, pnpm `dlx`, `npx`, Yarn Berry), and a folder that holds
+one is not offered whole (`npm` offers its other children). A category that names a place on purpose
+(`puppeteer`, `huggingface`) is not a broad sweep and does not use the list.
+
+**Re-check before a move (SF2).** `validate` skips an item whose owning app runs (`AppRunning`, cause
+`InUse`) and one whose fingerprint differs (`Changed`, cause `ChangedSinceScan`): a file's size or
+mtime, a folder's identity. A folder's contents are not compared, since caches churn between scan and
+confirmation (only the Trash row also compares its listing), and no check asks whether a process holds
+a file open.
+
 **Placeholders.** A simulator runtime has no path: its item is `<simulator-runtime:UUID>` with
 `Evidence::SimulatorRuntime`. Homebrew's cleanup (`<homebrew:cleanup>`) and Docker's kinds
 (`<docker:images>`, `<docker:build-cache>`) are placeholders too, removed by `RunTool(Remove)`. Because every file-system check would resolve that relative name

@@ -2,6 +2,7 @@ use crate::error::Result;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use super::never_cache::root_sparing_user_data;
 use super::tool_command::run_tool_command;
 use super::{
     execute_per_item, execute_tool_command, root_as_item, run_tool, CleanProvider, DesktopTool,
@@ -193,7 +194,7 @@ impl CleanProvider for NpmCache {
             Some(p) => p,
             None => return Ok(Vec::new()),
         };
-        Ok(root_as_item(
+        Ok(root_sparing_user_data(
             ctx,
             &path,
             NPM_ID,
@@ -341,7 +342,7 @@ impl CleanProvider for YarnCache {
             Some(p) => p,
             None => return Ok(Vec::new()),
         };
-        Ok(root_as_item(
+        Ok(root_sparing_user_data(
             ctx,
             &path,
             YARN_ID,
