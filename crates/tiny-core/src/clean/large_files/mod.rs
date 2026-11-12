@@ -1,13 +1,15 @@
 //! Large Files: the user's own big files, found read-only and moved to the
 //! Trash only when picked (docs/internals/clean.md, "Large Files").
 //!
-//! This step has one group, Installers. Moves reuse Clean's pieces (path
+//! Groups so far: Installers, Only copy on this Mac and Other large files. Moves reuse Clean's pieces (path
 //! fingerprint, saved "always keep" rules, home volume, protected paths,
 //! the native Trash route, failure causes) in [`move_run`]; nothing here
 //! deletes for good, and [`undo`] only puts a trashed item back.
 
 pub mod app_version;
+mod discovery;
 mod installers;
+pub mod last_used;
 pub mod move_run;
 mod name_match;
 pub mod undo;
@@ -17,15 +19,21 @@ use std::path::PathBuf;
 use super::fs_safe::PathFingerprint;
 use super::private_size::PrivateSize;
 
+pub use discovery::{
+    scan_home, HomeScan, HomeWalk, Limits, ONLY_COPY_MIN_BYTES, OTHER_MIN_AGE_DAYS,
+    OTHER_MIN_BYTES, VIDEO_EXTENSIONS,
+};
 pub use installers::{
     scan_installers, scan_installers_above, InstallerRoots, InstallerScan, INSTALLER_EXTENSIONS,
     INSTALLER_MIN_BYTES,
 };
 
-/// How sure a removal is (GR1). Only Installers exists so far.
+/// How sure a removal is (GR1), in the order the groups are drawn.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Group {
     Installers,
+    OnlyCopy,
+    OtherLarge,
 }
 
 impl Group {
@@ -33,6 +41,8 @@ impl Group {
     pub fn id(self) -> &'static str {
         match self {
             Self::Installers => "installers",
+            Self::OnlyCopy => "only_copy",
+            Self::OtherLarge => "other_large",
         }
     }
 }
@@ -56,3 +66,6 @@ pub struct LargeFile {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod discovery_tests;

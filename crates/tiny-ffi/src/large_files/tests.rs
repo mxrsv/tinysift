@@ -132,6 +132,7 @@ impl World {
                 &self.roots(),
                 MB as u64,
                 &NoVersions,
+                None,
                 &CancellationToken::default(),
                 &Listener::default(),
             )
@@ -208,6 +209,7 @@ fn a_scan_holds_the_gate_and_a_busy_session_refuses_it() {
         &world.roots(),
         MB as u64,
         &NoVersions,
+        None,
         &CancellationToken::default(),
         &Listener::default(),
     );
@@ -225,6 +227,7 @@ fn a_cancelled_scan_changes_nothing() {
         &world.roots(),
         MB as u64,
         &NoVersions,
+        None,
         &token,
         &Listener::default(),
     );
@@ -536,4 +539,88 @@ fn a_later_move_replaces_what_undo_takes() {
             .restored_count,
         1
     );
+}
+
+// ---------- groups 3 and 4: the home walk ----------
+
+mod home_walk {
+    use super::*;
+    use tiny_core::clean::large_files::last_used::NoLastUsed;
+
+    fn old_file(world: &World, relative: &str, days: u64) -> PathBuf {
+        let path = world.home.join(relative);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, vec![7u8; 2 * MB]).unwrap();
+        let file = fs::File::options().write(true).open(&path).unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(86_400 * days))
+            .unwrap();
+        path
+    }
+
+    fn scan(world: &World) -> FfiLargeFilesScan {
+        let limits = Limits {
+            only_copy_min_bytes: MB as u64,
+            other_min_bytes: MB as u64,
+            other_min_age_days: 90,
+        };
+        world
+            .session
+            .scan_large_files(
+                &world.roots(),
+                MB as u64,
+                &NoVersions,
+                Some(HomeSettings {
+                    home: &world.home,
+                    limits,
+                    last_used: &NoLastUsed,
+                }),
+                &CancellationToken::default(),
+                &Listener::default(),
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn a_scan_returns_the_three_groups_and_an_installer_is_listed_once() {
+        let world = World::new();
+        let cap = world.installer("Cap", "Cap-1.4.2.dmg");
+        let orphan = old_file(&world, "Downloads/Gone-2.0.dmg", 120);
+        let video = old_file(&world, "Documents/stream.mp4", 3);
+        let archive = old_file(&world, "Documents/backup.zip", 200);
+        let scan = scan(&world);
+        let group_of = |path: &Path| {
+            let hits: Vec<_> = scan
+                .files
+                .iter()
+                .filter(|f| f.path == path.to_string_lossy())
+                .collect();
+            assert_eq!(hits.len(), 1, "{path:?} listed {} times", hits.len());
+            hits[0].group.clone()
+        };
+        assert_eq!(group_of(&cap), "installers");
+        assert_eq!(group_of(&orphan), "other_large");
+        assert_eq!(group_of(&video), "only_copy");
+        assert_eq!(group_of(&archive), "other_large");
+        let video = scan.files.iter().find(|f| f.group == "only_copy").unwrap();
+        assert_eq!(video.reason, "Video · changed 3 days ago");
+        assert!(video.matched_app_path.is_none());
+    }
+
+    #[test]
+    fn a_group_4_file_moves_and_comes_back_through_the_same_consent_path() {
+        let world = World::new();
+        let archive = old_file(&world, "Documents/deep/backup.zip", 200);
+        let scan = scan(&world);
+        assert_eq!(scan.files.len(), 1);
+        let preview = world.session.preview_large_files(&ids(&scan)).unwrap();
+        let report = world.run(&preview.preview_id, &world.trash()).unwrap();
+        assert_eq!(report.moved_count, 1, "{report:?}");
+        assert!(!archive.exists());
+        let undo = world
+            .session
+            .large_files_undo(report.move_id.unwrap())
+            .unwrap();
+        assert_eq!(undo.restored_count, 1);
+        assert!(archive.exists());
+    }
 }

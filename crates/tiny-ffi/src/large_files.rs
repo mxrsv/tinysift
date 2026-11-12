@@ -20,12 +20,14 @@ use tiny_core::clean::failure_cause::Failure;
 use tiny_core::clean::finder_trash::Trash;
 use tiny_core::clean::fs_safe::PathFingerprint;
 use tiny_core::clean::large_files::app_version::{AppVersions, PlutilVersions};
+use tiny_core::clean::large_files::last_used::{LastUsed, SpotlightLastUsed};
 use tiny_core::clean::large_files::move_run::{
     move_to_trash, MoveContext, MoveOutcome, MoveReport, PlannedMove,
 };
 use tiny_core::clean::large_files::undo::{undo_moves, UndoItem, UndoOutcome};
 use tiny_core::clean::large_files::{
-    scan_installers_above, InstallerRoots, LargeFile, INSTALLER_MIN_BYTES,
+    scan_home, scan_installers_above, HomeWalk, InstallerRoots, LargeFile, Limits,
+    INSTALLER_MIN_BYTES,
 };
 use tiny_core::clean::native_trash::NativeTrash;
 use tiny_core::clean::protection::{Matcher, PolicySnapshot};
@@ -97,8 +99,10 @@ struct MovedFile {
 
 #[uniffi::export]
 impl TinySession {
-    /// Scans for Large Files (so far: installers in Downloads and Desktop
-    /// whose app is in Applications). Read-only. Holds the operation gate, so
+    /// Scans for Large Files: installers in Downloads and Desktop whose app is
+    /// in Applications, then one metadata-only walk of the home for "Only copy
+    /// on this Mac" (videos) and "Other large files" (500 MB, 90 days).
+    /// Read-only. Holds the operation gate, so
     /// it returns `Busy` while another scan or mutation runs. Replaces the
     /// previous scan and any preview; a cancelled scan changes nothing.
     pub fn large_files_scan(
@@ -109,10 +113,16 @@ impl TinySession {
         let home = self.clean_home()?;
         let runner = app_runner();
         let versions = PlutilVersions(runner.as_ref());
+        let last_used = SpotlightLastUsed(runner.as_ref());
         self.scan_large_files(
             &InstallerRoots::for_home(&home),
             INSTALLER_MIN_BYTES,
             &versions,
+            Some(HomeSettings {
+                home: &home,
+                limits: Limits::default(),
+                last_used: &last_used,
+            }),
             &token,
             progress.as_ref(),
         )
@@ -214,6 +224,13 @@ impl TinySession {
     }
 }
 
+/// The home walk of a scan (groups 3 and 4), injectable for tests.
+pub(crate) struct HomeSettings<'a> {
+    pub home: &'a std::path::Path,
+    pub limits: Limits,
+    pub last_used: &'a dyn LastUsed,
+}
+
 impl TinySession {
     fn large_files_state(&self) -> MutexGuard<'_, LargeFilesState> {
         self.large_files
@@ -222,20 +239,42 @@ impl TinySession {
     }
 
     /// `large_files_scan` with injected roots, threshold and versions (the
-    /// test seam).
+    /// test seam); `walk` is `None` for a scan of installers only.
     pub(crate) fn scan_large_files(
         &self,
         roots: &InstallerRoots,
         min_bytes: u64,
         versions: &dyn AppVersions,
+        walk: Option<HomeSettings<'_>>,
         token: &CancellationToken,
         progress: &dyn ProgressListener,
     ) -> Result<FfiLargeFilesScan, FfiError> {
         let _gate = self.begin()?;
         progress.on_progress(progress_event("scan", 0, "Looking for installers"));
         token.check()?;
-        let found = scan_installers_above(min_bytes, roots, versions, Some(token.flag()));
+        let mut found = scan_installers_above(min_bytes, roots, versions, Some(token.flag()));
         token.check()?;
+        let mut scanned_roots = roots.folders.clone();
+        if let Some(walk) = walk {
+            let claimed = found.files.iter().map(|f| f.path.clone()).collect();
+            let on_progress = |p: tiny_core::progress::Progress| progress.on_progress(p.into());
+            let home = scan_home(
+                &HomeWalk {
+                    home: walk.home,
+                    limits: walk.limits,
+                    last_used: walk.last_used,
+                    now: SystemTime::now(),
+                    claimed: &claimed,
+                },
+                Some(token.flag()),
+                Some(&on_progress),
+            );
+            token.check()?;
+            found.files.extend(home.files);
+            found.unreadable.extend(home.unreadable);
+            // A move may reach any file the walk listed, still through real folders.
+            scanned_roots.push(walk.home.to_path_buf());
+        }
         let mut state = self.large_files_state();
         let id = state.next_id();
         let mut files = HashMap::new();
@@ -247,7 +286,7 @@ impl TinySession {
         }
         state.scan = Some(StoredScan {
             id,
-            roots: roots.folders.clone(),
+            roots: scanned_roots,
             files,
         });
         state.preview = None;

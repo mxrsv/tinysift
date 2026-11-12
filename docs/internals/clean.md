@@ -506,6 +506,24 @@ architecture and "installer" tokens cut after the first word). The reason is `<A
 0 bytes is not offered. Tests inject the roots, the threshold and the version table (`InstallerRoots`,
 `scan_installers_above`, `AppVersions`), so they never read the real home.
 
+**Scan, step 2: Only copy on this Mac and Other large files**
+([`discovery.rs`](../../crates/tiny-core/src/clean/large_files/discovery.rs)). One read-only walk of the home
+(`scan_home`): folder listings and file metadata only, nothing hashed, cancellable, progress every 2000 entries. A file
+is looked at only when its allocated blocks reach the smaller threshold; then its private bytes must be above 0 and reach
+the group's threshold, and a hard link's twin counts once. A video (`mp4 mov mkv m4v avi webm`) of 500 MB or more is
+`OnlyCopy` ("only_copy"), reason `Video · changed N days ago`; the spec fixes no threshold for this group, so it takes
+group 4's. Any other file of 500 MB or more whose modification date is 90 days old is `OtherLarge` ("other_large"),
+reason `<kind> · not changed for N days`; Spotlight's last-used date (`mdls`, asked only for a file that already passed
+every other test) wins when newer, and then the reason says `not used for N days`. The kind comes from the extension
+(`Disk image`, `Archive`, ... or `<EXT> file`). A file an installer row claimed is left out; an installer with no
+installed app can land in group 4. Never listed (NL1), and never entered: symlinks (nothing outside the home is
+reached), hidden names, `~/Library`, `~/Music/Music`, `~/Movies/TV`, app bundles and package libraries by extension
+(`app photoslibrary musiclibrary tvlibrary fcpbundle imovielibrary ...`), VM bundles (`utm vmwarevm pvm sparsebundle`),
+Smart Clean's build-output folder names (`node_modules target build DerivedData Pods ...`), a folder with a `.git` entry
+(the home itself is exempt, so a dotfiles repo does not hide everything), and an iCloud placeholder (`SF_DATALESS`).
+The walk is added to the move's scanned roots, so a group 3 or 4 file moves and undoes through the same checks.
+Tests inject the limits, "now", the Spotlight table and the claimed set (`Limits`, `HomeWalk`, `LastUsed`).
+
 ## Desktop persistent protection
 
 Always keep is a policy owned by Rust; only the desktop app edits it. A
