@@ -1,6 +1,8 @@
 //! Records Swift sees for Large Files. Paths cross only outward: Swift names
 //! file IDs, preview IDs and move IDs, never a path to act on.
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use tiny_core::clean::failure_cause::Failure;
 use tiny_core::clean::large_files::undo::UndoOutcome;
 use tiny_core::clean::large_files::LargeFile;
@@ -25,8 +27,35 @@ pub struct FfiLargeFile {
     /// False when the volume could not vouch for every block: `frees_bytes`
     /// is then an upper bound ("at most").
     pub frees_is_exact: bool,
-    /// The app bundle the file was matched to, for its icon.
+    /// The app bundle the file was matched to, for its icon. Group 5: the
+    /// app that owns the item, when it is installed.
     pub matched_app_path: Option<String>,
+    /// Group 5 only (OW1, FN1): what the item is ("Virtual machine",
+    /// "Screen recording"; "Installer" or "File" for one that frees nothing).
+    #[uniffi(default = None)]
+    pub kind: Option<String>,
+    /// Group 5: the owning app's name, and for a file that frees nothing the
+    /// app that holds its clone partner.
+    #[uniffi(default = None)]
+    pub app_name: Option<String>,
+    #[uniffi(default = None)]
+    pub app_bundle_id: Option<String>,
+    /// Group 5: whether the owning app was running at the scan.
+    #[uniffi(default = false)]
+    pub app_running: bool,
+    /// Group 5: an image of the item (a VM's screenshot), when the app keeps one.
+    #[uniffi(default = None)]
+    pub preview_path: Option<String>,
+    /// Group 5, a file that frees nothing: the size it shares with its clone.
+    #[uniffi(default = None)]
+    pub shared_bytes: Option<u64>,
+    /// With `shared_bytes`: the clone's partner when it sits in a known app
+    /// library ("UTM's Windows VM"); `None` when it was not found there.
+    #[uniffi(default = None)]
+    pub shared_with: Option<String>,
+    /// Group 5: the newest change in the item, in seconds since 1970.
+    #[uniffi(default = None)]
+    pub last_changed: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -116,7 +145,16 @@ pub struct FfiLargeFilesUndoReport {
     pub restored_count: u64,
 }
 
+/// Seconds since 1970, negative before it.
+fn unix_seconds(time: SystemTime) -> i64 {
+    match time.duration_since(UNIX_EPOCH) {
+        Ok(after) => i64::try_from(after.as_secs()).unwrap_or(i64::MAX),
+        Err(before) => -i64::try_from(before.duration().as_secs()).unwrap_or(i64::MAX),
+    }
+}
+
 pub(super) fn file_record(id: &str, file: &LargeFile) -> FfiLargeFile {
+    let facts = file.elsewhere.as_ref();
     FfiLargeFile {
         id: id.to_string(),
         path: file.path.to_string_lossy().into_owned(),
@@ -129,6 +167,16 @@ pub(super) fn file_record(id: &str, file: &LargeFile) -> FfiLargeFile {
             .matched_app
             .as_ref()
             .map(|p| p.to_string_lossy().into_owned()),
+        kind: facts.map(|e| e.kind.clone()),
+        app_name: facts.and_then(|e| e.app_name.clone()),
+        app_bundle_id: facts.and_then(|e| e.app_bundle_id.clone()),
+        app_running: facts.is_some_and(|e| e.app_running),
+        preview_path: facts
+            .and_then(|e| e.preview.as_ref())
+            .map(|p| p.to_string_lossy().into_owned()),
+        shared_bytes: facts.and_then(|e| e.shared_bytes),
+        shared_with: facts.and_then(|e| e.shared_with.clone()),
+        last_changed: facts.and_then(|e| e.last_changed).map(unix_seconds),
     }
 }
 

@@ -4,7 +4,7 @@
 //! changed for 90 days is "Other large files" (GR3).
 //!
 //! What the walk never enters or lists (NL1): anything outside the home
-//! (symlinks are not followed), `~/Library` (app libraries are task 10's),
+//! (symlinks are not followed), `~/Library` (app libraries are [`super::elsewhere`]'s),
 //! app bundles and package libraries, VM bundles, hidden folders (tool
 //! caches, `.Trash`), Smart Clean's build-output folder names, a folder with
 //! a `.git` inside (a git work tree), and an iCloud placeholder.
@@ -25,7 +25,7 @@ use crate::clean::private_size::private_allocated_bytes;
 use crate::progress::{report, ProgressCallback};
 
 use super::last_used::LastUsed;
-use super::{Group, LargeFile};
+use super::{FreesNothing, Group, LargeFile};
 
 /// 500 MB, decimal (GR3), judged on private bytes like every threshold here.
 pub const OTHER_MIN_BYTES: u64 = 500_000_000;
@@ -122,6 +122,8 @@ pub struct HomeScan {
     pub unreadable: Vec<PathBuf>,
     /// Files looked at, for the timing report.
     pub visited: u64,
+    /// Files of the size a group lists whose blocks are all shared (FN1).
+    pub frees_nothing: Vec<FreesNothing>,
 }
 
 /// Reads only: folder listings and file metadata, plus `last_used` for a
@@ -175,9 +177,14 @@ pub fn scan_home(
                     pending.push(path);
                 }
             } else if meta.is_file() && allocated(&meta) >= min_bytes && !is_dataless(&meta) {
-                if let Some(file) = candidate(&path, &meta, walk, &mut seen_inodes) {
-                    scan.files.push(file);
-                }
+                let found = candidate(
+                    &path,
+                    &meta,
+                    walk,
+                    &mut seen_inodes,
+                    &mut scan.frees_nothing,
+                );
+                scan.files.extend(found);
             }
         }
     }
@@ -232,8 +239,23 @@ fn candidate(
     meta: &Metadata,
     walk: &HomeWalk<'_>,
     seen_inodes: &mut HashSet<(u64, u64)>,
+    frees_nothing: &mut Vec<FreesNothing>,
 ) -> Option<LargeFile> {
     if walk.claimed.contains(path) {
+        return None;
+    }
+    // A file that frees nothing is no group's row; group 5 explains it (FN1).
+    // Judged before the age test: its size and that it frees 0 are the facts.
+    let frees = private_allocated_bytes(path).ok()?;
+    if frees.bytes == 0 {
+        if seen_inodes.insert((meta.dev(), meta.ino())) {
+            frees_nothing.push(FreesNothing {
+                path: path.to_path_buf(),
+                allocated: allocated(meta),
+                modified: meta.modified().ok(),
+                fingerprint: PathFingerprint::of(meta),
+            });
+        }
         return None;
     }
     let extension = path
@@ -256,9 +278,7 @@ fn candidate(
     if !seen_inodes.insert((meta.dev(), meta.ino())) {
         return None;
     }
-    // A file that frees nothing is not offered here (task 10 and FN1 own it).
-    let frees = private_allocated_bytes(path).ok()?;
-    if frees.bytes == 0 || frees.bytes < min_bytes {
+    if frees.bytes < min_bytes {
         return None;
     }
     let stem = path.file_stem()?.to_str()?;
@@ -270,6 +290,7 @@ fn candidate(
         frees,
         matched_app: None,
         fingerprint: PathFingerprint::of(meta),
+        elsewhere: None,
     })
 }
 

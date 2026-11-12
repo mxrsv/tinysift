@@ -4,6 +4,7 @@
 //! such app is not this group's (later groups place it).
 
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -12,7 +13,7 @@ use crate::clean::private_size::private_allocated_bytes;
 
 use super::app_version::AppVersions;
 use super::name_match::{is_newer, parse_name, parse_version};
-use super::{Group, LargeFile};
+use super::{FreesNothing, Group, LargeFile};
 
 /// 100 MB (GR3, CU12), judged on private bytes: a file whose blocks another
 /// file shares frees less than it measures.
@@ -47,6 +48,9 @@ pub struct InstallerScan {
     /// Folders that exist but could not be listed (a denied permission): an
     /// empty result then does not mean "nothing there".
     pub unreadable: Vec<PathBuf>,
+    /// Installer-type files of the threshold's size whose blocks are all
+    /// shared (FN1): any name, matched or not.
+    pub frees_nothing: Vec<FreesNothing>,
 }
 
 struct InstalledApp {
@@ -88,7 +92,13 @@ pub fn scan_installers_above(
             if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
                 return scan;
             }
-            if let Some(file) = installer(&entry.path(), min_bytes, &apps, versions) {
+            if let Some(file) = installer(
+                &entry.path(),
+                min_bytes,
+                &apps,
+                versions,
+                &mut scan.frees_nothing,
+            ) {
                 scan.files.push(file);
             }
         }
@@ -103,6 +113,7 @@ fn installer(
     min_bytes: u64,
     apps: &[InstalledApp],
     versions: &dyn AppVersions,
+    frees_nothing: &mut Vec<FreesNothing>,
 ) -> Option<LargeFile> {
     let extension = path.extension()?.to_str()?.to_lowercase();
     if !INSTALLER_EXTENSIONS.contains(&extension.as_str()) {
@@ -110,14 +121,26 @@ fn installer(
     }
     // Symlinks and folders are not the downloaded file itself.
     let meta = fs::symlink_metadata(path).ok().filter(|m| m.is_file())?;
+    if meta.blocks().saturating_mul(512) < min_bytes {
+        return None;
+    }
+    // A file that frees nothing (all blocks shared, or an iCloud placeholder
+    // with none on disk) cannot be picked: group 5 explains it (FN1).
+    let frees = private_allocated_bytes(path).ok()?;
+    if frees.bytes == 0 {
+        frees_nothing.push(FreesNothing {
+            path: path.to_path_buf(),
+            allocated: meta.blocks().saturating_mul(512),
+            modified: meta.modified().ok(),
+            fingerprint: PathFingerprint::of(&meta),
+        });
+        return None;
+    }
     let parsed = parse_name(path.file_stem()?.to_str()?);
     let app = apps
         .iter()
         .find(|app| !parsed.key.is_empty() && app.key == parsed.key)?;
-    // A file that frees nothing (all blocks shared, or an iCloud placeholder
-    // with none on disk) is not offered here: it cannot be picked (FN1).
-    let frees = private_allocated_bytes(path).ok()?;
-    if frees.bytes == 0 || frees.bytes < min_bytes {
+    if frees.bytes < min_bytes {
         return None;
     }
     let newer = parsed
@@ -138,6 +161,7 @@ fn installer(
         frees,
         matched_app: Some(app.path.clone()),
         fingerprint: PathFingerprint::of(&meta),
+        elsewhere: None,
     })
 }
 

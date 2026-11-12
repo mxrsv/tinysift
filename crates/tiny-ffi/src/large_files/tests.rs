@@ -55,6 +55,15 @@ impl ProgressListener for Listener {
 
 struct NoVersions;
 
+/// No app is running.
+struct NoApps;
+
+impl tiny_core::clean::process::AppProbe for NoApps {
+    fn probe(&self, _: &str) -> Result<bool, String> {
+        Ok(false)
+    }
+}
+
 impl AppVersions for NoVersions {
     fn version(&self, _: &Path) -> Option<String> {
         None
@@ -573,6 +582,7 @@ mod home_walk {
                     home: &world.home,
                     limits,
                     last_used: &NoLastUsed,
+                    probe: &NoApps,
                 }),
                 &CancellationToken::default(),
                 &Listener::default(),
@@ -622,5 +632,55 @@ mod home_walk {
             .unwrap();
         assert_eq!(undo.restored_count, 1);
         assert!(archive.exists());
+    }
+
+    #[test]
+    fn group_5_rows_are_listed_with_their_facts_and_the_preview_refuses_them() {
+        let world = World::new();
+        let vm = world
+            .home
+            .join("Library/Containers/com.utmapp.UTM/Data/Documents/Win.utm");
+        fs::create_dir_all(vm.join("Data")).unwrap();
+        fs::write(
+            vm.join("config.plist"),
+            "<plist><dict><key>Information</key><dict><key>Name</key><string>Win</string></dict></dict></plist>",
+        )
+        .unwrap();
+        fs::write(vm.join("screenshot.png"), b"png").unwrap();
+        fs::write(vm.join("Data/disk.qcow2"), vec![7u8; 2 * MB]).unwrap();
+        let archive = old_file(&world, "Documents/backup.zip", 200);
+        let scan = scan(&world);
+        let row = scan.files.iter().find(|f| f.group == "elsewhere").unwrap();
+        assert_eq!(row.path, vm.to_string_lossy());
+        assert_eq!(row.name, "Win · UTM virtual machine");
+        assert_eq!(row.kind.as_deref(), Some("Virtual machine"));
+        assert_eq!(row.app_name.as_deref(), Some("UTM"));
+        assert_eq!(row.app_bundle_id.as_deref(), Some("com.utmapp.UTM"));
+        assert!(!row.app_running);
+        assert_eq!(
+            row.preview_path.as_deref(),
+            Some(vm.join("screenshot.png").to_str().unwrap())
+        );
+        assert!(row.shared_bytes.is_none());
+        assert!(row.last_changed.is_some());
+        assert!(row.frees_bytes >= 2 * MB as u64);
+        // Group 5 is never movable: the preview refuses it, alone or among others.
+        let other = scan
+            .files
+            .iter()
+            .find(|f| f.path == archive.to_string_lossy())
+            .unwrap();
+        for asked in [vec![row.id.clone()], vec![other.id.clone(), row.id.clone()]] {
+            assert!(matches!(
+                world.session.preview_large_files(&asked),
+                Err(FfiError::InvalidInput { .. })
+            ));
+        }
+        // Nothing was spent: the other file still previews.
+        assert!(world
+            .session
+            .preview_large_files(std::slice::from_ref(&other.id))
+            .is_ok());
+        assert!(vm.exists());
     }
 }

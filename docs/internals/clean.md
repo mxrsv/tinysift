@@ -462,7 +462,7 @@ every move goes through `Trash` (the app passes `NativeTrash`). Nothing here del
 
 | Call | Gate | What it does |
 | --- | --- | --- |
-| `large_files_scan(token, progress)` | takes it | Read-only. Replaces the earlier scan and any preview. Returns `FfiLargeFile` records (`id`, `path`, `name`, `group`, `reason`, `frees_bytes`, `frees_is_exact`, `matched_app_path`) and `unreadable_folders`. |
+| `large_files_scan(token, progress)` | takes it | Read-only. Replaces the earlier scan and any preview. Returns `FfiLargeFile` records (`id`, `path`, `name`, `group`, `reason`, `frees_bytes`, `frees_is_exact`, `matched_app_path`, and for group 5 `kind`, `app_name`, `app_bundle_id`, `app_running`, `preview_path`, `shared_bytes`, `last_changed`) and `unreadable_folders`. |
 | `large_files_preview(file_ids)` | none | Builds the one preview from IDs of the current scan. Unknown IDs and an empty list are refused; a file a saved "always keep" rule holds is returned in `held_ids` and left out. Unreadable rules fail it (`ProtectionUnavailable`). Replaces any earlier preview. |
 | `large_files_move(preview_id, token, progress)` | takes it | Spends the preview, then moves. Returns one result per item (`FfiItemOutcome`, `FfiFailureCause`, `bytes_moved`, `trashed_path`) and a `move_id`. |
 | `large_files_undo(move_id)` | takes it | Puts the move's files back. One outcome per file. |
@@ -510,7 +510,8 @@ architecture and "installer" tokens cut after the first word). The reason is `<A
 ([`discovery.rs`](../../crates/tiny-core/src/clean/large_files/discovery.rs)). One read-only walk of the home
 (`scan_home`): folder listings and file metadata only, nothing hashed, cancellable, progress every 2000 entries. A file
 is looked at only when its allocated blocks reach the smaller threshold; then its private bytes must be above 0 and reach
-the group's threshold, and a hard link's twin counts once. A video (`mp4 mov mkv m4v avi webm`) of 500 MB or more is
+the group's threshold, and a hard link's twin counts once (a file whose private bytes are 0 goes to group 5 instead, see
+step 3). A video (`mp4 mov mkv m4v avi webm`) of 500 MB or more is
 `OnlyCopy` ("only_copy"), reason `Video · changed N days ago`; the spec fixes no threshold for this group, so it takes
 group 4's. Any other file of 500 MB or more whose modification date is 90 days old is `OtherLarge` ("other_large"),
 reason `<kind> · not changed for N days`; Spotlight's last-used date (`mdls`, asked only for a file that already passed
@@ -523,6 +524,28 @@ Smart Clean's build-output folder names (`node_modules target build DerivedData 
 (the home itself is exempt, so a dotfiles repo does not hide everything), and an iCloud placeholder (`SF_DATALESS`).
 The walk is added to the move's scanned roots, so a group 3 or 4 file moves and undoes through the same checks.
 Tests inject the limits, "now", the Spotlight table and the claimed set (`Limits`, `HomeWalk`, `LastUsed`).
+
+**Scan, step 3: Remove these elsewhere**
+([`elsewhere.rs`](../../crates/tiny-core/src/clean/large_files/elsewhere.rs)). `Group::Elsewhere` ("elsewhere") is
+listed and never movable: `Group::movable()` is false and `large_files_preview` refuses its IDs (`InvalidInput`), alone
+or among others, before anything is spent. It holds two kinds of row. (1) Items of a known app library (`LIBRARIES`, a
+table of id, app name, bundle ID, process name, home-relative folder, bundle extension, kind): UTM's
+`~/Library/Containers/com.utmapp.UTM/Data/Documents/*.utm` and Cap's
+`~/Library/Application Support/so.cap.desktop/recordings/*.cap`, one row per bundle, any size. The name is the VM's
+`Information › Name` from the XML `config.plist` (the bundle name when it is binary or lacks it) plus
+`· UTM virtual machine`, or `Cap recording · 30 Oct, 5:10 PM` from the date in the bundle name (else `pretty_name` in
+`recording-meta.json`, else the bundle name). It frees its private bytes (FG-L1); `last_changed` is the newest file date
+inside; the preview is UTM's `screenshot.png` or Cap's `screenshots/display.jpg` (else another image there); the owning
+app is the `.app` of that name in the Applications folders, and `app_running` is the app probe (`pgrep -x`) at scan time
+(an unknown answer is false; task 11's move asks again). (2) FN1: every large file whose private bytes are 0. The
+installer scan hands over installer-type files of 100 MB or more in Downloads and Desktop whatever their name, the home
+walk any file of 500 MB or more, both before the age and name tests; a path found twice counts once. The reason comes
+from `sharing_of`: if the file is an APFS clone and a file with the same clone ID sits inside a known library, it reads
+`Frees nothing: UTM's Windows VM holds the same data` (and `app_name` is that app; reasons carry no formatted numbers, the app writes the size from `shared_bytes` in its own locale); if the clone's partner is
+elsewhere, `Frees nothing: another copy on this Mac uses the same space`; if it is not a full clone,
+`Frees nothing: its space is shared with other files`. `shared_bytes` is its allocated size and `frees_bytes` is 0. Rows
+sort by what they free, or share. Tests use fixture libraries, `clonefile` pairs and an injected probe
+(`ElsewhereRoots`, `AppProbe`).
 
 ## Desktop persistent protection
 

@@ -26,10 +26,11 @@ use tiny_core::clean::large_files::move_run::{
 };
 use tiny_core::clean::large_files::undo::{undo_moves, UndoItem, UndoOutcome};
 use tiny_core::clean::large_files::{
-    scan_home, scan_installers_above, HomeWalk, InstallerRoots, LargeFile, Limits,
-    INSTALLER_MIN_BYTES,
+    scan_elsewhere, scan_home, scan_installers_above, ElsewhereRoots, HomeWalk, InstallerRoots,
+    LargeFile, Limits, INSTALLER_MIN_BYTES,
 };
 use tiny_core::clean::native_trash::NativeTrash;
+use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::{Matcher, PolicySnapshot};
 
 use crate::clean::{app_runner, protection_error, FfiItemOutcome, PREVIEW_TTL};
@@ -114,6 +115,7 @@ impl TinySession {
         let runner = app_runner();
         let versions = PlutilVersions(runner.as_ref());
         let last_used = SpotlightLastUsed(runner.as_ref());
+        let probe = RunnerProbe(runner.as_ref());
         self.scan_large_files(
             &InstallerRoots::for_home(&home),
             INSTALLER_MIN_BYTES,
@@ -122,6 +124,7 @@ impl TinySession {
                 home: &home,
                 limits: Limits::default(),
                 last_used: &last_used,
+                probe: &probe,
             }),
             &token,
             progress.as_ref(),
@@ -229,6 +232,8 @@ pub(crate) struct HomeSettings<'a> {
     pub home: &'a std::path::Path,
     pub limits: Limits,
     pub last_used: &'a dyn LastUsed,
+    /// Whether UTM or Cap is running (group 5).
+    pub probe: &'a dyn AppProbe,
 }
 
 impl TinySession {
@@ -270,7 +275,21 @@ impl TinySession {
                 Some(&on_progress),
             );
             token.check()?;
+            // Group 5: app libraries, and every large file that frees nothing.
+            let mut frees_nothing = found.frees_nothing;
+            frees_nothing.extend(home.frees_nothing);
+            let elsewhere = scan_elsewhere(
+                &ElsewhereRoots {
+                    home: walk.home,
+                    applications: &roots.applications,
+                    probe: walk.probe,
+                },
+                frees_nothing,
+                Some(token.flag()),
+            );
+            token.check()?;
             found.files.extend(home.files);
+            found.files.extend(elsewhere);
             found.unreadable.extend(home.unreadable);
             // A move may reach any file the walk listed, still through real folders.
             scanned_roots.push(walk.home.to_path_buf());
@@ -330,6 +349,12 @@ impl TinySession {
                 .files
                 .get(id)
                 .ok_or_else(|| invalid("unknown file; scan again"))?;
+            // Group 5 is listed, never moved from here (OW1, FN1).
+            if !file.group.movable() {
+                return Err(FfiError::InvalidInput {
+                    detail: "that item is managed elsewhere and cannot be moved from here".into(),
+                });
+            }
             if !policy.evaluate(&matcher, &file.path).allows_move() {
                 held.push(id.clone());
                 continue;
