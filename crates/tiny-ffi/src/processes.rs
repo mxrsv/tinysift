@@ -231,6 +231,19 @@ impl TinySession {
         Ok(self.sampler().sample().into())
     }
 
+    /// Reads only `pids`, leaving out any that is gone, for a panel that follows one app between
+    /// full `process_list` samples. Has its own CPU interval, so it never shortens
+    /// `process_list`'s: a PID's CPU is measured from the third consecutive call that includes
+    /// it, as the average since the previous one. Responsible processes are named only within
+    /// `pids`, so group by the last `process_list`. Bypasses the gate.
+    pub fn process_list_for(&self, pids: Vec<u32>) -> Vec<FfiProcessInfo> {
+        self.sampler()
+            .sample_pids(&pids)
+            .into_iter()
+            .map(Into::into)
+            .collect()
+    }
+
     /// Whole-machine CPU, memory, swap, pressure and network without walking processes, for
     /// the menu bar's background record. CPU and network read warming up on the first call
     /// and need calls at least 0.2 s apart. Bypasses the gate.
@@ -655,6 +668,25 @@ mod tests {
         let session = TinySession::new();
         let _gate = session.begin().unwrap();
         assert!(!session.process_list().unwrap().processes.is_empty());
+        let own = std::process::id();
+        assert_eq!(session.process_list_for(vec![own]).len(), 1);
+    }
+
+    #[test]
+    fn pid_list_reads_its_pids_and_leaves_the_full_lists_warm_up_alone() {
+        let session = TinySession::new();
+        let own = std::process::id();
+        session.process_list().unwrap();
+        for _ in 0..3 {
+            std::thread::sleep(sysinfo_interval());
+            let read = session.process_list_for(vec![own, u32::MAX]);
+            assert_eq!(read.iter().map(|p| p.pid).collect::<Vec<_>>(), vec![own]);
+            assert_eq!(read[0].refusal, Some(FfiRefusal::OwnProcess));
+        }
+        assert!(session.process_list_for(vec![own])[0].cpu_measured);
+        // Three PID reads are not three full reads: the full list is on its second.
+        std::thread::sleep(sysinfo_interval());
+        assert!(!session.process_list().unwrap().cpu_measured);
     }
 
     /// Only disposable children are signalled.

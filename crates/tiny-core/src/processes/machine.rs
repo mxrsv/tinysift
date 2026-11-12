@@ -76,6 +76,18 @@ mod tests {
         );
     }
 
+    #[test]
+    fn machine_read_walks_no_process_and_matches_the_full_read() {
+        let mut machine = MachineSampler::new();
+        let usage = machine.sample();
+        assert!(machine.system.processes().is_empty());
+        let full = super::super::Sampler::new().sample().system_usage;
+        assert_eq!(usage.logical_cores, full.logical_cores);
+        assert_eq!(usage.cpu_brand, full.cpu_brand);
+        assert_eq!(usage.memory_total_bytes, full.memory_total_bytes);
+        assert_eq!(usage.swap_total_bytes, full.swap_total_bytes);
+    }
+
     #[cfg(target_os = "macos")]
     #[test]
     fn memory_split_sums_to_the_used_figure() {

@@ -222,6 +222,10 @@ pub(crate) fn to_info(raw: RawProcess, cpu_measured: bool, current_uid: u32) -> 
 /// and reports a real value only from the third; earlier values read 0.
 const REFRESHES_FOR_CPU: u32 = 3;
 
+/// Processes the PID-set read may hold beyond the pids it was asked for before it starts afresh.
+/// Starting afresh restarts every followed pid's three-read warm-up, so it should be rare.
+const PID_READ_STALE_LIMIT: usize = 256;
+
 /// One pid as earlier refreshes saw it.
 struct Seen {
     start: u64,
@@ -250,80 +254,71 @@ fn fresh_name(pid: u32) -> Option<String> {
         .map(|process| process.name().to_string_lossy().into_owned())
 }
 
-/// Keeps one `System` alive so later samples have measured CPU.
-pub struct Sampler {
+/// Which processes a refresh reads.
+#[derive(Clone, Copy)]
+enum Scope<'a> {
+    All,
+    Pids(&'a [u32]),
+}
+
+/// One `System` and what its refreshes saw. A process's CPU percent is its CPU time over the
+/// interval since this reader's previous refresh, so the full read and the PID-set read each own
+/// one: a read of a few PIDs every 2 s must not shorten the interval the full read divides by.
+struct ProcessReader {
     system: System,
-    users: Users,
     refreshes: u32,
-    /// What earlier refreshes saw of each pid.
+    /// What earlier refreshes saw of each pid read; its keys are the processes of the last read.
     seen: HashMap<u32, Seen>,
-    current_uid: u32,
-    system_cpu_samples: u32,
-    last_system_cpu_sample: Option<Instant>,
-    network: NetworkCounters,
-    network_reading: NetworkReading,
 }
 
-impl Default for Sampler {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Sampler {
-    pub fn new() -> Self {
+impl ProcessReader {
+    fn new() -> Self {
         Self {
             system: System::new(),
-            users: Users::new_with_refreshed_list(),
             refreshes: 0,
             seen: HashMap::new(),
-            system_cpu_samples: 0,
-            last_system_cpu_sample: None,
-            network: NetworkCounters::new(),
-            network_reading: NetworkReading::default(),
-            // SAFETY: getuid has no preconditions and cannot fail.
-            current_uid: unsafe { libc::getuid() },
         }
     }
 
-    pub fn current_uid(&self) -> u32 {
-        self.current_uid
-    }
-
-    /// Refreshes once. A process has measured CPU from its third sample on.
-    pub fn sample(&mut self) -> ProcessSnapshot {
-        self.refresh_system_usage();
-        self.system.refresh_processes_specifics(
-            ProcessesToUpdate::All,
-            true,
-            ProcessRefreshKind::new()
-                .with_cpu()
-                .with_memory()
-                .with_user(UpdateKind::OnlyIfNotSet)
-                .with_exe(UpdateKind::Always),
-        );
+    fn refresh(&mut self, scope: Scope) {
+        let kind = ProcessRefreshKind::new()
+            .with_cpu()
+            .with_memory()
+            .with_user(UpdateKind::OnlyIfNotSet)
+            .with_exe(UpdateKind::Always);
+        match scope {
+            Scope::All => {
+                self.system
+                    .refresh_processes_specifics(ProcessesToUpdate::All, true, kind);
+            }
+            Scope::Pids(pids) => {
+                // `sysinfo` forgets a pid only when a read asks for it and finds it gone, so the
+                // pids earlier panels followed would pile up in a long-running app.
+                if self.system.processes().len() > pids.len() + PID_READ_STALE_LIMIT {
+                    *self = Self::new();
+                }
+                let pids: Vec<_> = pids.iter().copied().map(sysinfo::Pid::from_u32).collect();
+                self.system
+                    .refresh_processes_specifics(ProcessesToUpdate::Some(&pids), true, kind);
+            }
+        }
         self.refreshes = self.refreshes.saturating_add(1);
-        self.track_seen();
-        self.snapshot()
+        self.track_seen(scope);
     }
 
-    fn refresh_system_usage(&mut self) {
-        self.system.refresh_memory();
-        let now = Instant::now();
-        let due = self.last_system_cpu_sample.is_none_or(|previous| {
-            now.duration_since(previous) >= sysinfo::MINIMUM_CPU_UPDATE_INTERVAL
-        });
-        if due {
-            self.system.refresh_cpu_usage();
-            self.system_cpu_samples = self.system_cpu_samples.saturating_add(1);
-            self.last_system_cpu_sample = Some(now);
-        }
-        self.network_reading = self.network.sample();
-    }
-
-    fn track_seen(&mut self) {
-        let mut seen = HashMap::with_capacity(self.system.processes().len());
-        for process in self.system.processes().values() {
+    /// Rebuilds `seen` from the processes this refresh read. A pid continues its count only if the
+    /// previous refresh read it too: `sysinfo` keeps the CPU times of a pid left out of a PID-set
+    /// read, so the first interval after a gap spans the gap and is not reported as measured.
+    fn track_seen(&mut self, scope: Scope) {
+        let processes: Vec<&sysinfo::Process> = match scope {
+            Scope::All => self.system.processes().values().collect(),
+            Scope::Pids(pids) => pids
+                .iter()
+                .filter_map(|pid| self.system.process(sysinfo::Pid::from_u32(*pid)))
+                .collect(),
+        };
+        let mut seen = HashMap::with_capacity(processes.len());
+        for process in processes {
             let pid = process.pid().as_u32();
             let start = process.start_time();
             let exe = process.exe().map(PathBuf::from);
@@ -354,21 +349,7 @@ impl Sampler {
         self.seen = seen;
     }
 
-    /// For one-shot callers such as the CLI: refreshes until CPU is measured,
-    /// waiting the minimum CPU interval between refreshes (about 0.4 s).
-    pub fn sample_measured(&mut self) -> ProcessSnapshot {
-        while self.refreshes + 1 < REFRESHES_FOR_CPU {
-            self.sample();
-            std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
-        }
-        self.sample()
-    }
-
-    fn system_usage(&self) -> SystemUsage {
-        usage_of(&self.system, self.system_cpu_samples, self.network_reading)
-    }
-
-    /// The responsible process of `pid` as a PID plus start time, when it is in this sample and
+    /// The responsible process of `pid` as a PID plus start time, when this read has it and it
     /// is not `pid` itself.
     fn responsible_of(&self, pid: u32) -> Option<ProcessKey> {
         let responsible = self.seen.get(&pid)?.responsible.filter(|r| *r != pid)?;
@@ -378,44 +359,134 @@ impl Sampler {
             start_time,
         })
     }
+}
 
-    fn snapshot(&self) -> ProcessSnapshot {
-        let processes = self
-            .system
-            .processes()
-            .values()
-            .map(|process| {
+/// Keeps its `System`s alive so later samples have measured CPU. Three reads, each at its own pace:
+/// [`Sampler::sample`] walks every process, [`Sampler::sample_pids`] reads a few, and the
+/// whole-machine figures alone come from [`super::MachineSampler`], which walks none.
+pub struct Sampler {
+    /// Every process; also holds the machine's CPU and memory for `system_usage`.
+    all: ProcessReader,
+    /// The PID-set read's own `System`, so it never moves `all`'s CPU interval.
+    pids: ProcessReader,
+    users: Users,
+    current_uid: u32,
+    system_cpu_samples: u32,
+    last_system_cpu_sample: Option<Instant>,
+    network: NetworkCounters,
+    network_reading: NetworkReading,
+}
+
+impl Default for Sampler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Sampler {
+    pub fn new() -> Self {
+        Self {
+            all: ProcessReader::new(),
+            pids: ProcessReader::new(),
+            users: Users::new_with_refreshed_list(),
+            system_cpu_samples: 0,
+            last_system_cpu_sample: None,
+            network: NetworkCounters::new(),
+            network_reading: NetworkReading::default(),
+            // SAFETY: getuid has no preconditions and cannot fail.
+            current_uid: unsafe { libc::getuid() },
+        }
+    }
+
+    pub fn current_uid(&self) -> u32 {
+        self.current_uid
+    }
+
+    /// Refreshes every process once. A process has measured CPU from its third sample on, the
+    /// average over the interval since the previous `sample`.
+    pub fn sample(&mut self) -> ProcessSnapshot {
+        self.refresh_system_usage();
+        self.all.refresh(Scope::All);
+        ProcessSnapshot {
+            processes: self.infos(&self.all),
+            sampled_at: unix_now(),
+            cpu_measured: self.all.refreshes >= REFRESHES_FOR_CPU,
+            system_usage: self.system_usage(),
+        }
+    }
+
+    /// Reads only `pids`, for a panel that follows a few processes between full samples. Leaves
+    /// out a pid that is gone. CPU is the average since the previous `sample_pids` that read the
+    /// same pid, measured from the third consecutive read that includes it; `responsible` is set
+    /// only when the responsible process is among `pids`. Never touches `sample`'s intervals.
+    pub fn sample_pids(&mut self, pids: &[u32]) -> Vec<ProcessInfo> {
+        self.pids.refresh(Scope::Pids(pids));
+        self.infos(&self.pids)
+    }
+
+    fn refresh_system_usage(&mut self) {
+        let system = &mut self.all.system;
+        system.refresh_memory();
+        let now = Instant::now();
+        let due = self.last_system_cpu_sample.is_none_or(|previous| {
+            now.duration_since(previous) >= sysinfo::MINIMUM_CPU_UPDATE_INTERVAL
+        });
+        if due {
+            system.refresh_cpu_usage();
+            self.system_cpu_samples = self.system_cpu_samples.saturating_add(1);
+            self.last_system_cpu_sample = Some(now);
+        }
+        self.network_reading = self.network.sample();
+    }
+
+    /// For one-shot callers such as the CLI: refreshes until CPU is measured,
+    /// waiting the minimum CPU interval between refreshes (about 0.4 s).
+    pub fn sample_measured(&mut self) -> ProcessSnapshot {
+        while self.all.refreshes + 1 < REFRESHES_FOR_CPU {
+            self.sample();
+            std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+        }
+        self.sample()
+    }
+
+    fn system_usage(&self) -> SystemUsage {
+        usage_of(
+            &self.all.system,
+            self.system_cpu_samples,
+            self.network_reading,
+        )
+    }
+
+    /// The processes `reader`'s last refresh read, with footprint, CPU time and responsible process.
+    fn infos(&self, reader: &ProcessReader) -> Vec<ProcessInfo> {
+        reader
+            .seen
+            .iter()
+            .filter_map(|(pid, seen)| {
+                let process = reader.system.process(sysinfo::Pid::from_u32(*pid))?;
                 let user = process
                     .user_id()
                     .and_then(|uid| self.users.get_user_by_id(uid))
                     .map(|user| user.name().to_string());
                 let mut raw = raw_process(process, user);
-                let seen = self.seen.get(&raw.pid);
-                if let Some(name) = seen.and_then(|s| s.name.clone()) {
+                if let Some(name) = seen.name.clone() {
                     raw.name = name;
                 }
-                let count = seen.map_or(0, |s| s.count);
-                let info = to_info(raw, count >= REFRESHES_FOR_CPU, self.current_uid);
+                let info = to_info(raw, seen.count >= REFRESHES_FOR_CPU, self.current_uid);
                 // Only a process `to_info` could read gets a footprint and CPU time, so a
                 // missing memory reading keeps meaning "unreadable" across the boundary.
                 let usage = info
                     .memory_bytes
                     .map(|_| super::footprint::read(info.pid))
                     .unwrap_or_default();
-                ProcessInfo {
+                Some(ProcessInfo {
                     footprint_bytes: usage.footprint_bytes,
                     cpu_time_ns: usage.cpu_time_ns,
-                    responsible: self.responsible_of(info.pid),
+                    responsible: reader.responsible_of(info.pid),
                     ..info
-                }
+                })
             })
-            .collect();
-        ProcessSnapshot {
-            processes,
-            sampled_at: unix_now(),
-            cpu_measured: self.refreshes >= REFRESHES_FOR_CPU,
-            system_usage: self.system_usage(),
-        }
+            .collect()
     }
 }
 
@@ -793,6 +864,129 @@ mod tests {
         // A process never names itself.
         for process in &sample.processes {
             assert_ne!(process.responsible.map(|key| key.pid), Some(process.pid));
+        }
+    }
+
+    /// A child that keeps one core busy until killed.
+    #[cfg(target_os = "macos")]
+    fn busy_child() -> std::process::Child {
+        use std::process::{Command, Stdio};
+        Command::new("/usr/bin/yes")
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap()
+    }
+
+    #[cfg(target_os = "macos")]
+    fn cpu_of(processes: &[ProcessInfo], pid: u32) -> Option<f32> {
+        processes
+            .iter()
+            .find(|p| p.pid == pid)
+            .and_then(|p| p.cpu_percent)
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn pid_read_returns_only_the_pids_asked_for_and_leaves_out_gone_ones() {
+        use std::process::{Command, Stdio};
+
+        let mut child = Command::new("/bin/sleep")
+            .arg("30")
+            .stdin(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut gone = Command::new("/usr/bin/true").spawn().unwrap();
+        let (pid, gone_pid, own) = (child.id(), gone.id(), std::process::id());
+        gone.wait().unwrap();
+        let mut sampler = Sampler::new();
+        let first = sampler.sample_pids(&[pid, gone_pid, own]);
+        let mut pids: Vec<u32> = first.iter().map(|p| p.pid).collect();
+        pids.sort_unstable();
+        let mut expected = vec![pid, own];
+        expected.sort_unstable();
+        assert_eq!(pids, expected);
+        assert!(first
+            .iter()
+            .all(|p| !p.cpu_measured && p.cpu_percent.is_none()));
+        // Narrowing the set leaves the other pid out of the next read.
+        let second = sampler.sample_pids(&[pid]);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(second.iter().map(|p| p.pid).collect::<Vec<_>>(), vec![pid]);
+        assert!(second[0].footprint_bytes.is_some());
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn pid_reads_do_not_shorten_the_full_reads_interval() {
+        use std::time::Duration;
+
+        let mut busy = busy_child();
+        let mut sampler = Sampler::new();
+        let own = std::process::id();
+        for _ in 0..REFRESHES_FOR_CPU {
+            sampler.sample();
+            std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+        }
+        // Panel reads of another pid between two full reads, the last just before the full one.
+        for _ in 0..5 {
+            std::thread::sleep(Duration::from_millis(250));
+            sampler.sample_pids(&[own]);
+        }
+        let full = sampler.sample();
+        busy.kill().unwrap();
+        busy.wait().unwrap();
+        let cpu = cpu_of(&full.processes, busy.id()).expect("the busy child is measured");
+        // `yes` is one thread: at most one core. Had the panel's reads moved the full read's
+        // clock, about 1.25 s of CPU time would be divided by about 0.25 s.
+        assert!(
+            cpu <= 130.0,
+            "full read reported {cpu}% for one busy thread"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn cpu_over_a_long_interval_is_the_average_not_a_spike() {
+        use std::time::Duration;
+
+        let mut busy = busy_child();
+        let pid = busy.id();
+        let mut sampler = Sampler::new();
+        for _ in 0..REFRESHES_FOR_CPU {
+            sampler.sample_pids(&[pid]);
+            std::thread::sleep(Duration::from_millis(250));
+        }
+        let warmed = sampler.sample_pids(&[pid]);
+        std::thread::sleep(Duration::from_secs(1));
+        // SAFETY: `kill` with a valid pid of our own child has no memory-safety preconditions.
+        unsafe { libc::kill(pid as libc::pid_t, libc::SIGSTOP) };
+        std::thread::sleep(Duration::from_secs(1));
+        let after = sampler.sample_pids(&[pid]);
+        busy.kill().unwrap();
+        busy.wait().unwrap();
+        assert!(cpu_of(&warmed, pid).is_some_and(|cpu| cpu > 50.0));
+        // Busy for half the interval, stopped for the other half.
+        let cpu = cpu_of(&after, pid).expect("the child is measured");
+        assert!(
+            (15.0..=85.0).contains(&cpu),
+            "expected about 50%, read {cpu}%"
+        );
+    }
+
+    #[test]
+    #[cfg(target_os = "macos")]
+    fn pid_read_starts_afresh_once_it_holds_too_many_stale_pids() {
+        let mut sampler = Sampler::new();
+        sampler.pids.refresh(Scope::All);
+        let held = sampler.pids.system.processes().len();
+        let own = std::process::id();
+        let read = sampler.sample_pids(&[own]);
+        assert_eq!(read.len(), 1);
+        if held > 1 + PID_READ_STALE_LIMIT {
+            assert_eq!(sampler.pids.system.processes().len(), 1);
+            assert_eq!(sampler.pids.refreshes, 1);
         }
     }
 

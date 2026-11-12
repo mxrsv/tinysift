@@ -156,6 +156,14 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   with the footprint in one `proc_pid_rusage` call
   ([`footprint.rs`](../../crates/tiny-core/src/processes/footprint.rs)). Native app only;
   `None` exactly when the footprint is. Not: `cpu_percent`, a rate over the last sample interval.
+- **Three reads** — The app reads at three paces through one [session](../../crates/tiny-ffi/src/processes.rs):
+  `machine_usage` (whole-machine figures, walks no process, [`MachineSampler`](../../crates/tiny-core/src/processes/machine.rs)),
+  `process_list` (every process) and `process_list_for` (a given set of PIDs, for a panel that
+  follows one app). Each keeps its own `sysinfo` `System` in
+  [`snapshot.rs`](../../crates/tiny-core/src/processes/snapshot.rs), because a process's
+  `cpu_percent` is its CPU time over the interval since that read's previous one: a shared one
+  would divide a full list's 25 s of CPU time by the 2 s since the last PID read. A PID-set read
+  names a responsible process only within its PIDs. Not: `sample_measured`, the CLI's warm-up.
 - **Responsible process** (`responsible: Option<ProcessKey>` on `ProcessInfo`; `responsible_pid`
   plus `responsible_start_time` on `FfiProcessInfo`, both set from that one key) — The process macOS holds responsible for another: the app an XPC service,
   helper or video decoder works for (`VTDecoderXPCService` → Google Chrome, `WebContent` →
