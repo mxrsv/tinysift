@@ -259,12 +259,12 @@ impl FreedBytes {
 }
 
 #[cfg(target_os = "macos")]
-fn sharing_of(path: &Path) -> Sharing {
+pub(crate) fn sharing_of(path: &Path) -> Sharing {
     apfs::sharing(path)
 }
 
 #[cfg(not(target_os = "macos"))]
-fn sharing_of(_: &Path) -> Sharing {
+pub(crate) fn sharing_of(_: &Path) -> Sharing {
     Sharing::Unknown
 }
 

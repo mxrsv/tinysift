@@ -7,6 +7,7 @@ pub mod finder_trash;
 pub mod freed_size;
 pub mod fs_safe;
 pub mod native_trash;
+pub mod private_size;
 pub mod process;
 pub mod protection;
 pub mod protection_store;
