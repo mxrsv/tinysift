@@ -2,7 +2,7 @@
 
 `tiny clean` finds caches and leftovers you can remove, shows how much space each category
 takes, lets you pick, and asks what to do before touching anything. It needs macOS. The
-[desktop app](../../../tiny-cli/docs/user/desktop.md) lists the same categories with its own review
+[desktop app](https://tinysift.app/docs) lists the same categories with its own review
 and consent steps.
 
 ```bash
@@ -44,7 +44,7 @@ default.
 Naming a category with `--category` shows it whatever its risk; the `--include-*` flags are
 then ignored. `system-simulator-caches` is Safe but needs administrator rights, which `tiny`
 never asks for: plain `tiny clean` leaves it out, and naming it lists it and then refuses it.
-The [desktop app](../../../tiny-cli/docs/user/desktop.md) only shows its size: macOS refuses
+The [desktop app](https://tinysift.app/docs) only shows its size: macOS refuses
 to let an app delete it, even after an administrator's password.
 
 ## Choosing what to clean
@@ -105,7 +105,7 @@ along. Those overlapping selections are retained and explained in the final repo
 The desktop app can scan some categories without the rest. A scan replaces the results of the
 categories it covers and leaves every other category's results, and a plan already built from
 them, as they were. A scan that is stopped or fails changes nothing. `tiny clean` always scans
-afresh. How the app presents this is in the [desktop guide](../../../tiny-cli/docs/user/desktop.md).
+afresh. How the app presents this is in the [desktop guide](https://tinysift.app/docs).
 
 ## Your own files
 
@@ -151,7 +151,7 @@ private-looking downloads and never ticks them for you.
   installed app, but a folder name does not prove the app is gone, so `tiny` never moves
   them. Check them in Finder.
 - **Symlinks are never followed**, so nothing outside the listed paths can be removed.
-- **Always keep rules from the [desktop app](../../../tiny-cli/docs/user/desktop.md#always-keep)
+- **Always keep rules from the [desktop app](https://tinysift.app/docs)
   apply here too.** A kept path, or a folder that holds one, is reported as kept and left in
   place, for Move to Trash and Hard delete alike. If the saved rules cannot be read, nothing
   is cleaned.

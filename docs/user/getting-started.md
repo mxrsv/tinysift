@@ -3,7 +3,7 @@
 `tiny` is a small command-line tool for everyday upkeep of a Mac: what the machine is doing,
 which files are taking space, which caches can go, which apps left data behind and which
 processes are running. Every command that can remove something shows you a plan first and
-defaults to Move to Trash. Processes and cache cleanup also have a [desktop app](../../../tiny-cli/docs/user/desktop.md).
+defaults to Move to Trash. Processes and cache cleanup also have a [desktop app](https://tinysift.app/docs).
 
 ## Install
 

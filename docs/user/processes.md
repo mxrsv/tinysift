@@ -1,7 +1,7 @@
 # Processes
 
 `tiny processes` lists what is running, shows one process in detail, finds who listens on a
-TCP port, and quits a process you own. The [desktop app](../../../tiny-cli/docs/user/desktop.md) shows the same data
+TCP port, and quits a process you own. The [desktop app](https://tinysift.app/docs) shows the same data
 grouped by app.
 
 ```bash
