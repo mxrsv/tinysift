@@ -142,8 +142,11 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 - **Refusal** (`Refusal`) — Why TinySift will not signal a process: itself or its parent, PID 0 or
   1, another user, a protected name, or a port owner that started after `lsof` ran. Also gates
   the app's Swift-side Quit.
-- **Busy** (`FfiError::Busy`) — The [session](../../crates/tiny-ffi/src/session.rs) gate is
-  held: one scan or mutation at a time, rejected rather than queued. A process signal
+- **Busy** (`FfiError::Busy`) — The [session](../../crates/tiny-ffi/src/session.rs) gate
+  refused the call, rather than queueing it. A write (a move, a delete, an install, a rule, a
+  gated preview) holds the gate alone. A scan holds one **scan slot** (`ScanSlot`: Clean,
+  Storage, Large Files, Apps, Casks): scans in different slots run together, a second scan in
+  the same slot is `Busy`, and any scan refuses a write. A process signal
   ([`process_terminate`](../../crates/tiny-ffi/src/processes.rs)) does not take it. Not: locked.
 - **Network throughput** (`NetworkThroughput`, `FfiNetworkThroughput`) — Whole-machine bytes
   per second received and sent since the previous sample, summed over the ports and AirDrop

@@ -226,6 +226,37 @@ fn a_scan_holds_the_gate_and_a_busy_session_refuses_it() {
 }
 
 #[test]
+fn a_scan_runs_beside_other_features_scans_and_a_move_waits_for_them() {
+    let world = World::new();
+    let cap = world.installer("Cap", "Cap.dmg");
+    let clean = world.session.begin_scan(ScanSlot::Clean).unwrap();
+    let storage = world.session.begin_scan(ScanSlot::Storage).unwrap();
+    let scan = world.scan();
+    let preview = world.session.preview_large_files(&ids(&scan)).unwrap();
+    drop(storage);
+    // One scan elsewhere is enough to refuse the write; the preview stays usable.
+    assert!(matches!(
+        world.run(&preview.preview_id, &world.trash()),
+        Err(FfiError::Busy)
+    ));
+    assert!(cap.exists());
+    drop(clean);
+    {
+        let _own = world.session.begin_scan(ScanSlot::LargeFiles).unwrap();
+        let second = world.session.scan_large_files(
+            &world.roots(),
+            MB as u64,
+            &NoVersions,
+            None,
+            &CancellationToken::default(),
+            &Listener::default(),
+        );
+        assert!(matches!(second, Err(FfiError::Busy)));
+    }
+    assert!(world.run(&preview.preview_id, &world.trash()).is_ok());
+}
+
+#[test]
 fn a_cancelled_scan_changes_nothing() {
     let world = World::new();
     world.installer("Cap", "Cap.dmg");

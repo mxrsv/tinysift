@@ -7,8 +7,11 @@
 //! builds a `brew` command.
 //!
 //! - **Gate.** Everything that spawns `brew` or reads the apps takes the
-//!   session gate and returns `Busy` when another operation holds it. Looking
-//!   for `brew` and reading its `brew.env` files does not.
+//!   session gate. The two lists (`cask_catalogue`, `cask_outdated`) share
+//!   one scan slot: they refuse each other and any write, and run beside
+//!   other features' scans. Previews and runs are writes: `Busy` while
+//!   anything holds the gate. Looking for `brew` and reading its `brew.env`
+//!   files takes no gate.
 //! - **Single use.** A preview is spent when a run is accepted and expires
 //!   after [`PREVIEW_TTL`]. A replay says "already used", not "unknown".
 //!   Unlike Uninstall, a run that is refused before it starts for a reason the
@@ -94,7 +97,8 @@ impl TinySession {
 
     /// The bundled list of apps, each marked with whether an app with its
     /// bundle identifier is on the Mac and whether Homebrew has a record of
-    /// it. Holds the gate (it reads every app's identity).
+    /// it. Holds the cask scan slot of the gate (it reads every app's
+    /// identity).
     pub fn cask_catalogue(&self) -> Result<Vec<FfiCaskCatalogueApp>, FfiCaskError> {
         let runner = app_runner();
         let probe = RunnerProbe(runner.as_ref());
@@ -107,7 +111,8 @@ impl TinySession {
 
     /// The apps Homebrew tracks that have a newer version (the default
     /// `brew outdated`, never greedy), each with whether it is open now.
-    /// Replaces the previous list and any preview.
+    /// Holds the cask scan slot of the gate. Replaces the previous list and
+    /// any preview.
     pub fn cask_outdated(&self) -> Result<Vec<FfiOutdatedCask>, FfiCaskError> {
         let runner = app_runner();
         let probe = RunnerProbe(runner.as_ref());

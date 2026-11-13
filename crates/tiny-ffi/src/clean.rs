@@ -37,7 +37,7 @@ use tiny_core::clean::types::{CleanItem, RiskLevel};
 use tiny_core::options::CleanOptions;
 use tiny_core::runner::{CommandRunner, ToolLookup, ToolRunner};
 
-use crate::session::CancellationToken;
+use crate::session::{CancellationToken, ScanSlot};
 use crate::{FfiError, ProgressListener, TinySession};
 
 mod discovery_store;
@@ -113,8 +113,9 @@ impl CleanState {
 
 #[uniffi::export]
 impl TinySession {
-    /// Scans cleanup categories. Holds the operation gate, so it returns
-    /// `Busy` while another scan or mutation runs. A completed scan replaces
+    /// Scans cleanup categories. Holds the Clean scan slot of the operation
+    /// gate, so it returns `Busy` while a write or another Clean scan runs;
+    /// other features' scans do not refuse it. A completed scan replaces
     /// the results of the categories in `options.category`; an empty list
     /// scans by the options' risk flags and replaces everything, including
     /// categories scanned earlier by ID. It returns the merged result of all
@@ -379,7 +380,7 @@ impl TinySession {
     ) -> Result<FfiDiscovery, FfiError> {
         validate_options(&options)?;
         let home = self.clean_home()?;
-        let _gate = self.begin()?;
+        let _gate = self.begin_scan(ScanSlot::Clean)?;
         let report = |p: tiny_core::progress::Progress| progress.on_progress(p.into());
         let ctx = ScanContext::new(Some(token.flag()), probe).refusing_protected_paths(home);
         // Nothing is stored until the scan completes: a cancelled scan leaves

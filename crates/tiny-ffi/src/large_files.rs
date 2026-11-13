@@ -7,7 +7,8 @@
 //! scan's IDs only, expires, is spent before the first move (it never runs
 //! twice, even after a panic), is refused when a rescan replaced the list or
 //! the saved "always keep" rules changed, and the operation gate refuses a
-//! second scan or mutation meanwhile. Locking: session gate, then the
+//! second Large Files scan or any write meanwhile (another feature's scan
+//! may run beside this one). Locking: session gate, then the
 //! saved-rules lease, then a short state lock that never spans a Trash call
 //! or callback.
 
@@ -34,7 +35,7 @@ use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::{Matcher, PolicySnapshot};
 
 use crate::clean::{app_runner, protection_error, FfiItemOutcome, PREVIEW_TTL};
-use crate::session::CancellationToken;
+use crate::session::{CancellationToken, ScanSlot};
 use crate::{FfiError, ProgressListener, TinySession};
 
 mod records;
@@ -103,8 +104,9 @@ impl TinySession {
     /// Scans for Large Files: installers in Downloads and Desktop whose app is
     /// in Applications, then one metadata-only walk of the home for "Only copy
     /// on this Mac" (videos) and "Other large files" (500 MB, 90 days).
-    /// Read-only. Holds the operation gate, so
-    /// it returns `Busy` while another scan or mutation runs. Replaces the
+    /// Read-only. Holds the Large Files scan slot of the operation gate, so
+    /// it returns `Busy` while a write or another Large Files scan runs;
+    /// other features' scans do not refuse it. Replaces the
     /// previous scan and any preview; a cancelled scan changes nothing.
     pub fn large_files_scan(
         &self,
@@ -254,7 +256,7 @@ impl TinySession {
         token: &CancellationToken,
         progress: &dyn ProgressListener,
     ) -> Result<FfiLargeFilesScan, FfiError> {
-        let _gate = self.begin()?;
+        let _gate = self.begin_scan(ScanSlot::LargeFiles)?;
         progress.on_progress(progress_event("scan", 0, "Looking for installers"));
         token.check()?;
         let mut found = scan_installers_above(min_bytes, roots, versions, Some(token.flag()));

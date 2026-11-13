@@ -264,6 +264,30 @@ fn discovery_is_rejected_while_another_operation_runs() {
 }
 
 #[test]
+fn discovery_runs_beside_other_features_scans_and_writes_wait_for_them() {
+    let dir = fixture_dir("beside", &["a"], 1);
+    let session = TestSession::new();
+    let storage = session.begin_scan(ScanSlot::Storage).unwrap();
+    let providers: Vec<Box<dyn CleanProvider>> = vec![Box::new(Fixture::new("logs", &dir))];
+    let found = ids(&discover(&session, &providers).unwrap());
+    let preview = session.clean_preview(found.clone()).unwrap();
+    let trash = FakeTrash::default();
+    let token = CancellationToken::default();
+    let busy = execute(&session, &preview.preview_id, &dir, &trash, &token);
+    assert!(matches!(busy, Err(FfiError::Busy)));
+    let kept = session.clean_keep(found[0].clone(), 0);
+    assert!(matches!(kept, Err(FfiError::Busy)), "{kept:?}");
+    drop(storage);
+    {
+        let _own = session.begin_scan(ScanSlot::Clean).unwrap();
+        assert!(matches!(discover(&session, &[]), Err(FfiError::Busy)));
+    }
+    let report = execute(&session, &preview.preview_id, &dir, &trash, &token).unwrap();
+    assert_eq!(report.moved_count, 1);
+    remove(&dir);
+}
+
+#[test]
 fn invalid_options_are_rejected_before_scanning() {
     let session = TestSession::new();
     let bad = CleanOptions {

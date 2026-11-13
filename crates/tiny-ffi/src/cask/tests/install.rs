@@ -119,6 +119,29 @@ fn a_busy_session_or_a_missing_brew_stops_the_preview() {
 }
 
 #[test]
+fn a_preview_and_a_run_wait_for_a_scan_elsewhere() {
+    use crate::session::ScanSlot;
+    let world = installable();
+    install_ok(&world);
+    let scan = world.session.begin_scan(ScanSlot::Clean).unwrap();
+    assert!(matches!(
+        world.session.install_preview("ghostty", &world.seams()),
+        Err(FfiCaskError::Busy)
+    ));
+    drop(scan);
+    let preview = preview_install(&world);
+    let scan = world.session.begin_scan(ScanSlot::Apps).unwrap();
+    let busy = world
+        .exec(&preview.preview_id, &["ghostty"], &token())
+        .unwrap_err();
+    assert!(matches!(busy, FfiCaskError::Busy));
+    drop(scan);
+    assert!(world
+        .exec(&preview.preview_id, &["ghostty"], &token())
+        .is_ok());
+}
+
+#[test]
 fn a_brew_env_setting_that_undoes_ours_is_carried_in_the_preview() {
     let world = installable();
     let env = world.root.join("prefix/etc/homebrew/brew.env");

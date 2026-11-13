@@ -495,6 +495,33 @@ fn uninstall_shares_the_gate_with_storage_and_clean() {
 }
 
 #[test]
+fn the_app_list_loads_beside_a_scan_and_a_preview_waits_for_it() {
+    let world = World::new();
+    let scan = world
+        .session
+        .begin_scan(crate::session::ScanSlot::Clean)
+        .unwrap();
+    assert!(world.session.list_installed_apps(&world.catalog).is_ok());
+    let app_id = world.app_id();
+    let preview = || {
+        world
+            .session
+            .preview_uninstall(&app_id, &world.catalog, &world.probe)
+    };
+    assert!(matches!(preview(), Err(FfiError::Busy)));
+    drop(scan);
+    assert!(preview().is_ok());
+    let _own = world
+        .session
+        .begin_scan(crate::session::ScanSlot::Apps)
+        .unwrap();
+    assert!(matches!(
+        world.session.list_installed_apps(&world.catalog),
+        Err(FfiError::Busy)
+    ));
+}
+
+#[test]
 fn an_untrusted_home_refuses_preview_and_execute() {
     let world = World::new();
     let preview = world.preview();

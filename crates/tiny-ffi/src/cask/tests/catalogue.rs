@@ -76,6 +76,29 @@ fn an_unreadable_inventory_fails_the_catalogue_and_a_busy_session_refuses_it() {
     drop(held);
 }
 
+#[test]
+fn the_cask_lists_load_beside_a_scan_but_not_beside_each_other() {
+    use crate::session::ScanSlot;
+    let world = updatable();
+    world
+        .brew
+        .reply("list --cask --versions --json", 0, r#"{"casks":[]}"#, "");
+    {
+        let _scan = world.session.begin_scan(ScanSlot::Storage).unwrap();
+        assert!(world.session.catalogue(&world.seams()).is_ok());
+        assert!(world.session.outdated(&world.seams()).is_ok());
+    }
+    let _own = world.session.begin_scan(ScanSlot::Casks).unwrap();
+    assert!(matches!(
+        world.session.catalogue(&world.seams()),
+        Err(FfiCaskError::Busy)
+    ));
+    assert!(matches!(
+        world.session.outdated(&world.seams()),
+        Err(FfiCaskError::Busy)
+    ));
+}
+
 // ---- outdated
 
 #[test]

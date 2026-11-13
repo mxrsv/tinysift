@@ -25,7 +25,7 @@ use tiny_core::uninstall::{
 };
 
 use crate::clean::{app_runner, guards, protection_error, FfiProtectionGuard, PREVIEW_TTL};
-use crate::session::CancellationToken;
+use crate::session::{CancellationToken, ScanSlot};
 use crate::{FfiError, ProgressListener, TinySession};
 
 pub(crate) mod catalog;
@@ -90,9 +90,10 @@ pub(crate) struct Seams<'a> {
 
 #[uniffi::export]
 impl TinySession {
-    /// Lists the installed apps. Holds the operation gate (it walks every
-    /// bundle for its size), so it returns `Busy` while a scan or mutation
-    /// runs. Replaces the previous listing and any preview.
+    /// Lists the installed apps. Holds the Apps scan slot of the operation
+    /// gate (it walks every bundle for its size), so it returns `Busy` while
+    /// a write or another listing runs; other features' scans do not refuse
+    /// it. Replaces the previous listing and any preview.
     pub fn uninstall_list_apps(&self) -> Result<Vec<FfiInstalledApp>, FfiError> {
         self.list_installed_apps(&SystemCatalog)
     }
@@ -158,7 +159,7 @@ impl TinySession {
         &self,
         catalog: &dyn AppCatalog,
     ) -> Result<Vec<FfiInstalledApp>, FfiError> {
-        let _gate = self.begin()?;
+        let _gate = self.begin_scan(ScanSlot::Apps)?;
         {
             self.uninstall_state().preview = None;
         }

@@ -95,6 +95,22 @@ fn scan_is_rejected_while_another_operation_holds_the_gate() {
 }
 
 #[test]
+fn a_scan_runs_beside_other_features_scans_but_not_beside_its_own() {
+    let dir = fixture("beside");
+    let session = TinySession::new();
+    let scan = || session.scan_storage(&dir, &CancellationToken::default(), &Listener::default());
+    {
+        let _clean = session.begin_scan(ScanSlot::Clean).unwrap();
+        let _large_files = session.begin_scan(ScanSlot::LargeFiles).unwrap();
+        assert!(scan().is_ok());
+        assert!(session.is_busy(), "the other scans keep their slots");
+    }
+    let _own = session.begin_scan(ScanSlot::Storage).unwrap();
+    assert!(matches!(scan(), Err(FfiError::Busy)));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn invalid_roots_are_typed_errors_and_release_the_gate() {
     let dir = fixture("invalid");
     let session = TinySession::new();

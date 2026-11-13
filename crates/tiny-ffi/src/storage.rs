@@ -8,6 +8,7 @@ use std::sync::Arc;
 use tiny_core::space_lens::{self, SpaceNode, SpaceReport};
 use tiny_core::sys::{self, DiskCapacity};
 
+use crate::session::ScanSlot;
 use crate::{CancellationToken, FfiError, ProgressListener, TinySession};
 
 #[cfg(test)]
@@ -115,8 +116,9 @@ pub fn disk_capacity() -> Option<FfiDiskCapacity> {
 impl TinySession {
     /// Scans `root` (an absolute path without symlinked ancestors) into a
     /// depth-limited tree; drill down by scanning a child path. Holds the
-    /// operation gate, so it returns `Busy` while another scan or mutation
-    /// runs. A cancelled scan returns `Cancelled` and no partial tree.
+    /// Storage scan slot of the operation gate, so it returns `Busy` while a
+    /// write or another Storage scan runs; other features' scans do not
+    /// refuse it. A cancelled scan returns `Cancelled` and no partial tree.
     pub fn storage_scan(
         &self,
         root: String,
@@ -135,7 +137,7 @@ impl TinySession {
         token: &CancellationToken,
         progress: &dyn ProgressListener,
     ) -> Result<FfiStorageReport, FfiError> {
-        let _gate = self.begin()?;
+        let _gate = self.begin_scan(ScanSlot::Storage)?;
         let report = |p: tiny_core::progress::Progress| progress.on_progress(p.into());
         let scanned = space_lens::scan(root, Some(token.flag()), Some(&report))?;
         // A flag set after the last checkpoint still discards the tree.

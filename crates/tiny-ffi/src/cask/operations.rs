@@ -19,7 +19,7 @@ use super::{
     FfiCaskItemResult, FfiCaskPreview, FfiCaskReport, FfiOutdatedCask, Seams, StoredPreview,
 };
 use crate::clean::PREVIEW_TTL;
-use crate::session::CancellationToken;
+use crate::session::{CancellationToken, ScanSlot};
 use crate::TinySession;
 
 /// The `brew` to run, or the failure that says there is none.
@@ -73,7 +73,7 @@ impl TinySession {
         &self,
         seams: &Seams<'_>,
     ) -> Result<Vec<FfiCaskCatalogueApp>, FfiCaskError> {
-        let _gate = self.begin()?;
+        let _gate = self.begin_scan(ScanSlot::Casks)?;
         let installed = installed_apps(seams)?;
         // Best effort: without Homebrew's list the row is just not marked.
         let tracked: Vec<String> = match seams.brew.status() {
@@ -93,7 +93,7 @@ impl TinySession {
 
     /// `cask_outdated` with injected seams (the test seam).
     pub(crate) fn outdated(&self, seams: &Seams<'_>) -> Result<Vec<FfiOutdatedCask>, FfiCaskError> {
-        let _gate = self.begin()?;
+        let _gate = self.begin_scan(ScanSlot::Casks)?;
         let path = brew_path(seams)?;
         let casks = list_outdated(&Brew::new(&path, seams.brew.runner())).map_err(failed)?;
         let records = casks

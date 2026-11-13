@@ -166,8 +166,9 @@ from that, and each part is a trap if it slips:
   over the merged set.
 - **A preview is stale, not replaced, by a rescan.** `consume_preview` refuses it when a
   selected candidate is gone or the set of candidates under an item's path changed since the
-  preview was built; a preview of untouched categories runs until its TTL. The operation gate is
-  unchanged: a scan and a run never overlap.
+  preview was built; a preview of untouched categories runs until its TTL. A scan and a run still
+  never overlap: a run is a write, and the [gate](../../crates/tiny-ffi/src/session.rs) refuses
+  a write while any feature's scan runs, and every scan while a write runs.
 
 ## The desktop's checked removal
 
@@ -446,7 +447,9 @@ built like Clean's Trash path: Swift names IDs and never sends a path.
    `FfiUninstallStop` (cancellation, Automation denial, rules changed or unreadable, the app
    started mid-run). The run-time `Kept` skip stays as defence in depth.
 
-List, preview and execute share the session gate with Clean and Storage; process reads and
+List, preview and execute share the session gate with Clean and Storage: the list holds the
+Apps scan slot, so it runs beside another feature's scan, and preview and execute are writes,
+refused while anything else holds the gate. Process reads and
 signals ([`processes.rs`](../../crates/tiny-ffi/src/processes.rs)) stay outside it. Preview and execute also take the `UntrustedHome` check and the saved-rules store;
 the list reads neither. Lock order is the gate, the
 rules lease, then the short uninstall-state lock, which is never held across a probe, Trash call
