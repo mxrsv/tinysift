@@ -183,6 +183,19 @@ pub enum FfiEvidence {
         version: String,
         build: String,
     },
+    /// One of the Trash's largest top-level items, largest first: its name
+    /// in `~/.Trash`, its allocated bytes, and when it was added (Unix
+    /// seconds; `None` when the volume does not record it).
+    TrashEntry {
+        name: String,
+        bytes: u64,
+        added_at: Option<i64>,
+    },
+    /// The Trash's other top-level items.
+    TrashRest {
+        count: u64,
+        bytes: u64,
+    },
 }
 
 /// How a category's items come back after a move to Trash.
@@ -482,6 +495,16 @@ impl From<Evidence> for FfiEvidence {
                 version,
                 build,
             },
+            Evidence::TrashEntry {
+                name,
+                bytes,
+                added_at,
+            } => Self::TrashEntry {
+                name,
+                bytes,
+                added_at,
+            },
+            Evidence::TrashRest { count, bytes } => Self::TrashRest { count, bytes },
         }
     }
 }

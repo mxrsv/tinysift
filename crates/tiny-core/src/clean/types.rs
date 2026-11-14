@@ -67,6 +67,16 @@ pub enum Evidence {
         version: String,
         build: String,
     },
+    /// One of the Trash's largest top-level items: its name in `~/.Trash`,
+    /// the space it takes on disk, and when it arrived there (`None` when the
+    /// volume does not record it).
+    TrashEntry {
+        name: String,
+        bytes: u64,
+        added_at: Option<i64>,
+    },
+    /// The Trash's other top-level items, after the listed `TrashEntry`s.
+    TrashRest { count: u64, bytes: u64 },
 }
 
 /// How a category's items come back after they are moved to the Trash.

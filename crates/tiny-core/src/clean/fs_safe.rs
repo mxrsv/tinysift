@@ -253,6 +253,11 @@ pub fn dir_size_checked(root: &Path, ctx: &ScanContext<'_>) -> u64 {
 
 fn freed_size(root: &Path, ctx: &ScanContext<'_>, mut freed: FreedBytes) -> u64 {
     walk_files(root, ctx, &mut |path, meta| freed.add_file(path, meta));
+    finish_freed(root, ctx, freed)
+}
+
+/// Records what `freed` learned about `root` in `ctx` and returns its bytes.
+pub(crate) fn finish_freed(root: &Path, ctx: &ScanContext<'_>, freed: FreedBytes) -> u64 {
     let (bytes, upper_bound, shared) = freed.finish_shared();
     if upper_bound {
         ctx.note_size_upper_bound(root);
@@ -264,7 +269,11 @@ fn freed_size(root: &Path, ctx: &ScanContext<'_>, mut freed: FreedBytes) -> u64 
 }
 
 /// Calls `file` for `root` itself or for every regular file under it.
-fn walk_files(root: &Path, ctx: &ScanContext<'_>, file: &mut dyn FnMut(&Path, &fs::Metadata)) {
+pub(crate) fn walk_files(
+    root: &Path,
+    ctx: &ScanContext<'_>,
+    file: &mut dyn FnMut(&Path, &fs::Metadata),
+) {
     let meta = match fs::symlink_metadata(root) {
         Ok(m) => m,
         Err(e) => return ctx.note_unreadable(root, &e),
