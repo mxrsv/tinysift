@@ -27,7 +27,11 @@
 //!   cask in the default `brew outdated` (never `--greedy`) whose app is not
 //!   already at or past the cask's version; the rule that orders versions is
 //!   in `version.rs`. Updates are run with `--no-quit`: an open app is
-//!   refused, never closed for the user.
+//!   refused, never closed for the user. A run installs only the version its
+//!   preview showed; an index that moved since is `VersionChanged`.
+//! - **One background write.** [`refresh_index`] is the only `brew update`:
+//!   the app runs it at most once a day. Contention defers it, and no network
+//!   or a timeout ends it; neither is an error.
 //! - **Cancel.** A cancel interrupts a cask that is still downloading. Once
 //!   `brew` reports it is installing (`run_item`), the cask is let finish, and
 //!   nothing after it starts. [`RUN_TIMEOUT`] is the only hard stop then.
@@ -46,6 +50,7 @@ mod info;
 mod install;
 mod outdated;
 mod plan;
+mod refresh;
 mod run;
 mod tracked;
 mod update;
@@ -64,6 +69,7 @@ pub use info::{display_version, read_cask_info, valid_token, CaskInfo};
 pub use install::{plan_install, run_install};
 pub use outdated::{list_outdated, still_outdated, OutdatedCask};
 pub use plan::{CaskAction, CaskPlanItem};
+pub use refresh::{refresh_index, IndexRefresh, REFRESH_TIMEOUT};
 pub use run::{run_item, CaskProgress, ProgressSink, RunOutcome, Stage, RUN_TIMEOUT};
 pub use tracked::{list_tracked, TrackedCask};
 pub use update::{

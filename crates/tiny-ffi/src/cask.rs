@@ -10,7 +10,9 @@
 //!   session gate. The two lists (`cask_catalogue`, `cask_outdated`) share
 //!   one scan slot: they refuse each other and any write, and run beside
 //!   other features' scans. Previews and runs are writes: `Busy` while
-//!   anything holds the gate. Looking for `brew` and reading its `brew.env`
+//!   anything holds the gate. `cask_refresh_index` (`brew update`) takes the
+//!   same scan slot, so a list, a preview or a run never overlaps it, and
+//!   answers `Deferred` instead of `Busy`. Looking for `brew` and reading its `brew.env`
 //!   files takes no gate.
 //! - **Single use.** A preview is spent when a run is accepted and expires
 //!   after [`PREVIEW_TTL`]. A replay says "already used", not "unknown".
@@ -117,6 +119,21 @@ impl TinySession {
         let runner = app_runner();
         let probe = RunnerProbe(runner.as_ref());
         self.outdated(&Seams {
+            brew: &SystemBrew::new(),
+            catalog: &SystemCatalog,
+            probe: &probe,
+        })
+    }
+
+    /// Refreshes Homebrew's index with `brew update`, for the app's background
+    /// check. Holds the cask scan slot of the gate for the whole run; there is
+    /// no cancel. Contention is `Deferred` and a run that stopped is `Ended`;
+    /// `Err` only when there is no Homebrew to run. Keeps the update list and
+    /// any preview: a run checks the version it installs again.
+    pub fn cask_refresh_index(&self) -> Result<FfiIndexRefresh, FfiCaskError> {
+        let runner = app_runner();
+        let probe = RunnerProbe(runner.as_ref());
+        self.refresh_index(&Seams {
             brew: &SystemBrew::new(),
             catalog: &SystemCatalog,
             probe: &probe,

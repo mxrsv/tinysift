@@ -69,7 +69,7 @@ pub fn brew_lookup() -> ToolLookup {
     isolated_brew(ToolLookup::new(None, fallbacks), account_home())
 }
 
-fn isolated_brew(lookup: ToolLookup, home: Option<PathBuf>) -> ToolLookup {
+pub(super) fn isolated_brew(lookup: ToolLookup, home: Option<PathBuf>) -> ToolLookup {
     lookup.with_env(BREW_ENV).isolated(home, BREW_PATH)
 }
 

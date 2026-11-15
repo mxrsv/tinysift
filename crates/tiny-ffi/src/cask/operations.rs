@@ -7,8 +7,9 @@ use std::time::{Instant, SystemTime};
 
 use tiny_core::cask::{
     brew_env_warnings, catalogue_with_presence, check_apps_closed, list_outdated, list_tracked,
-    plan_install, plan_updates, run_install, run_state, run_updates, Brew, BrewEnvWarning,
-    CaskAction, CaskFailure, CaskPlanItem, CaskProgress, HomebrewStatus, RunOutcome,
+    plan_install, plan_updates, refresh_index, run_install, run_state, run_updates, Brew,
+    BrewEnvWarning, CaskAction, CaskFailure, CaskPlanItem, CaskProgress, HomebrewStatus,
+    IndexRefresh, RunOutcome,
 };
 use tiny_core::uninstall::AppEntry;
 
@@ -16,7 +17,8 @@ use super::error::failed;
 use super::records;
 use super::{
     CaskProgressListener, CaskState, FfiAppRunState, FfiCaskCatalogueApp, FfiCaskError,
-    FfiCaskItemResult, FfiCaskPreview, FfiCaskReport, FfiOutdatedCask, Seams, StoredPreview,
+    FfiCaskItemResult, FfiCaskPreview, FfiCaskReport, FfiIndexRefresh, FfiOutdatedCask, Seams,
+    StoredPreview,
 };
 use crate::clean::PREVIEW_TTL;
 use crate::session::{CancellationToken, ScanSlot};
@@ -104,6 +106,23 @@ impl TinySession {
         state.listing = Some(casks);
         state.preview = None;
         Ok(records)
+    }
+
+    /// `cask_refresh_index` with injected seams (the test seam).
+    pub(crate) fn refresh_index(&self, seams: &Seams<'_>) -> Result<FfiIndexRefresh, FfiCaskError> {
+        let path = brew_path(seams)?;
+        let Ok(_gate) = self.begin_scan(ScanSlot::Casks) else {
+            return Ok(FfiIndexRefresh::Deferred);
+        };
+        Ok(
+            match refresh_index(&Brew::new(&path, seams.brew.runner())).map_err(failed)? {
+                IndexRefresh::Refreshed => FfiIndexRefresh::Refreshed,
+                IndexRefresh::Deferred => FfiIndexRefresh::Deferred,
+                IndexRefresh::Ended(failure) => FfiIndexRefresh::Ended {
+                    failure: (&failure).into(),
+                },
+            },
+        )
     }
 
     /// `cask_install_preview` with injected seams (the test seam).

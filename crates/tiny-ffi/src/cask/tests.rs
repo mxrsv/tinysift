@@ -75,4 +75,5 @@ fn preview_update(world: &World, tokens: &[&str]) -> FfiCaskPreview {
 mod catalogue;
 mod install;
 mod live;
+mod refresh;
 mod update;

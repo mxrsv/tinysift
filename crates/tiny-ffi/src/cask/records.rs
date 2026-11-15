@@ -134,6 +134,20 @@ pub struct FfiCaskPreview {
     pub expires_at: i64,
 }
 
+/// How a refresh of Homebrew's index ended. None is an error: the client
+/// tries `Deferred` again later and leaves no mark for `Ended`.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
+pub enum FfiIndexRefresh {
+    /// `brew update` finished.
+    Refreshed,
+    /// Something else held the cask slot or a write held the gate, or another
+    /// `brew` held Homebrew's lock: nothing ran to an end.
+    Deferred,
+    /// It ran and stopped: no network (`Network`), `TimedOut`, or another
+    /// failure of Homebrew's own.
+    Ended { failure: FfiCaskFailure },
+}
+
 /// An app Homebrew tracks that has a newer version.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
 pub struct FfiOutdatedCask {

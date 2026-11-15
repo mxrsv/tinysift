@@ -28,7 +28,7 @@ pub(crate) enum ScanSlot {
     LargeFiles,
     /// `uninstall_list_apps`.
     Apps,
-    /// `cask_catalogue` and `cask_outdated`: both run `brew`.
+    /// `cask_catalogue`, `cask_outdated` and `cask_refresh_index`: all run `brew`.
     Casks,
 }
 
