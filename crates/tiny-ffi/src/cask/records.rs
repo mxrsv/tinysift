@@ -68,6 +68,9 @@ pub enum FfiCaskFailureKind {
     HomebrewMissing,
     NotInCatalogue,
     NotOutdated,
+    /// Homebrew now offers another version than the review showed: review it
+    /// again.
+    VersionChanged,
     NeedsAdministrator,
     /// The cask only has an installer to open by hand.
     ManualInstaller,
@@ -92,7 +95,7 @@ pub struct FfiCaskFailure {
     pub recovery: String,
     /// What the failure is about: the name of the app that is open
     /// (`AppRunning`, `AppCheckFailed`), the path of the app that is in the
-    /// way (`AppExists`), or the cask token (`NotInCatalogue`, `NotOutdated`,
+    /// way (`AppExists`), or the cask token (`NotInCatalogue`, `NotOutdated`, `VersionChanged`,
     /// `ManualInstaller`, `AlreadyInstalled`, `CaskNotFound`).
     pub subject: Option<String>,
     /// `brew`'s own words or the underlying error, shortened.
@@ -294,6 +297,7 @@ impl From<&CaskFailure> for FfiCaskFailure {
             CaskFailure::HomebrewMissing => (Kind::HomebrewMissing, None),
             CaskFailure::NotInCatalogue { token } => (Kind::NotInCatalogue, Some(token)),
             CaskFailure::NotOutdated { token } => (Kind::NotOutdated, Some(token)),
+            CaskFailure::VersionChanged { token, .. } => (Kind::VersionChanged, Some(token)),
             CaskFailure::NeedsAdministrator => (Kind::NeedsAdministrator, None),
             CaskFailure::ManualInstaller { token } => (Kind::ManualInstaller, Some(token)),
             CaskFailure::AppRunning { app } => (Kind::AppRunning, Some(app)),

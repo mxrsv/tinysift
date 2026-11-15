@@ -266,6 +266,34 @@ fn a_cask_that_updated_itself_after_the_preview_is_reported_not_upgraded() {
 }
 
 #[test]
+fn an_index_that_moved_after_the_preview_refuses_the_cask_and_asks_for_a_new_review() {
+    let world = updatable();
+    upgrade_replies(&world, &["ghostty"]);
+    let preview = preview_update(&world, &["ghostty"]);
+    // A `brew update` since the review: Homebrew now offers 3.0, not 2.0.
+    world.info(
+        "ghostty",
+        Spec {
+            version: "3.0",
+            ..outdated_spec("Ghostty")
+        },
+    );
+    let report = world
+        .exec(&preview.preview_id, &["ghostty"], &token())
+        .unwrap();
+    let FfiCaskOutcome::Failed { failure } = &report.results[0].outcome else {
+        panic!("ghostty fails");
+    };
+    assert_eq!(failure.kind, FfiCaskFailureKind::VersionChanged);
+    assert_eq!(failure.subject.as_deref(), Some("ghostty"));
+    assert_eq!(failure.recovery, "Review the update again.");
+    assert!(!world
+        .brew
+        .calls()
+        .contains(&"upgrade --cask --no-quit ghostty".to_string()));
+}
+
+#[test]
 fn a_cancel_leaves_the_rest_of_a_batch_not_attempted() {
     let world = updatable();
     upgrade_replies(&world, &["ghostty", "iterm2"]);

@@ -426,3 +426,94 @@ fn a_failing_fresh_read_of_the_versions_stops_that_cask_before_the_upgrade() {
     ));
     assert!(!calls(&runner).contains(&upgrade("a")));
 }
+
+/// `brew info` right before the upgrade once the index has moved the cask to
+/// `version`: installed 1.0, the app on disk at 1.0.
+fn moved_info(token: &str, version: &str) -> String {
+    let mut info = simple_cask(token, version, &format!("{token}.app"));
+    info["installed"] = serde_json::json!("1.0");
+    info["bundle_short_version"] = serde_json::json!("1.0");
+    info["outdated"] = serde_json::json!(true);
+    info_json(&[info])
+}
+
+#[test]
+fn an_index_that_moved_past_the_reviewed_version_is_not_upgraded_and_asks_for_a_new_review() {
+    // The review showed 2.0; a `brew update` (TinySift's or the user's) then
+    // moved the cask to 3.0. `brew upgrade` would install 3.0, which nobody
+    // reviewed.
+    let dir = tempfile::tempdir().unwrap();
+    let items = [item(dir.path(), "a"), item(dir.path(), "b")];
+    let runner = runner_for(&["a", "b"]).with_exit(
+        BREW_PATH,
+        &["info", "--cask", "--json=v2", "a"],
+        0,
+        &moved_info("a", "3.0"),
+    );
+    let results = run_updates(
+        &brew(&runner),
+        &items,
+        &MockChecker::none(),
+        &executable,
+        None,
+        None,
+    );
+    assert_eq!(
+        results[0].1,
+        RunOutcome::Failed(CaskFailure::VersionChanged {
+            token: "a".into(),
+            reviewed: "2.0".into(),
+            offered: "3.0".into(),
+        })
+    );
+    assert_eq!(results[1].1, RunOutcome::Done, "the next cask goes on");
+    assert!(!calls(&runner).contains(&upgrade("a")));
+}
+
+#[test]
+fn a_changed_build_suffix_on_the_reviewed_version_still_upgrades() {
+    // The review shows the version without Homebrew's `,build` suffix, so the
+    // same shown version is the version the user approved.
+    let dir = tempfile::tempdir().unwrap();
+    let items = [item(dir.path(), "a")];
+    let runner = runner_for(&["a"]).with_exit(
+        BREW_PATH,
+        &["info", "--cask", "--json=v2", "a"],
+        0,
+        &moved_info("a", "2.0,4711"),
+    );
+    let results = run_updates(
+        &brew(&runner),
+        &items,
+        &MockChecker::none(),
+        &executable,
+        None,
+        None,
+    );
+    assert_eq!(results[0].1, RunOutcome::Done);
+}
+
+#[test]
+fn a_fresh_read_that_leaves_the_cask_out_is_not_upgraded() {
+    let dir = tempfile::tempdir().unwrap();
+    let items = [item(dir.path(), "a")];
+    let runner = runner_for(&["a"]).with_exit(
+        BREW_PATH,
+        &["info", "--cask", "--json=v2", "a"],
+        0,
+        &info_json(&[]),
+    );
+    let results = run_updates(
+        &brew(&runner),
+        &items,
+        &MockChecker::none(),
+        &executable,
+        None,
+        None,
+    );
+    assert_eq!(
+        results[0].1,
+        RunOutcome::Failed(CaskFailure::NotOutdated { token: "a".into() })
+    );
+    assert!(!calls(&runner).contains(&upgrade("a")));
+}

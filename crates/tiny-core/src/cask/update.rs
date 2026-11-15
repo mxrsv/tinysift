@@ -20,6 +20,13 @@
 //! cask, so an app that updated itself past the cask is still listed. The
 //! app's version is therefore read again too and an update towards a version
 //! the app is already at or past is refused ([`version`](super::version)).
+//!
+//! **Only the reviewed version.** `brew upgrade` installs whatever the index
+//! names when it runs, and the index moves with every `brew update`. The same
+//! fresh read compares the cask's version, as the review shows it (without
+//! Homebrew's `,build` suffix), with the plan's; another version is refused as
+//! [`CaskFailure::VersionChanged`] and asks for a new review. An index changed
+//! in the moment between that read and the spawn is not seen.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -247,23 +254,31 @@ fn run_one(
         Ok(false) => return not_outdated(),
         Ok(true) => {}
     }
-    // Fresh versions: the list stays true for a cask that does not declare
+    // Fresh versions. The list stays true for a cask that does not declare
     // `auto_updates` even once the app has gone past it, and then an upgrade
-    // would be a downgrade.
-    match read_cask_info(brew, &[&item.token]) {
+    // would be a downgrade. And the index may have moved since the review (a
+    // `brew update`), and `brew upgrade` installs what the index names now:
+    // only the version the review showed may be installed.
+    let infos = match read_cask_info(brew, &[&item.token]) {
         Err(failure) => return fail(failure),
-        Ok(infos) => {
-            let past = infos
-                .iter()
-                .find(|info| info.token == item.token)
-                .is_some_and(|info| {
-                    info.from_version()
-                        .is_some_and(|current| !offers_update(current, &info.version))
-                });
-            if past {
-                return not_outdated();
-            }
-        }
+        Ok(infos) => infos,
+    };
+    let Some(info) = infos.iter().find(|info| info.token == item.token) else {
+        return not_outdated();
+    };
+    if info
+        .from_version()
+        .is_some_and(|current| !offers_update(current, &info.version))
+    {
+        return not_outdated();
+    }
+    let offered = display_version(&info.version);
+    if offered != item.version {
+        return fail(CaskFailure::VersionChanged {
+            token: item.token.clone(),
+            reviewed: item.version.clone(),
+            offered: offered.to_string(),
+        });
     }
     // Last, because both reads above took time: an app opened since the first
     // probe would be quit by `brew` (it is also told `--no-quit`).

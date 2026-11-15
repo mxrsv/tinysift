@@ -53,6 +53,13 @@ pub enum CaskFailure {
     NotOutdated {
         token: String,
     },
+    /// Homebrew now offers another version than the review showed (its index
+    /// changed since), so the update is refused until it is reviewed again.
+    VersionChanged {
+        token: String,
+        reviewed: String,
+        offered: String,
+    },
     /// The cask's installer needs an administrator password.
     NeedsAdministrator,
     /// The cask only offers an installer to open by hand, which installs
@@ -108,6 +115,11 @@ impl CaskFailure {
                 format!("{token} is not an app TinySift can install.")
             }
             Self::NotOutdated { token } => format!("{token} is already up to date."),
+            Self::VersionChanged {
+                token,
+                reviewed,
+                offered,
+            } => format!("Homebrew now offers {token} {offered}, not the {reviewed} you reviewed."),
             Self::NeedsAdministrator => "This app's installer asks for an administrator password, \
                  which TinySift cannot give Homebrew."
                 .into(),
@@ -139,6 +151,7 @@ impl CaskFailure {
             Self::HomebrewMissing => "Install Homebrew from brew.sh, then check again.".into(),
             Self::NotInCatalogue { .. } => "Pick an app from the list.".into(),
             Self::NotOutdated { .. } => "Look for updates again.".into(),
+            Self::VersionChanged { .. } => "Review the update again.".into(),
             Self::NeedsAdministrator => {
                 "Run the command in Terminal, where Homebrew can ask for the password.".into()
             }

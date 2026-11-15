@@ -146,6 +146,11 @@ fn every_failure_has_a_problem_and_a_recovery() {
         CaskFailure::HomebrewMissing,
         CaskFailure::NotInCatalogue { token: "t".into() },
         CaskFailure::NotOutdated { token: "t".into() },
+        CaskFailure::VersionChanged {
+            token: "t".into(),
+            reviewed: "1".into(),
+            offered: "2".into(),
+        },
         CaskFailure::NeedsAdministrator,
         CaskFailure::AppRunning { app: "A".into() },
         CaskFailure::AppCheckFailed {
