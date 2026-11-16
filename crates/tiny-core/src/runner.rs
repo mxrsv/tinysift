@@ -315,6 +315,23 @@ pub trait CommandRunner: Send + Sync {
         timeout: Duration,
     ) -> Result<CommandOutcome, CommandError>;
 
+    /// Like `output`, but the command writes its stdout and stderr, together,
+    /// to the file at `log` instead of pipes, and the outcome's `stdout` is
+    /// that file. A command that must not die when its client quits uses it:
+    /// a closed pipe kills a command with `SIGPIPE` the next time it prints.
+    /// The default has no process: it runs `output`, so fakes need not
+    /// implement it.
+    fn output_to(
+        &self,
+        bin: &str,
+        args: &[&str],
+        timeout: Duration,
+        log: &Path,
+    ) -> Result<CommandOutcome, CommandError> {
+        let _ = log;
+        self.output(bin, args, timeout)
+    }
+
     /// Like `output`, but hands each line the command prints (stdout and
     /// stderr, as they arrive) to `on_line` and stops the command when
     /// `cancel` is raised. The default has no process to watch: it runs
@@ -405,6 +422,57 @@ impl ToolRunner {
 }
 
 impl CommandRunner for ToolRunner {
+    fn output_to(
+        &self,
+        bin: &str,
+        args: &[&str],
+        timeout: Duration,
+        log: &Path,
+    ) -> Result<CommandOutcome, CommandError> {
+        let spawn_error = |error: io::Error| spawn_failure(bin, error);
+        let command = self
+            .lookup
+            .command(bin)
+            .ok_or_else(|| CommandError::NotFound(bin.to_string()))?;
+        // A fresh file: anything already at `log`, a link included, is
+        // removed rather than written through.
+        match std::fs::remove_file(log) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => {
+                return Err(spawn_error(error))
+            }
+            _ => {}
+        }
+        let file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(log)
+            .map_err(spawn_error)?;
+        let session = self.lookup.isolation.is_some();
+        let mut child =
+            ChildLifecycle::spawn_to(command, args, self.own_process_group, session, file)
+                .map_err(spawn_error)?;
+        let deadline = Instant::now() + timeout;
+        let status = loop {
+            if child.exited().map_err(spawn_error)? {
+                break child.wait().map_err(spawn_error)?;
+            }
+            if Instant::now() >= deadline {
+                child.kill().map_err(spawn_error)?;
+                return Err(CommandError::Timeout {
+                    bin: bin.to_string(),
+                    timeout_ms: timeout.as_millis() as u64,
+                });
+            }
+            thread::sleep(POLL_INTERVAL);
+        };
+        let text = std::fs::read(log).map_err(spawn_error)?;
+        Ok(CommandOutcome {
+            status: status.code(),
+            stdout: String::from_utf8_lossy(&text).into_owned(),
+            stderr: String::new(),
+        })
+    }
+
     fn which(&self, bin: &str) -> bool {
         self.lookup.resolve(bin).is_some()
     }

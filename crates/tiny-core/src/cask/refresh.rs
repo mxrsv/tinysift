@@ -10,7 +10,11 @@
 //! again later) and anything that ran to an end without refreshing is
 //! [`IndexRefresh::Ended`]. Only a missing Homebrew is an error. There is no
 //! cancel; [`REFRESH_TIMEOUT`] is the one hard stop, for a `brew` that hangs.
+//! `brew` writes to a log file, not to pipes: if the app quits mid-refresh its
+//! pipes would close and the next line `brew` prints would kill it with
+//! `SIGPIPE`, perhaps in the middle of a migration.
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use super::brew::Brew;
@@ -26,7 +30,18 @@ pub const REFRESH_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 /// downloading ("Cannot lock <file> for download!", `cmd/update.sh`). Never
 /// git's "cannot lock ref": a stale ref lock lasts, and as a deferral it would
 /// run `brew update` every hour without ever counting an attempt.
-const CONTENTION: &[&str] = &["process is already running", "for download!"];
+/// Homebrew before 4.3.13 (2024-07-30) said "Another active Homebrew update
+/// process is already in progress."
+const CONTENTION: &[&str] = &[
+    "process is already running",
+    "process is already in progress",
+    "for download!",
+];
+
+/// Where `brew update` writes while it runs; removed once it is read.
+fn log_path() -> PathBuf {
+    std::env::temp_dir().join(format!("tinysift-brew-update-{}.log", std::process::id()))
+}
 
 /// How a refresh ended.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,7 +58,11 @@ pub enum IndexRefresh {
 
 /// Runs `brew update`. `Err` only when there is no `brew` to run.
 pub fn refresh_index(brew: &Brew<'_>) -> Result<IndexRefresh, CaskFailure> {
-    match brew.output(&["update"], REFRESH_TIMEOUT) {
+    let log = log_path();
+    let result = brew.output_to(&["update"], REFRESH_TIMEOUT, &log);
+    // Only after an end: a timed-out `brew` was killed, a finished one wrote all.
+    let _ = std::fs::remove_file(&log);
+    match result {
         Err(CaskFailure::HomebrewMissing) => Err(CaskFailure::HomebrewMissing),
         Err(CaskFailure::TimedOut { .. }) => {
             Ok(IndexRefresh::Ended(CaskFailure::TimedOut { running: true }))

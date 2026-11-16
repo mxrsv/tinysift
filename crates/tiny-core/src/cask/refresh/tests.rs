@@ -30,8 +30,11 @@ fn a_finished_update_is_refreshed_and_runs_only_brew_update() {
 
 #[test]
 fn another_brew_holding_a_lock_defers_the_refresh() {
-    // Homebrew 7's `utils/lock.sh` and `cmd/update.sh`, word for word.
+    // Homebrew 7's `utils/lock.sh` and `cmd/update.sh`, and the lock before
+    // Homebrew 4.3.13, word for word.
     for stderr in [
+        "Error: Another active Homebrew update process is already in progress.\n\
+         Please wait for it to finish or terminate it to continue.\n",
         "Error: Another `brew update` process is already running.\n\
          Please wait for it to finish or terminate it to continue.\n",
         "Error: Cannot lock cask.jws.json for download!\n",

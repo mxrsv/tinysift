@@ -5,7 +5,8 @@
 //! file, the prefix file and the user's `~/.homebrew/brew.env`. A user who
 //! turned on greedy upgrades there would make `brew outdated` list apps that
 //! updated themselves, and one who set `HOMEBREW_NO_SUDO` or
-//! `HOMEBREW_NO_AUTO_UPDATE` could change what this module's callers rely on.
+//! `HOMEBREW_NO_AUTO_UPDATE` (or `HOMEBREW_FORCE_API_AUTO_UPDATE`, which
+//! overrides it) could change what this module's callers rely on.
 //! Core cannot stop that, so a preview carries the file and the variable.
 //!
 //! The same files can also set `http_proxy`, `https_proxy`, `all_proxy` and
@@ -25,6 +26,9 @@ fn matters(name: &str) -> bool {
     name.starts_with("HOMEBREW_UPGRADE_GREEDY")
         || name == "HOMEBREW_NO_SUDO"
         || name == "HOMEBREW_NO_AUTO_UPDATE"
+        // Overrides `HOMEBREW_NO_AUTO_UPDATE` for the API index (`api.rb`),
+        // so `brew upgrade` could fetch an index newer than the review's.
+        || name == "HOMEBREW_FORCE_API_AUTO_UPDATE"
 }
 
 /// A setting in a `brew.env` file that `brew` would apply over ours.
@@ -119,7 +123,8 @@ mod tests {
              HOMEBREW_UPGRADE_GREEDY=1\n  HOMEBREW_UPGRADE_GREEDY_CASKS=x  \n\
              HOMEBREW_NO_SUDO=0\nHOMEBREW_NO_AUTO_UPDATE=\n\
              HOMEBREW_CASK_OPTS=--no-quarantine\nHOMEBREW_NO_ANALYTICS=1\n\
-             HOMEBREW_NO_SUDO_FOR_REAL=1\nHOMEBREW_NO_SUDO\n",
+             HOMEBREW_NO_SUDO_FOR_REAL=1\nHOMEBREW_NO_SUDO\n\
+             HOMEBREW_FORCE_API_AUTO_UPDATE=1\n",
         );
         let file = home.path().join(".homebrew/brew.env");
         let found = warnings_in(&file);
@@ -130,7 +135,8 @@ mod tests {
                 "HOMEBREW_UPGRADE_GREEDY",
                 "HOMEBREW_UPGRADE_GREEDY_CASKS",
                 "HOMEBREW_NO_SUDO",
-                "HOMEBREW_NO_AUTO_UPDATE"
+                "HOMEBREW_NO_AUTO_UPDATE",
+                "HOMEBREW_FORCE_API_AUTO_UPDATE"
             ]
         );
         assert!(found.iter().all(|w| w.file == file));

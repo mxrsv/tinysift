@@ -4,6 +4,7 @@
 //! `waitid(WNOWAIT)` observes exit without releasing that identity. No other code
 //! may wait for these children (including a process-wide SIGCHLD reaper).
 
+use std::fs::File;
 use std::io;
 use std::os::unix::process::CommandExt;
 use std::process::{Child, ChildStderr, ChildStdout, Command, ExitStatus, Stdio};
@@ -30,6 +31,29 @@ impl ChildLifecycle {
     /// group of its own too. `setsid` fails for a process that already leads
     /// a group, so no `process_group(0)` here.
     pub(super) fn spawn_session(mut command: Command, args: &[&str]) -> io::Result<Self> {
+        Self::into_session(&mut command);
+        Self::start(command, args, true)
+    }
+
+    /// `spawn` or `spawn_session` with stdout and stderr written to `log`
+    /// instead of pipes: no pipe closes under the child if this process ends.
+    pub(super) fn spawn_to(
+        mut command: Command,
+        args: &[&str],
+        own_group: bool,
+        session: bool,
+        log: File,
+    ) -> io::Result<Self> {
+        if session {
+            Self::into_session(&mut command);
+        } else if own_group {
+            command.process_group(0);
+        }
+        let output = (Stdio::from(log.try_clone()?), Stdio::from(log));
+        Self::start_with(command, args, own_group || session, output)
+    }
+
+    fn into_session(command: &mut Command) {
         // SAFETY: the closure runs between fork and exec and calls only
         // setsid(2), which is async-signal-safe and touches no memory.
         unsafe {
@@ -38,15 +62,23 @@ impl ChildLifecycle {
                 _ => Ok(()),
             });
         }
-        Self::start(command, args, true)
     }
 
-    fn start(mut command: Command, args: &[&str], own_group: bool) -> io::Result<Self> {
+    fn start(command: Command, args: &[&str], own_group: bool) -> io::Result<Self> {
+        Self::start_with(command, args, own_group, (Stdio::piped(), Stdio::piped()))
+    }
+
+    fn start_with(
+        mut command: Command,
+        args: &[&str],
+        own_group: bool,
+        (stdout, stderr): (Stdio, Stdio),
+    ) -> io::Result<Self> {
         let child = command
             .args(args)
             .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stdout(stdout)
+            .stderr(stderr)
             .spawn()?;
         Ok(Self {
             child,

@@ -114,6 +114,20 @@ impl<'a> Brew<'a> {
             })
     }
 
+    /// [`output`](Self::output) with `brew`'s output in the file at `log`
+    /// rather than pipes, so `brew` finishes even if the app quits meanwhile.
+    pub(super) fn output_to(
+        &self,
+        args: &[&str],
+        timeout: Duration,
+        log: &Path,
+    ) -> Result<CommandOutcome, CaskFailure> {
+        let bin = self.path.to_str().ok_or(CaskFailure::HomebrewMissing)?;
+        self.runner
+            .output_to(bin, args, timeout, log)
+            .map_err(CaskFailure::from)
+    }
+
     /// Runs `brew args...` handing each line it prints to `on_line`, until it
     /// ends, `timeout` passes or `cancel` is raised.
     pub(super) fn stream(

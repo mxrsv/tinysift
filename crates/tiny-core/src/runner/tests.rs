@@ -430,3 +430,42 @@ fn an_absolute_path_resolves_only_to_an_existing_executable() {
     );
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn output_to_writes_to_the_log_not_to_pipes_and_reads_it_back() {
+    // No pipe under the command: when the client quits, nothing closes under
+    // it, so its next line cannot kill it with SIGPIPE.
+    let dir = tempfile::tempdir().unwrap();
+    let log = dir.path().join("brew.log");
+    std::fs::write(&log, "stale\n").unwrap();
+    let outcome = ToolRunner::new(ToolLookup::default())
+        .output_to(
+            SH,
+            &["-c", "[ -p /dev/stdout ] && exit 7; [ -p /dev/stderr ] && exit 8; echo out; echo err >&2; exit 3"],
+            GENEROUS,
+            &log,
+        )
+        .expect("sh runs");
+    assert_eq!(outcome.status, Some(3), "{outcome:?}");
+    assert_eq!(
+        outcome.stdout, "out\nerr\n",
+        "both streams, and nothing from before"
+    );
+}
+
+#[test]
+fn output_to_times_out_and_kills_the_child() {
+    let dir = tempfile::tempdir().unwrap();
+    let started = Instant::now();
+    let result = ToolRunner::new(ToolLookup::default()).output_to(
+        SH,
+        &["-c", "sleep 5"],
+        Duration::from_millis(100),
+        &dir.path().join("brew.log"),
+    );
+    assert!(
+        matches!(result, Err(CommandError::Timeout { .. })),
+        "{result:?}"
+    );
+    assert!(started.elapsed() < Duration::from_secs(3));
+}
