@@ -42,6 +42,22 @@ fn another_brew_holding_a_lock_defers_the_refresh() {
 }
 
 #[test]
+fn a_stale_git_ref_lock_in_a_tap_ends_the_refresh_instead_of_deferring_it() {
+    // It does not go away by waiting, so it must count as an attempt.
+    let (_, refreshed) = refresh_with(Ok(outcome(
+        1,
+        "",
+        "error: cannot lock ref 'refs/remotes/origin/main': Unable to create \
+         '/opt/homebrew/Library/Taps/someone/homebrew-tap/.git/refs/remotes/origin/main.lock': File exists.\n\
+         Error: Fetching /opt/homebrew/Library/Taps/someone/homebrew-tap failed!\n",
+    )));
+    assert!(
+        matches!(refreshed, Ok(IndexRefresh::Ended(_))),
+        "{refreshed:?}"
+    );
+}
+
+#[test]
 fn no_network_ends_the_refresh_without_an_error() {
     let (_, refreshed) = refresh_with(Ok(outcome(
         1,

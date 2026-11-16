@@ -24,8 +24,9 @@
 //! **Only the reviewed version.** `brew upgrade` installs whatever the index
 //! names when it runs, and the index moves with every `brew update`. The same
 //! fresh read compares the cask's version, as the review shows it (without
-//! Homebrew's `,build` suffix), with the plan's; another version is refused as
-//! [`CaskFailure::VersionChanged`] and asks for a new review. An index changed
+//! Homebrew's `,build` suffix), and its download host with the plan's; another
+//! version or host is refused as [`CaskFailure::VersionChanged`] and asks for
+//! a new review. An index changed
 //! in the moment between that read and the spawn is not seen.
 
 use std::fs;
@@ -273,7 +274,9 @@ fn run_one(
         return not_outdated();
     }
     let offered = display_version(&info.version);
-    if offered != item.version {
+    // The review also showed where the download comes from: a cask that moved
+    // its download without a new version is not what was reviewed either.
+    if offered != item.version || info.download_host != item.download_host {
         return fail(CaskFailure::VersionChanged {
             token: item.token.clone(),
             reviewed: item.version.clone(),

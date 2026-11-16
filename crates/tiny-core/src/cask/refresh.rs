@@ -20,10 +20,13 @@ use super::failure::{classify_exit, CaskFailure};
 /// mid-fetch can leave a git lock behind in a tap, so it is generous.
 pub const REFRESH_TIMEOUT: Duration = Duration::from_secs(10 * 60);
 
-/// What `brew update` says when another `brew` holds a lock it needs: its own
-/// `update` lock (`utils/lock.sh`) or an API file another `brew` is
-/// downloading (`cmd/update.sh`), as Homebrew 7 words them.
-const CONTENTION: &[&str] = &["process is already running", "cannot lock"];
+/// What `brew update` says when another `brew` holds a lock it needs, in
+/// Homebrew 7's own words: its `update` lock ("Another `brew update` process
+/// is already running", `utils/lock.sh`) or an API file another `brew` is
+/// downloading ("Cannot lock <file> for download!", `cmd/update.sh`). Never
+/// git's "cannot lock ref": a stale ref lock lasts, and as a deferral it would
+/// run `brew update` every hour without ever counting an attempt.
+const CONTENTION: &[&str] = &["process is already running", "for download!"];
 
 /// How a refresh ended.
 #[derive(Debug, Clone, PartialEq, Eq)]

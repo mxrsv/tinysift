@@ -517,3 +517,39 @@ fn a_fresh_read_that_leaves_the_cask_out_is_not_upgraded() {
     );
     assert!(!calls(&runner).contains(&upgrade("a")));
 }
+
+#[test]
+fn a_cask_that_moved_its_download_since_the_review_is_not_upgraded() {
+    // Same version, another host: not what the review showed.
+    let dir = tempfile::tempdir().unwrap();
+    let items = [item(dir.path(), "a")];
+    let mut moved = simple_cask("a", "2.0", "a.app");
+    moved["url"] = serde_json::json!("https://elsewhere.example.net/a/2.0.dmg");
+    moved["installed"] = serde_json::json!("1.0");
+    moved["bundle_short_version"] = serde_json::json!("1.0");
+    moved["outdated"] = serde_json::json!(true);
+    let runner = runner_for(&["a"]).with_exit(
+        BREW_PATH,
+        &["info", "--cask", "--json=v2", "a"],
+        0,
+        &info_json(&[moved]),
+    );
+    let results = run_updates(
+        &brew(&runner),
+        &items,
+        &MockChecker::none(),
+        &executable,
+        None,
+        None,
+    );
+    let RunOutcome::Failed(failure) = &results[0].1 else {
+        panic!("refused: {:?}", results[0].1);
+    };
+    assert!(matches!(failure, CaskFailure::VersionChanged { .. }));
+    assert!(
+        failure.problem().contains("downloads from"),
+        "{}",
+        failure.problem()
+    );
+    assert!(!calls(&runner).contains(&upgrade("a")));
+}

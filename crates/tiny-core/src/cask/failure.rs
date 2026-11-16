@@ -53,8 +53,9 @@ pub enum CaskFailure {
     NotOutdated {
         token: String,
     },
-    /// Homebrew now offers another version than the review showed (its index
-    /// changed since), so the update is refused until it is reviewed again.
+    /// Homebrew now offers another version, or the same version from another
+    /// download host, than the review showed (its index changed since), so the
+    /// update is refused until it is reviewed again.
     VersionChanged {
         token: String,
         reviewed: String,
@@ -115,6 +116,13 @@ impl CaskFailure {
                 format!("{token} is not an app TinySift can install.")
             }
             Self::NotOutdated { token } => format!("{token} is already up to date."),
+            Self::VersionChanged {
+                token,
+                reviewed,
+                offered,
+            } if reviewed == offered => format!(
+                "Homebrew changed where {token} {offered} downloads from since you reviewed it."
+            ),
             Self::VersionChanged {
                 token,
                 reviewed,
