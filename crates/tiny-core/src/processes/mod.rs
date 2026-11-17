@@ -6,6 +6,7 @@ pub mod network;
 pub mod ports;
 pub mod pressure;
 mod responsible;
+pub mod role;
 pub mod snapshot;
 pub mod terminate;
 pub mod working_dir;
@@ -22,6 +23,7 @@ pub use ports::{
     PORT_VISIBILITY_CAVEAT,
 };
 pub use pressure::MemoryPressure;
+pub use role::{ProcessRole, RoleCache};
 pub use snapshot::{LoadAverage, ProcessInfo, ProcessKey, ProcessSnapshot, Sampler, SystemUsage};
 pub use terminate::{
     refusal, terminate, Refusal, TerminateKind, TerminateOutcome, TerminateTarget,

@@ -10,6 +10,7 @@ use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind, Users};
 
 use super::network::{NetworkCounters, NetworkReading, NetworkThroughput};
 use super::pressure::{read_memory_pressure, MemoryPressure};
+use super::role::{ProcessRole, RoleCache};
 use crate::sys::MemoryParts;
 
 /// One running process: its PID plus its start time, so a reused PID never matches.
@@ -375,6 +376,8 @@ pub struct Sampler {
     last_system_cpu_sample: Option<Instant>,
     network: NetworkCounters,
     network_reading: NetworkReading,
+    /// Roles of the processes `sample_pids_with_roles` last read, by identity.
+    roles: RoleCache,
 }
 
 impl Default for Sampler {
@@ -393,6 +396,7 @@ impl Sampler {
             last_system_cpu_sample: None,
             network: NetworkCounters::new(),
             network_reading: NetworkReading::default(),
+            roles: RoleCache::default(),
             // SAFETY: getuid has no preconditions and cannot fail.
             current_uid: unsafe { libc::getuid() },
         }
@@ -422,6 +426,17 @@ impl Sampler {
     pub fn sample_pids(&mut self, pids: &[u32]) -> Vec<ProcessInfo> {
         self.pids.refresh(Scope::Pids(pids));
         self.infos(&self.pids)
+    }
+
+    /// [`Self::sample_pids`] plus each process's role, read once per process identity and
+    /// forgotten once a call no longer includes it. Only the panel's own reads pay for roles.
+    pub fn sample_pids_with_roles(
+        &mut self,
+        pids: &[u32],
+    ) -> Vec<(ProcessInfo, Option<ProcessRole>)> {
+        let processes = self.sample_pids(pids);
+        let roles = self.roles.roles(&processes);
+        processes.into_iter().zip(roles).collect()
     }
 
     fn refresh_system_usage(&mut self) {

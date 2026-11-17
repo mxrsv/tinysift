@@ -12,6 +12,9 @@ use tiny_core::runner::RealRunner;
 
 use crate::{FfiError, TinySession};
 
+mod role;
+pub use role::FfiProcessRole;
+
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct FfiProcessInfo {
     pub pid: u32,
@@ -40,6 +43,11 @@ pub struct FfiProcessInfo {
     pub responsible_pid: Option<u32>,
     #[uniffi(default = None)]
     pub responsible_start_time: Option<u64>,
+    /// What this helper does for its app (renderer, GPU, network service...). Read only by
+    /// `process_list_for`; `None` in every other list, for another user's process, an
+    /// unreadable command line, or a process with no known role.
+    #[uniffi(default = None)]
+    pub role: Option<FfiProcessRole>,
     /// Why `process_terminate` would refuse this process, if anything. Lets
     /// the UI disable Quit up front instead of offering a refused action.
     pub refusal: Option<FfiRefusal>,
@@ -236,12 +244,16 @@ impl TinySession {
     /// `process_list`'s: a PID's CPU is measured from the third consecutive call that includes
     /// it, as the average since the previous one; calls need to be at least 0.2 s apart, or the
     /// CPU interval of the call before is reused. Responsible processes are named only within
-    /// `pids`, so group by the last `process_list`. Bypasses the gate.
+    /// `pids`, so group by the last `process_list`. Only this list fills `role`, read once per
+    /// process identity. Bypasses the gate.
     pub fn process_list_for(&self, pids: Vec<u32>) -> Vec<FfiProcessInfo> {
         self.sampler()
-            .sample_pids(&pids)
+            .sample_pids_with_roles(&pids)
             .into_iter()
-            .map(Into::into)
+            .map(|(info, role)| FfiProcessInfo {
+                role: role.map(Into::into),
+                ..info.into()
+            })
             .collect()
     }
 
@@ -411,6 +423,7 @@ impl From<ProcessInfo> for FfiProcessInfo {
             cpu_time_ns: info.cpu_time_ns,
             responsible_pid: responsible.map(|key| key.pid),
             responsible_start_time: responsible.map(|key| key.start_time),
+            role: None,
             refusal,
         }
     }
