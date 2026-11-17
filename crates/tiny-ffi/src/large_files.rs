@@ -13,7 +13,8 @@
 //! or callback.
 
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::fs;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -114,23 +115,24 @@ impl TinySession {
         progress: Arc<dyn ProgressListener>,
     ) -> Result<FfiLargeFilesScan, FfiError> {
         let home = self.clean_home()?;
-        let runner = app_runner();
-        let versions = PlutilVersions(runner.as_ref());
-        let last_used = SpotlightLastUsed(runner.as_ref());
-        let probe = RunnerProbe(runner.as_ref());
-        self.scan_large_files(
-            &InstallerRoots::for_home(&home),
-            INSTALLER_MIN_BYTES,
-            &versions,
-            Some(HomeSettings {
-                home: &home,
-                limits: Limits::default(),
-                last_used: &last_used,
-                probe: &probe,
-            }),
-            &token,
-            progress.as_ref(),
-        )
+        self.scan_large_files_of_home(&home, None, &token, progress.as_ref())
+    }
+
+    /// `large_files_scan` for one folder of the home (Storage's "Find Large
+    /// Files Here"): the same scan, every rule and label unchanged (a copy
+    /// is still found wherever its pair lives), listing only what lies
+    /// inside `root`, and a later move reaches only those files. `root` must
+    /// be an existing folder inside the home; anything else is
+    /// `InvalidInput`, and nothing is scanned.
+    pub fn large_files_scan_in(
+        &self,
+        root: String,
+        token: Arc<CancellationToken>,
+        progress: Arc<dyn ProgressListener>,
+    ) -> Result<FfiLargeFilesScan, FfiError> {
+        let home = self.clean_home()?;
+        let root = large_files_root(&home, Path::new(&root))?;
+        self.scan_large_files_of_home(&home, Some(&root), &token, progress.as_ref())
     }
 
     /// Builds a preview from file IDs of the current scan. Unknown or stale
@@ -238,6 +240,28 @@ pub(crate) struct HomeSettings<'a> {
     pub probe: &'a dyn AppProbe,
 }
 
+/// The folder a scan of part of the home lists, in the home's own spelling
+/// (the walk's paths start with `home` as given): `root` resolved, an
+/// existing folder, and `home` itself or inside it. Large Files never lists
+/// anything outside the home (NL1), so another root is refused.
+pub(crate) fn large_files_root(home: &Path, root: &Path) -> Result<PathBuf, FfiError> {
+    let invalid = |detail: &str| FfiError::InvalidInput {
+        detail: detail.into(),
+    };
+    if !root.is_absolute() {
+        return Err(invalid("the folder must be an absolute path"));
+    }
+    let real = fs::canonicalize(root).map_err(|_| invalid("that folder could not be found"))?;
+    if !fs::metadata(&real).is_ok_and(|meta| meta.is_dir()) {
+        return Err(invalid("that is not a folder"));
+    }
+    let real_home = fs::canonicalize(home).unwrap_or_else(|_| home.to_path_buf());
+    let inside = real
+        .strip_prefix(&real_home)
+        .map_err(|_| invalid("Large Files looks only inside your home folder"))?;
+    Ok(home.join(inside))
+}
+
 impl TinySession {
     fn large_files_state(&self) -> MutexGuard<'_, LargeFilesState> {
         self.large_files
@@ -245,14 +269,62 @@ impl TinySession {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// The whole scan of `home` with the app's own tools, listing only what
+    /// lies inside `within` when it is set.
+    fn scan_large_files_of_home(
+        &self,
+        home: &Path,
+        within: Option<&Path>,
+        token: &CancellationToken,
+        progress: &dyn ProgressListener,
+    ) -> Result<FfiLargeFilesScan, FfiError> {
+        let runner = app_runner();
+        let versions = PlutilVersions(runner.as_ref());
+        let last_used = SpotlightLastUsed(runner.as_ref());
+        let probe = RunnerProbe(runner.as_ref());
+        self.scan_large_files_within(
+            &InstallerRoots::for_home(home),
+            INSTALLER_MIN_BYTES,
+            &versions,
+            Some(HomeSettings {
+                home,
+                limits: Limits::default(),
+                last_used: &last_used,
+                probe: &probe,
+            }),
+            within,
+            token,
+            progress,
+        )
+    }
+
     /// `large_files_scan` with injected roots, threshold and versions (the
     /// test seam); `walk` is `None` for a scan of installers only.
+    #[cfg(test)]
     pub(crate) fn scan_large_files(
         &self,
         roots: &InstallerRoots,
         min_bytes: u64,
         versions: &dyn AppVersions,
         walk: Option<HomeSettings<'_>>,
+        token: &CancellationToken,
+        progress: &dyn ProgressListener,
+    ) -> Result<FfiLargeFilesScan, FfiError> {
+        self.scan_large_files_within(roots, min_bytes, versions, walk, None, token, progress)
+    }
+
+    /// `scan_large_files` listing only what lies inside `within` when it is
+    /// set. The scan itself is the whole one, so what a file is called (a
+    /// copy, the only copy) never depends on the folder asked for; the list
+    /// and the folders a move may reach are narrowed to `within` afterwards.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn scan_large_files_within(
+        &self,
+        roots: &InstallerRoots,
+        min_bytes: u64,
+        versions: &dyn AppVersions,
+        walk: Option<HomeSettings<'_>>,
+        within: Option<&Path>,
         token: &CancellationToken,
         progress: &dyn ProgressListener,
     ) -> Result<FfiLargeFilesScan, FfiError> {
@@ -295,6 +367,14 @@ impl TinySession {
             found.unreadable.extend(home.unreadable);
             // A move may reach any file the walk listed, still through real folders.
             scanned_roots.push(walk.home.to_path_buf());
+        }
+        if let Some(root) = within {
+            found.files.retain(|file| file.path.starts_with(root));
+            // A folder above `root` that could not be read hid part of it too.
+            found
+                .unreadable
+                .retain(|folder| folder.starts_with(root) || root.starts_with(folder));
+            scanned_roots = vec![root.to_path_buf()];
         }
         let mut state = self.large_files_state();
         let id = state.next_id();

@@ -620,6 +620,11 @@ mod home_walk {
     }
 
     fn scan(world: &World) -> FfiLargeFilesScan {
+        scan_within(world, None)
+    }
+
+    /// The whole scan, listing only what lies inside `within` when it is set.
+    fn scan_within(world: &World, within: Option<&Path>) -> FfiLargeFilesScan {
         let limits = Limits {
             copy_min_bytes: MB as u64,
             only_copy_min_bytes: MB as u64,
@@ -628,7 +633,7 @@ mod home_walk {
         };
         world
             .session
-            .scan_large_files(
+            .scan_large_files_within(
                 &world.roots(),
                 MB as u64,
                 &NoVersions,
@@ -638,6 +643,7 @@ mod home_walk {
                     last_used: &NoLastUsed,
                     probe: &NoApps,
                 }),
+                within,
                 &CancellationToken::default(),
                 &Listener::default(),
             )
@@ -812,4 +818,106 @@ mod home_walk {
         );
         assert!(copy.exists());
     }
+
+    // ---------- a scan of one folder (Storage's "Find Large Files Here") ----------
+
+    #[test]
+    fn a_scan_in_a_folder_lists_only_what_is_inside_it_and_moves_only_there() {
+        let world = World::new();
+        let cap = world.installer("Cap", "Cap-1.4.2.dmg");
+        let inside = old_file(&world, "Documents/deep/backup.zip", 200);
+        let outside = old_file(&world, "Movies/old.zip", 200);
+        let scan = scan_within(&world, Some(&world.home.join("Documents")));
+        let paths: Vec<&str> = scan.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, vec![inside.to_str().unwrap()]);
+        let preview = world.session.preview_large_files(&ids(&scan)).unwrap();
+        let report = world.run(&preview.preview_id, &world.trash()).unwrap();
+        assert_eq!(report.moved_count, 1, "{report:?}");
+        assert!(!inside.exists() && outside.exists() && cap.exists());
+    }
+
+    #[test]
+    fn a_scan_in_a_folder_names_each_file_as_the_whole_scan_does() {
+        let world = World::new();
+        // The copy's pair lives outside the folder asked for: it is still a copy, not the only one.
+        mkv(&world, "Videos/Raw/talk.mkv", 3);
+        let copy = mkv(&world, "Videos/Backup/talk.mkv", 2);
+        old_file(&world, "Videos/Backup/archive.zip", 200);
+        let whole = scan(&world);
+        let part = scan_within(&world, Some(&world.home.join("Videos/Backup")));
+        let facts = |scan: &FfiLargeFilesScan| -> Vec<(String, String, String)> {
+            let mut facts: Vec<_> = scan
+                .files
+                .iter()
+                .filter(|f| Path::new(&f.path).starts_with(world.home.join("Videos/Backup")))
+                .map(|f| (f.path.clone(), f.group.clone(), f.reason.clone()))
+                .collect();
+            facts.sort();
+            facts
+        };
+        assert_eq!(facts(&part), facts(&whole));
+        assert_eq!(part.files.len(), 2);
+        let row = part
+            .files
+            .iter()
+            .find(|f| f.path == copy.to_string_lossy())
+            .unwrap();
+        assert_eq!(row.group, "copies");
+    }
+}
+
+// ---------- the folder a scan of part of the home takes ----------
+
+#[test]
+fn a_scan_root_is_an_existing_folder_inside_the_home() {
+    let world = World::new();
+    let documents = world.home.join("Documents");
+    fs::create_dir_all(&documents).unwrap();
+    assert_eq!(
+        large_files_root(&world.home, &documents).unwrap(),
+        documents
+    );
+    assert_eq!(
+        large_files_root(&world.home, &world.home).unwrap(),
+        world.home
+    );
+    // A path through a link into the home is the folder it reaches, in the home's own spelling.
+    let link = world.home.parent().unwrap().join("to-documents");
+    std::os::unix::fs::symlink(&documents, &link).unwrap();
+    assert_eq!(large_files_root(&world.home, &link).unwrap(), documents);
+    let refused = |root: &Path| {
+        assert!(
+            matches!(
+                large_files_root(&world.home, root),
+                Err(FfiError::InvalidInput { .. })
+            ),
+            "{root:?} was taken"
+        );
+    };
+    refused(world.home.parent().unwrap());
+    refused(&world.home.parent().unwrap().join("apps"));
+    refused(&world.installer("Cap", "Cap.dmg"));
+    refused(&world.home.join("Missing"));
+    refused(Path::new("Documents"));
+    // A link inside the home to a folder outside it is outside.
+    let out = world.home.join("elsewhere");
+    std::os::unix::fs::symlink(world.home.parent().unwrap().join("apps"), &out).unwrap();
+    refused(&out);
+}
+
+#[test]
+fn a_scan_of_a_folder_outside_the_home_is_refused_before_it_starts() {
+    let world = World::new();
+    let outside = world.home.parent().unwrap().join("apps");
+    let result = world.session.large_files_scan_in(
+        outside.to_string_lossy().into_owned(),
+        Arc::new(CancellationToken::default()),
+        Arc::new(Listener::default()),
+    );
+    assert!(matches!(result, Err(FfiError::InvalidInput { .. })));
+    // Nothing was stored: a preview still has no scan to read.
+    invalid(
+        world.session.preview_large_files(&["l1-0".into()]),
+        "no current scan",
+    );
 }
