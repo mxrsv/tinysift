@@ -1267,7 +1267,6 @@ mod tests {
         let root = tempdir("bo-recheck");
         mark_repo(&root);
         let project = rust_project(&root, 40);
-        let dir = project.1.parent().unwrap();
         let recheck = |runner: &MockRunner| {
             refuse_if_used_since(
                 runner,
@@ -1276,10 +1275,10 @@ mod tests {
                 &ScanContext::unchecked(),
             )
         };
-        assert_eq!(recheck(&mock_git(dir, 40, "")), Ok(()));
-        assert_eq!(recheck(&mock_git(dir, 1, "")), Err(USED_SINCE.into()));
+        assert_eq!(recheck(&mock_git(&root, 40, "")), Ok(()));
+        assert_eq!(recheck(&mock_git(&root, 1, "")), Err(USED_SINCE.into()));
         assert_eq!(
-            recheck(&mock_git(dir, 40, " M src/lib.rs\n")),
+            recheck(&mock_git(&root, 40, " M src/lib.rs\n")),
             Err(USED_SINCE.into())
         );
         let safe = CleanItem {
@@ -1290,7 +1289,7 @@ mod tests {
             risk: RiskLevel::Safe,
             evidence: Vec::new(),
         };
-        let used = Arc::new(mock_git(dir, 1, ""));
+        let used = Arc::new(mock_git(&root, 1, ""));
         let provider = RustTargets::with_runner(IDLE_DAYS, used.clone());
         assert_eq!(
             provider.recheck_idle(&safe, &ScanContext::unchecked()),
@@ -1316,8 +1315,7 @@ mod tests {
         let root = tempdir("bo-recheck-once");
         mark_repo(&root);
         let project = rust_project(&root, 40);
-        let dir = project.1.parent().unwrap();
-        let runner = mock_git(dir, 40, "");
+        let runner = mock_git(&root, 40, "");
         let calls = || runner.output_calls.lock().unwrap().len();
         let run = ScanContext::unchecked();
         let recheck = |run: &ScanContext<'_>| {
@@ -1364,8 +1362,7 @@ mod tests {
             let root = tempfile::tempdir().unwrap();
             mark_repo(root.path());
             let project = rust_project(root.path(), manifest_days);
-            let dir = project.1.parent().unwrap();
-            let runner = ls_files(mock_git(dir, commit_days, ""), &project.0, 0, "");
+            let runner = ls_files(mock_git(root.path(), commit_days, ""), &project.0, 0, "");
             assert_eq!(
                 risk_of(desktop_after(&runner, &project, safe_days).unwrap()),
                 Some(expected),
@@ -1541,8 +1538,7 @@ mod tests {
                 let root = tempfile::tempdir().unwrap();
                 mark_repo(root.path());
                 let project = build_project(root.path(), manifest, folder, 10);
-                let dir = project.1.parent().unwrap();
-                let runner = Arc::new(ls_files(mock_git(dir, 10, ""), &project.0, 0, ""));
+                let runner = Arc::new(ls_files(mock_git(root.path(), 10, ""), &project.0, 0, ""));
                 let opts = crate::options::CleanOptions {
                     all_build_output: true,
                     build_output_safe_days,
