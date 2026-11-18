@@ -14,6 +14,7 @@ use crate::cask::CaskState;
 use crate::clean::CleanState;
 use crate::large_files::LargeFilesState;
 use crate::uninstall::UninstallState;
+use crate::worktrees::WorktreesState;
 use crate::FfiError;
 
 /// What a read-only scan covers. One scan per slot at a time; each replaces
@@ -61,6 +62,8 @@ pub struct TinySession {
     pub(crate) uninstall: Mutex<UninstallState>,
     pub(crate) large_files: Mutex<LargeFilesState>,
     pub(crate) cask: Mutex<CaskState>,
+    /// Agent worktrees' last listing and size cache; read-only work, outside the gate.
+    pub(crate) worktrees: Mutex<WorktreesState>,
 }
 
 #[uniffi::export]

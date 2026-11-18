@@ -11,3 +11,4 @@ pub mod scan;
 pub mod space_lens;
 pub mod sys;
 pub mod uninstall;
+pub mod worktrees;

@@ -17,6 +17,7 @@ pub mod processes;
 pub mod session;
 pub mod storage;
 pub mod uninstall;
+pub mod worktrees;
 
 pub use session::{CancellationToken, TinySession};
 

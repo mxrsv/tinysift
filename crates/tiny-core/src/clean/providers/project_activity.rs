@@ -13,7 +13,7 @@ use crate::error::Result;
 use crate::runner::{CommandError, CommandOutcome, CommandRunner, TOOL_TIMEOUT};
 
 /// Absolute on purpose: a Finder-launched app has a minimal `PATH`.
-const GIT: &str = "/usr/bin/git";
+pub(crate) const GIT: &str = "/usr/bin/git";
 /// Options for every git call on a repository we only inspect. It must not
 /// write the index (`--no-optional-locks`), and no program its own config
 /// names may run: a filesystem monitor, a hook or a signature check. `-c`
@@ -363,7 +363,7 @@ fn work_tree_clean(runner: &dyn CommandRunner, project: &str) -> Result<bool> {
 /// config (local or worktree, includes followed). Filters from the user's
 /// global or system config, such as Git LFS, are the user's own. False when
 /// git cannot tell.
-fn no_repository_filter(runner: &dyn CommandRunner, project: &str) -> Result<bool> {
+pub(crate) fn no_repository_filter(runner: &dyn CommandRunner, project: &str) -> Result<bool> {
     let args = ["config", "--show-scope", "--get-regexp", FILTER_DRIVERS];
     match run_git(runner, project, &args) {
         Ok(outcome) if outcome.success() => Ok(outcome
@@ -386,7 +386,7 @@ fn git(runner: &dyn CommandRunner, project: &str, args: &[&str]) -> Result<Optio
 /// Why git is not asked about `project`: a config git reads for it names a
 /// promisor remote (`LAZY_FETCH`), whatever its scope, or git could not say.
 /// `None` when it names none.
-fn fetch_refusal(runner: &dyn CommandRunner, project: &str) -> Result<Option<String>> {
+pub(crate) fn fetch_refusal(runner: &dyn CommandRunner, project: &str) -> Result<Option<String>> {
     match run_git(runner, project, &["config", "--get-regexp", LAZY_FETCH]) {
         // `--get-regexp` exits 1 when nothing matches.
         Ok(outcome) if outcome.status == Some(1) => Ok(None),
@@ -402,7 +402,7 @@ fn fetch_refusal(runner: &dyn CommandRunner, project: &str) -> Result<Option<Str
 /// `git` for a command that reads objects (`log`, `status`, `ls-files`),
 /// keeping why git did not answer. Not asked at all when the repository
 /// could fetch (`fetch_refusal`).
-fn git_answer(
+pub(crate) fn git_answer(
     runner: &dyn CommandRunner,
     project: &str,
     args: &[&str],
@@ -421,7 +421,7 @@ fn git_answer(
 }
 
 /// `git <INSPECT_ONLY> -C <project> <args>`.
-fn run_git(
+pub(crate) fn run_git(
     runner: &dyn CommandRunner,
     project: &str,
     args: &[&str],
@@ -439,7 +439,7 @@ fn unavailable() -> crate::error::Error {
 /// The exit status and git's first stderr line, e.g. the `/usr/bin/git`
 /// shim's "xcrun: error: invalid active developer path" without the
 /// Command Line Tools.
-fn exit_detail(outcome: &CommandOutcome) -> String {
+pub(crate) fn exit_detail(outcome: &CommandOutcome) -> String {
     let status = match outcome.status {
         Some(code) => format!("git exited with status {code}"),
         None => "git was stopped by a signal".into(),
