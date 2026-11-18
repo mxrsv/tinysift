@@ -16,7 +16,7 @@ const DAY: i64 = SECS_PER_DAY;
 const CLAUDE: &str = "claudeCode";
 
 /// Fixture git, away from the user's own config and hooks.
-fn git(dir: &Path, args: &[&str]) -> String {
+pub(super) fn git(dir: &Path, args: &[&str]) -> String {
     git_at(dir, args, None)
 }
 
@@ -51,29 +51,29 @@ fn git_at(dir: &Path, args: &[&str], at: Option<i64>) -> String {
     String::from_utf8(out.stdout).unwrap()
 }
 
-fn commit(dir: &Path, file: &str) {
+pub(super) fn commit(dir: &Path, file: &str) {
     fs::write(dir.join(file), file).unwrap();
     git(dir, &["add", "--", file]);
     git(dir, &["commit", "-qm", file]);
 }
 
-fn now() -> i64 {
+pub(super) fn now() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .unwrap()
         .as_secs() as i64
 }
 
-struct Fixture {
+pub(super) struct Fixture {
     _dir: tempfile::TempDir,
-    root: PathBuf,
-    repo: PathBuf,
+    pub(super) root: PathBuf,
+    pub(super) repo: PathBuf,
     memory: RepoMemory,
 }
 
 impl Fixture {
     /// A repository with one commit on `base`, remembered as seen now.
-    fn new(base: &str) -> Self {
+    pub(super) fn new(base: &str) -> Self {
         let dir = tempfile::tempdir().unwrap();
         let root = dir.path().canonicalize().unwrap();
         let repo = root.join("repo");
@@ -100,7 +100,7 @@ impl Fixture {
     }
 
     /// `git worktree add` of a new branch at `name` beside the repository.
-    fn branch(&self, name: &str, branch: &str) -> PathBuf {
+    pub(super) fn branch(&self, name: &str, branch: &str) -> PathBuf {
         let path = self.root.join(name);
         git(
             &self.repo,
@@ -136,7 +136,7 @@ impl Fixture {
         })
     }
 
-    fn list(&self) -> Listing {
+    pub(super) fn list(&self) -> Listing {
         self.list_with(&[], &[], &self.root)
     }
 

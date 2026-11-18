@@ -1,7 +1,7 @@
 //! Agent worktrees exported to Swift: the remembered repositories, their
-//! linked worktrees with one status each, and sizes. Read-only and outside
-//! the gate, like process queries: nothing here moves, prunes or locks a
-//! worktree, and Swift never runs git itself.
+//! linked worktrees with one status each, and sizes, read-only and outside
+//! the gate like process queries; and the move to the Trash ([`trash`]),
+//! a write that takes the gate. Swift never runs git itself.
 
 use std::path::PathBuf;
 use std::sync::{MutexGuard, PoisonError};
@@ -10,12 +10,16 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use tiny_core::clean::trash_plan::{account_home, trusted_home};
 use tiny_core::processes::working_dir::{all_working_directories, is_running, working_directory};
 use tiny_core::runner::RealRunner;
+use tiny_core::worktrees::trash::PlannedWorktree;
 use tiny_core::worktrees::{
     self, size, ListInputs, Listing, ManagedBy, RepoMemory, Sighting, SizeCache, SizeKey,
     WorktreeStatus,
 };
 
 use crate::{FfiError, TinySession};
+
+mod trash;
+pub use trash::*;
 
 /// A running agent session's root process and its tool, as Swift names it.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -91,10 +95,11 @@ pub struct FfiWorktreeSize {
     pub bytes: Option<u64>,
 }
 
-/// The last listing's folders and the sizes measured so far.
+/// The last listing's worktrees and the sizes measured so far.
 #[derive(Debug, Default)]
 pub(crate) struct WorktreesState {
-    listed: Vec<PathBuf>,
+    /// What the last listing showed: the only worktrees a move may take.
+    listed: Vec<PlannedWorktree>,
     sizes: SizeCache,
     /// Tests keep the remembered list in a temporary home.
     #[cfg(test)]
@@ -149,9 +154,13 @@ impl TinySession {
         let mut state = self.worktrees();
         state.listed = repos
             .iter()
-            .flat_map(|repo| repo.worktrees.iter().map(|w| w.path.clone()))
+            .flat_map(|repo| {
+                repo.worktrees.iter().filter_map(|w| {
+                    PlannedWorktree::of(&repo.git_dir, &w.path, w.branch.clone(), w.head.clone())
+                })
+            })
             .collect();
-        let listed = state.listed.clone();
+        let listed = state.listed_paths();
         state.sizes.retain(&listed);
         let repos = repos
             .into_iter()
@@ -192,12 +201,12 @@ impl TinySession {
         let wanted: Vec<(PathBuf, Option<SizeKey>, Option<u64>)> = {
             let state = self.worktrees();
             state
-                .listed
-                .iter()
+                .listed_paths()
+                .into_iter()
                 .map(|path| {
-                    let key = SizeKey::of(path);
-                    let cached = key.and_then(|k| state.sizes.lookup(path, k));
-                    (path.clone(), key, cached)
+                    let key = SizeKey::of(&path);
+                    let cached = key.and_then(|k| state.sizes.lookup(&path, k));
+                    (path, key, cached)
                 })
                 .collect()
         };
@@ -227,6 +236,12 @@ impl TinySession {
     }
 }
 
+impl WorktreesState {
+    fn listed_paths(&self) -> Vec<PathBuf> {
+        self.listed.iter().map(|w| w.path.clone()).collect()
+    }
+}
+
 impl TinySession {
     pub(crate) fn worktrees(&self) -> MutexGuard<'_, WorktreesState> {
         self.worktrees
@@ -234,7 +249,7 @@ impl TinySession {
             .unwrap_or_else(PoisonError::into_inner)
     }
 
-    fn worktree_home(&self) -> Result<PathBuf, FfiError> {
+    pub(crate) fn worktree_home(&self) -> Result<PathBuf, FfiError> {
         #[cfg(test)]
         if let Some(home) = self.worktrees().home.clone() {
             return Ok(home);
@@ -247,7 +262,7 @@ impl TinySession {
 
 /// Each session's folder now; `None` for a live session whose folder cannot
 /// be read, nothing for one that has ended.
-fn sightings(sessions: &[FfiAgentProcess]) -> Vec<Sighting> {
+pub(crate) fn sightings(sessions: &[FfiAgentProcess]) -> Vec<Sighting> {
     sessions
         .iter()
         .filter_map(|session| {
@@ -260,7 +275,7 @@ fn sightings(sessions: &[FfiAgentProcess]) -> Vec<Sighting> {
         .collect()
 }
 
-fn now() -> i64 {
+pub(crate) fn now() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))

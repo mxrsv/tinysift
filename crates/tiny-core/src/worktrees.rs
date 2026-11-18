@@ -1,7 +1,7 @@
 //! Agent worktrees: the linked git worktrees of repositories where an agent
 //! session ran, each with the one status that decides whether it may go to
-//! the Trash, and its size. Read-only: nothing here moves, prunes, locks or
-//! writes to a repository.
+//! the Trash, and its size. Listing is read-only; only [`trash`] moves a
+//! worktree, after its checks, and prunes its repository.
 //!
 //! Which repositories: a session's folder is resolved to its repository's
 //! git directory without running git and remembered for 30 days
@@ -18,9 +18,12 @@ pub mod repo;
 pub mod size;
 pub mod status;
 pub mod store;
+pub mod trash;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod trash_tests;
 
 use std::path::{Path, PathBuf};
 
