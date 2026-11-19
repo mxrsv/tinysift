@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
 
 use super::*;
+use crate::worktrees::FfiWorktreeList;
 use crate::FfiProgress;
 
 fn git(dir: &Path, args: &[&str]) -> bool {
@@ -89,6 +90,8 @@ struct Fixture {
     repo: PathBuf,
     session: Arc<TinySession>,
     trash: FolderTrash,
+    /// The listing the user confirmed from.
+    shown: FfiWorktreeList,
 }
 
 impl Fixture {
@@ -133,8 +136,8 @@ impl Fixture {
         session.worktree_remember(vec![process]).unwrap();
         agent.kill().unwrap();
         agent.wait().unwrap();
-        let listed = session.worktree_list(Vec::new()).unwrap();
-        assert_eq!(listed.repos[0].worktrees.len(), 2);
+        let shown = session.worktree_list(Vec::new()).unwrap();
+        assert_eq!(shown.repos[0].worktrees.len(), 2);
         let trash = FolderTrash(root.join("Trash"));
         fs::create_dir(&trash.0).unwrap();
         Self {
@@ -143,6 +146,7 @@ impl Fixture {
             repo,
             session,
             trash,
+            shown,
         }
     }
 
@@ -150,13 +154,28 @@ impl Fixture {
         self.root.join(name).to_string_lossy().into_owned()
     }
 
-    fn move_paths(
+    /// The worktree at `name` as the confirmation showed it.
+    fn item(&self, name: &str) -> FfiWorktreeMoveItem {
+        let path = self.path(name);
+        let shown = self.shown.repos[0]
+            .worktrees
+            .iter()
+            .find(|w| w.path == path)
+            .unwrap();
+        FfiWorktreeMoveItem {
+            path,
+            branch: shown.branch.clone(),
+            head: shown.head.clone(),
+        }
+    }
+
+    fn move_items(
         &self,
-        paths: &[String],
+        items: &[FfiWorktreeMoveItem],
         listener: &Listener,
     ) -> Result<FfiWorktreeMoveReport, FfiError> {
         self.session.move_worktrees(
-            paths,
+            items,
             &self.trash,
             &NoProcesses,
             &CancellationToken::default(),
@@ -172,7 +191,7 @@ fn only_the_named_listed_worktrees_move_once_and_their_branches_are_free() {
     let one = fixture.path("one");
 
     let report = fixture
-        .move_paths(std::slice::from_ref(&one), &listener)
+        .move_items(&[fixture.item("one")], &listener)
         .unwrap();
 
     assert_eq!(
@@ -199,7 +218,7 @@ fn only_the_named_listed_worktrees_move_once_and_their_branches_are_free() {
         .collect();
     assert_eq!(moved, std::slice::from_ref(&one));
     // Spent: the same call is refused, and nothing else moves.
-    let again = fixture.move_paths(&[one], &listener);
+    let again = fixture.move_items(&[fixture.item("one")], &listener);
     assert!(matches!(again, Err(FfiError::PreviewInvalid { .. })));
 }
 
@@ -207,16 +226,19 @@ fn only_the_named_listed_worktrees_move_once_and_their_branches_are_free() {
 fn a_path_the_listing_did_not_show_refuses_the_whole_call() {
     let fixture = Fixture::listed();
     let listener = Listener::default();
-    let main_checkout = fixture.repo.to_string_lossy().into_owned();
-    for paths in [
-        vec![fixture.path("one"), main_checkout],
-        vec![fixture.path("one"), fixture.path("one")],
+    let main_checkout = FfiWorktreeMoveItem {
+        path: fixture.repo.to_string_lossy().into_owned(),
+        ..fixture.item("one")
+    };
+    for items in [
+        vec![fixture.item("one"), main_checkout],
+        vec![fixture.item("one"), fixture.item("one")],
         Vec::new(),
     ] {
-        let refused = fixture.move_paths(&paths, &listener);
+        let refused = fixture.move_items(&items, &listener);
         assert!(
             matches!(refused, Err(FfiError::PreviewInvalid { .. })),
-            "{paths:?}"
+            "{items:?}"
         );
     }
     assert!(fixture.root.join("one").is_dir() && fixture.root.join("two").is_dir());
@@ -227,8 +249,60 @@ fn a_path_the_listing_did_not_show_refuses_the_whole_call() {
 fn another_write_holding_the_gate_refuses_the_move() {
     let fixture = Fixture::listed();
     let held = fixture.session.begin().unwrap();
-    let refused = fixture.move_paths(&[fixture.path("one")], &Listener::default());
+    let refused = fixture.move_items(&[fixture.item("one")], &Listener::default());
     assert!(matches!(refused, Err(FfiError::Busy)));
     drop(held);
     assert!(fixture.root.join("one").is_dir());
+}
+
+#[test]
+fn a_worktree_that_changed_since_the_confirmation_stays_though_a_new_list_shows_it() {
+    let fixture = Fixture::listed();
+    let listener = Listener::default();
+    let confirmed = [fixture.item("one"), fixture.item("two")];
+    // While the dialog is open: `one` is on another branch, `two` on another
+    // commit (main moved on and `two` followed it), and the page lists again.
+    assert!(git(
+        &fixture.repo,
+        &["branch", "-m", "agent/one", "agent/renamed"]
+    ));
+    fs::write(fixture.repo.join("b"), "b").unwrap();
+    assert!(git(&fixture.repo, &["add", "b"]) && git(&fixture.repo, &["commit", "-qm", "b"]));
+    assert!(git(
+        &fixture.root.join("two"),
+        &["reset", "-q", "--hard", "main"]
+    ));
+    let relisted = fixture.session.worktree_list(Vec::new()).unwrap();
+    let movable = relisted.repos[0].worktrees.iter().all(|w| {
+        matches!(
+            w.status,
+            FfiWorktreeStatus::Merged | FfiWorktreeStatus::LastChange { .. }
+        )
+    });
+    assert!(movable, "both can still be ticked: {relisted:?}");
+
+    let report = fixture.move_items(&confirmed, &listener).unwrap();
+
+    let outcomes: Vec<_> = report.results.iter().map(|r| r.outcome.clone()).collect();
+    assert_eq!(
+        outcomes,
+        [
+            FfiWorktreeMoveOutcome::Changed,
+            FfiWorktreeMoveOutcome::Changed
+        ]
+    );
+    assert!(fixture.root.join("one").is_dir() && fixture.root.join("two").is_dir());
+
+    // Confirmed again from the new list, they go.
+    let shown_now = Fixture {
+        shown: relisted,
+        ..fixture
+    };
+    let report = shown_now
+        .move_items(&[shown_now.item("one"), shown_now.item("two")], &listener)
+        .unwrap();
+    assert!(report
+        .results
+        .iter()
+        .all(|r| r.outcome == FfiWorktreeMoveOutcome::Moved));
 }

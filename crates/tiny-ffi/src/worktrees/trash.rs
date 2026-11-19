@@ -1,6 +1,11 @@
 //! Agent worktrees' Move to Trash for Swift. The consent contract: Swift
-//! names paths, and only worktrees of the last `worktree_list` move; a path
-//! that listing did not show refuses the whole call, before anything moves.
+//! names each confirmed worktree with the branch and commit the confirmation
+//! showed, and only worktrees of the last `worktree_list` move; a path that
+//! listing did not show refuses the whole call, before anything moves. Core
+//! checks git against what the user confirmed, not against the last listing
+//! (which may have run again while the dialog was open): a worktree that is
+//! no longer on that branch and commit stays as `Changed`, and the others
+//! still go.
 //! What moved leaves the listing, so the same call never runs twice. The
 //! move is a write: it takes the session gate, and the saved "always keep"
 //! rules are locked for the whole run. Core re-checks each worktree right
@@ -25,6 +30,16 @@ use crate::clean::{protection_error, FfiStopReason};
 use crate::session::CancellationToken;
 use crate::{FfiError, ProgressListener, TinySession};
 
+/// A worktree the user confirmed, as the confirmation showed it.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiWorktreeMoveItem {
+    pub path: String,
+    /// The branch's short name; `None` when detached.
+    pub branch: Option<String>,
+    /// The full commit ID of `HEAD`.
+    pub head: String,
+}
+
 /// What happened to one worktree.
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Enum)]
 pub enum FfiWorktreeMoveOutcome {
@@ -34,7 +49,7 @@ pub enum FfiWorktreeMoveOutcome {
     Locked { status: FfiWorktreeStatus },
     /// Its folder is gone.
     Gone,
-    /// Not the worktree that was listed (another folder, branch or commit).
+    /// Not the worktree that was confirmed (another folder, branch or commit).
     Changed,
     /// A saved "always keep" rule holds it.
     Kept,
@@ -70,23 +85,24 @@ pub struct FfiWorktreeMoveReport {
 
 #[uniffi::export]
 impl TinySession {
-    /// Moves the given worktrees of the last `worktree_list` to the Trash
+    /// Moves the confirmed worktrees of the last `worktree_list` to the Trash
     /// through `NSFileManager` (`NativeTrash`), then runs `git worktree
     /// prune` for each repository that lost one. Each is checked again right
-    /// before it moves; a row that became locked stays and says why.
+    /// before it moves, against the branch and commit it was confirmed with;
+    /// a row that changed or became locked stays and says why.
     /// `sessions` are the agent sessions now, read again before each move.
     /// Progress `worktree-moved` names each path as it goes. Takes the gate:
     /// call it off the main thread, only after the user confirmed.
     pub fn worktree_move(
         &self,
-        paths: Vec<String>,
+        items: Vec<FfiWorktreeMoveItem>,
         sessions: Vec<FfiAgentProcess>,
         token: Arc<CancellationToken>,
         progress: Arc<dyn ProgressListener>,
     ) -> Result<FfiWorktreeMoveReport, FfiError> {
         let machine = LiveMachine { sessions };
         self.move_worktrees(
-            &paths,
+            &items,
             &NativeTrash::default(),
             &machine,
             &token,
@@ -99,7 +115,7 @@ impl TinySession {
     /// `worktree_move` with an injected Trash and processes (the test seam).
     pub(crate) fn move_worktrees(
         &self,
-        paths: &[String],
+        items: &[FfiWorktreeMoveItem],
         trash: &dyn Trash,
         machine: &dyn Machine,
         token: &CancellationToken,
@@ -109,7 +125,7 @@ impl TinySession {
         let _gate = self.begin()?;
         let store = self.protection_store(&home);
         let policy = store.lease().map_err(protection_error)?;
-        let plan = self.consented(paths)?;
+        let plan = self.consented(items)?;
         let on_progress = |p: tiny_core::progress::Progress| progress.on_progress(p.into());
         let report = move_to_trash(
             &plan,
@@ -135,28 +151,34 @@ impl TinySession {
         Ok(report.into())
     }
 
-    /// The listed worktrees `paths` name, in their order. Nothing at all
-    /// when one was not listed, is named twice, or none is named.
-    fn consented(&self, paths: &[String]) -> Result<Vec<PlannedWorktree>, FfiError> {
+    /// The listed worktrees `items` name, in their order, each with the
+    /// branch and commit it was confirmed with: git must still show those
+    /// when it moves. Nothing at all when one was not listed, is named twice,
+    /// or none is named.
+    fn consented(&self, items: &[FfiWorktreeMoveItem]) -> Result<Vec<PlannedWorktree>, FfiError> {
         let invalid = |detail: &str| FfiError::PreviewInvalid {
             detail: detail.into(),
         };
-        if paths.is_empty() {
+        if items.is_empty() {
             return Err(invalid("no worktree was named"));
         }
-        let unique: HashSet<&String> = paths.iter().collect();
-        if unique.len() != paths.len() {
+        let unique: HashSet<&String> = items.iter().map(|item| &item.path).collect();
+        if unique.len() != items.len() {
             return Err(invalid("a worktree was named twice"));
         }
         let state = self.worktrees();
-        paths
+        items
             .iter()
-            .map(|path| {
+            .map(|item| {
                 state
                     .listed
                     .iter()
-                    .find(|w| w.path.to_str() == Some(path.as_str()))
-                    .cloned()
+                    .find(|w| w.path.to_str() == Some(item.path.as_str()))
+                    .map(|listed| PlannedWorktree {
+                        branch: item.branch.clone(),
+                        head: item.head.clone(),
+                        ..listed.clone()
+                    })
                     .ok_or_else(|| invalid("a worktree was not in the last list; list them again"))
             })
             .collect()
