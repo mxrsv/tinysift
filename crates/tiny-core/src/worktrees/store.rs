@@ -9,12 +9,16 @@
 //! session folder's work tree with the tool that ran there (the row's logo).
 //! It is not policy: a missing, unreadable or malformed file reads as empty,
 //! which can only list fewer worktrees, and a write replaces it whole through
-//! a synced temporary file and a rename.
+//! a synced temporary file of its own and a rename. A change reads, edits and
+//! writes the file under an exclusive `flock` on `agent-repos.json.lock`, so
+//! two callers at once (the app passing sessions while a listing runs) never
+//! drop each other's entries.
 
 use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -24,6 +28,7 @@ use super::{Sighting, REMEMBER_DAYS, SECS_PER_DAY};
 const HOME_RELATIVE: &str = "Library/Application Support/Tiny";
 const FILE_NAME: &str = "agent-repos.json";
 const TEMP_SUFFIX: &str = ".tmp";
+const LOCK_SUFFIX: &str = ".lock";
 const VERSION: u32 = 1;
 const MAX_BYTES: u64 = 1 << 20;
 /// A sighting this soon after the last one changes nothing on disk, so a
@@ -105,23 +110,26 @@ impl RepoMemory {
     /// each folder is resolved through its `.git` entries. Writes only when
     /// something changed; returns whether it wrote.
     pub fn remember(&self, sessions: &[Sighting], now: i64) -> io::Result<bool> {
-        let before = self.read();
-        let mut document = fresh(&before, now);
-        for sighting in sessions {
-            let Some(location) = sighting.folder.as_deref().and_then(locate) else {
-                continue;
-            };
-            let (Some(git_dir), Some(top)) = (location.git_dir.to_str(), location.top.to_str())
-            else {
-                continue;
-            };
-            upsert_repo(&mut document.repos, git_dir, now);
-            upsert_folder(&mut document.folders, top, &sighting.tool, now);
-        }
-        bound(&mut document);
-        if document.repos == before.repos && document.folders == before.folders {
+        let seen: Vec<(String, String, &str)> = sessions
+            .iter()
+            .filter_map(|sighting| {
+                let location = locate(sighting.folder.as_deref()?)?;
+                Some((
+                    location.git_dir.to_str()?.to_string(),
+                    location.top.to_str()?.to_string(),
+                    sighting.tool.as_str(),
+                ))
+            })
+            .collect();
+        // Without the lock first: a sample that changes nothing creates no
+        // file, not even the lock.
+        if updated(&self.read(), &seen, now).is_none() {
             return Ok(false);
         }
+        let _lock = self.lock()?;
+        let Some(document) = updated(&self.read(), &seen, now) else {
+            return Ok(false);
+        };
         self.write(&document)?;
         Ok(true)
     }
@@ -164,7 +172,8 @@ impl RepoMemory {
         }
     }
 
-    fn write(&self, document: &Document) -> io::Result<()> {
+    /// The folder, made owner-only when missing.
+    fn dir(&self) -> io::Result<&Path> {
         let dir = self
             .file
             .parent()
@@ -173,20 +182,70 @@ impl RepoMemory {
             .recursive(true)
             .mode(DIR_MODE)
             .create(dir)?;
-        let mut temp_name = self.file.as_os_str().to_os_string();
-        temp_name.push(TEMP_SUFFIX);
-        let temp = PathBuf::from(temp_name);
-        let bytes = serde_json::to_vec_pretty(document).map_err(io::Error::other)?;
-        let mut file = OpenOptions::new()
+        Ok(dir)
+    }
+
+    /// `path` with `suffix` added to its name.
+    fn sibling(&self, suffix: &str) -> PathBuf {
+        let mut name = self.file.as_os_str().to_os_string();
+        name.push(suffix);
+        PathBuf::from(name)
+    }
+
+    /// The exclusive lock for a read, edit and write; held until dropped.
+    fn lock(&self) -> io::Result<File> {
+        self.dir()?;
+        let file = OpenOptions::new()
+            .read(true)
             .write(true)
             .create(true)
-            .truncate(true)
+            .truncate(false)
             .mode(FILE_MODE)
-            .open(&temp)?;
-        file.write_all(&bytes)?;
-        file.sync_all()?;
-        fs::rename(&temp, &self.file)
+            .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+            .open(self.sibling(LOCK_SUFFIX))?;
+        file.lock()?;
+        Ok(file)
     }
+
+    fn write(&self, document: &Document) -> io::Result<()> {
+        self.dir()?;
+        // A temporary file of this write's own: a writer that does not hold
+        // the lock can only lose its own change, never tear the file.
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let temp = self.sibling(&format!(
+            ".{}.{}{TEMP_SUFFIX}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        let bytes = serde_json::to_vec_pretty(document).map_err(io::Error::other)?;
+        let written = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(FILE_MODE)
+            .open(&temp)
+            .and_then(|mut file| {
+                file.write_all(&bytes)?;
+                file.sync_all()
+            })
+            .and_then(|()| fs::rename(&temp, &self.file));
+        if written.is_err() {
+            let _ = fs::remove_file(&temp);
+        }
+        written
+    }
+}
+
+/// `before` with the sessions `seen` (git directory, work tree, tool) added
+/// and old entries forgotten; `None` when that changes nothing.
+fn updated(before: &Document, seen: &[(String, String, &str)], now: i64) -> Option<Document> {
+    let mut document = fresh(before, now);
+    for (git_dir, top, tool) in seen {
+        upsert_repo(&mut document.repos, git_dir, now);
+        upsert_folder(&mut document.folders, top, tool, now);
+    }
+    bound(&mut document);
+    let same = document.repos == before.repos && document.folders == before.folders;
+    (!same).then_some(document)
 }
 
 /// `document` without entries older than [`REMEMBER_DAYS`] at `now`.
@@ -284,5 +343,44 @@ mod tests {
         ];
         assert!(!memory.remember(&sightings, 100).unwrap());
         assert!(!memory.file().exists());
+        assert!(!memory.file().parent().unwrap().exists(), "nor its lock");
+    }
+
+    /// Many callers at once, each adding its own repositories, as the app's
+    /// `worktree_remember` and a listing do: every one is kept and the file
+    /// always reads.
+    #[test]
+    fn writers_at_once_keep_every_repository() {
+        const WRITERS: usize = 8;
+        const EACH: usize = 12;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().canonicalize().unwrap();
+        let file = root.join("state/agent-repos.json");
+        std::thread::scope(|scope| {
+            for writer in 0..WRITERS {
+                let (root, file) = (&root, &file);
+                scope.spawn(move || {
+                    let memory = RepoMemory::at(file.clone());
+                    for n in 0..EACH {
+                        let repo = root.join(format!("repo-{writer}-{n}"));
+                        fs::create_dir_all(repo.join(".git")).unwrap();
+                        let sighting = Sighting {
+                            folder: Some(repo),
+                            tool: "codex".into(),
+                        };
+                        assert!(memory.remember(&[sighting], 1_000).unwrap());
+                        assert!(!memory.recent(1_000).repos().is_empty(), "the file reads");
+                    }
+                });
+            }
+        });
+        let remembered = RepoMemory::at(file.clone()).recent(1_000).repos();
+        assert_eq!(remembered.len(), WRITERS * EACH);
+        let leftovers: Vec<_> = fs::read_dir(file.parent().unwrap())
+            .unwrap()
+            .filter_map(|e| e.ok()?.file_name().into_string().ok())
+            .filter(|name| name.ends_with(TEMP_SUFFIX))
+            .collect();
+        assert!(leftovers.is_empty(), "{leftovers:?}");
     }
 }
