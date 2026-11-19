@@ -211,6 +211,39 @@ fn a_moved_worktree_leaves_its_place_frees_its_branch_and_leaves_git() {
 }
 
 #[test]
+fn another_worktree_whose_folder_is_missing_is_never_pruned() {
+    let run = Run::new();
+    let gone = run.fixture.branch("gone", "agent/gone");
+    // Its own commit, reached only from its HEAD and reflog.
+    let away = run.fixture.detached("away");
+    commit(&away, "detached work");
+    let detached_head = git(&away, &["rev-parse", "HEAD"]);
+    let plan: Vec<PlannedWorktree> = run.plan().into_iter().filter(|p| p.path == gone).collect();
+    assert_eq!(plan.len(), 1);
+    // Its disk unplugged, or moved by hand: git calls it prunable.
+    let parked = run.path("parked");
+    fs::rename(&away, &parked).unwrap();
+
+    let report = run.run(&plan, None);
+
+    assert_eq!(outcome_of(&report, &gone), &MoveOutcome::Moved);
+    assert_eq!(report.prune_failures.len(), 1, "{report:?}");
+    let detail = &report.prune_failures[0].detail;
+    assert_eq!(
+        detail,
+        &format!(
+            "pruning would also forget {}, whose folder is missing",
+            away.display()
+        )
+    );
+    assert!(run.git_lists(&away), "git still knows the other worktree");
+    // Back in its place, it works as before, with its commit.
+    fs::rename(&parked, &away).unwrap();
+    git(&away, &["status", "--porcelain"]);
+    assert_eq!(git(&away, &["rev-parse", "HEAD"]), detached_head);
+}
+
+#[test]
 fn a_row_that_became_locked_since_the_listing_is_skipped_with_its_status() {
     let mut run = Run::new();
     let clean = run.fixture.branch("clean", "agent/clean");

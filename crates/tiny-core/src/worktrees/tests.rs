@@ -116,7 +116,7 @@ impl Fixture {
         path
     }
 
-    fn detached(&self, name: &str) -> PathBuf {
+    pub(super) fn detached(&self, name: &str) -> PathBuf {
         let path = self.root.join(name);
         git(
             &self.repo,

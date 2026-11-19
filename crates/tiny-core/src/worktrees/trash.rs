@@ -6,11 +6,15 @@
 //! the home folder or above it, not held by a saved "always keep" rule) and
 //! still have a status that can be ticked. A row that became locked is
 //! skipped with the status it has now. After a repository's moves, git is
-//! asked once to `worktree prune`, so the branches are free at once.
+//! asked once to `worktree prune`, so the branches are free at once, but only
+//! when its dry run would forget exactly the worktrees this run moved:
+//! another worktree whose folder is missing (on a disk that is not plugged
+//! in, or moved by hand) keeps its `HEAD`, index and reflog.
 //!
 //! Nothing here deletes: the only route is [`Trash`]. A failure stays with
 //! its own worktree and is never retried another way.
 
+use std::collections::HashSet;
 use std::fs;
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -156,20 +160,28 @@ pub fn move_to_trash(plan: &[PlannedWorktree], inputs: &MoveInputs<'_>) -> MoveR
         }
         let base = status::base_branch(inputs.runner, &git_dir);
         let mut moved_any = false;
+        // The `worktrees/` entries of the worktrees that moved.
+        let mut moved_entries = HashSet::new();
         for (index, planned) in plan.iter().enumerate() {
             if planned.git_dir != git_dir || stopped.is_some() {
                 continue;
             }
             report(inputs, PROGRESS_MOVING, step, total, &planned.path);
             step += 1;
-            outcomes[index] = move_one(planned, base.as_deref(), inputs, &mut stopped);
+            outcomes[index] = move_one(
+                planned,
+                base.as_deref(),
+                inputs,
+                &mut stopped,
+                &mut moved_entries,
+            );
             if outcomes[index] == MoveOutcome::Moved {
                 moved_any = true;
                 report(inputs, PROGRESS_MOVED, step, total, &planned.path);
             }
         }
         if moved_any {
-            if let Err(detail) = prune(inputs.runner, &git_dir) {
+            if let Err(detail) = prune(inputs.runner, &git_dir, &moved_entries) {
                 prune_failures.push(PruneFailure { git_dir, detail });
             }
         }
@@ -210,6 +222,7 @@ fn move_one(
     base: Option<&str>,
     inputs: &MoveInputs<'_>,
     stopped: &mut Option<StopReason>,
+    moved_entries: &mut HashSet<String>,
 ) -> MoveOutcome {
     let mut stop = |reason| {
         *stopped = Some(reason);
@@ -232,9 +245,14 @@ fn move_one(
     if is_cancelled(inputs) {
         return stop(StopReason::Cancelled);
     }
+    // Read while the folder is here: the prune may forget only these.
+    let entry = admin_entry(&planned.path);
     // One route: a failure is reported, never retried another way.
     match inputs.trash.move_to_trash(&planned.path) {
-        Ok(()) => MoveOutcome::Moved,
+        Ok(()) => {
+            moved_entries.extend(entry);
+            MoveOutcome::Moved
+        }
         Err(error) => {
             if matches!(error, TrashError::AutomationDenied(_)) {
                 *stopped = Some(StopReason::AutomationDenied);
@@ -351,15 +369,127 @@ fn refusal_of(reason: SkipReason) -> Refusal {
     }
 }
 
-/// `git worktree prune` for the repository: forgets every worktree whose
-/// folder is gone, so their branches can be checked out and deleted.
-fn prune(runner: &dyn CommandRunner, git_dir: &Path) -> Result<(), String> {
+/// The name of the worktree's entry in its repository's `worktrees/`
+/// folder, from its `.git` file; `None` when that cannot be read.
+fn admin_entry(path: &Path) -> Option<String> {
+    repo::pointed_git_dir(path)?
+        .file_name()?
+        .to_str()
+        .map(str::to_string)
+}
+
+/// `git worktree prune` for the repository, so the moved worktrees' branches
+/// can be checked out and deleted. git prunes every worktree whose folder is
+/// missing, so its dry run is read first: when it would forget anything but
+/// `moved` (another worktree on a disk that is not plugged in), nothing is
+/// pruned and the others are named. Both runs are inspect-only git; a folder
+/// that goes missing between them is the one window left.
+fn prune(
+    runner: &dyn CommandRunner,
+    git_dir: &Path,
+    moved: &HashSet<String>,
+) -> Result<(), String> {
     let dir = git_dir
         .to_str()
         .ok_or_else(|| "its path is not valid UTF-8".to_string())?;
-    match run_git(runner, dir, &["worktree", "prune"]) {
-        Ok(outcome) if outcome.success() => Ok(()),
+    let preview = git(
+        runner,
+        dir,
+        &["worktree", "prune", "--dry-run", "--verbose"],
+    )?;
+    let lines: Vec<&str> = preview
+        .stdout
+        .lines()
+        .chain(preview.stderr.lines())
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .collect();
+    let known = admin_entries(git_dir, moved);
+    let mut others = Vec::new();
+    for line in &lines {
+        match entry_of(line, &known) {
+            Some(entry) if moved.contains(entry) => {}
+            Some(entry) => others.push(listed_path(git_dir, entry)),
+            None => return Err(format!("git's dry run said something unexpected: {line}")),
+        }
+    }
+    if !others.is_empty() {
+        return Err(would_also_forget(&others));
+    }
+    if lines.is_empty() {
+        return Ok(());
+    }
+    git(runner, dir, &["worktree", "prune"]).map(|_| ())
+}
+
+fn git(
+    runner: &dyn CommandRunner,
+    dir: &str,
+    args: &[&str],
+) -> Result<crate::runner::CommandOutcome, String> {
+    match run_git(runner, dir, args) {
+        Ok(outcome) if outcome.success() => Ok(outcome),
         Ok(outcome) => Err(exit_detail(&outcome)),
         Err(error) => Err(error.to_string()),
     }
+}
+
+/// Every entry of the repository's `worktrees/` folder, and `moved`.
+fn admin_entries(git_dir: &Path, moved: &HashSet<String>) -> Vec<String> {
+    let mut entries: Vec<String> = fs::read_dir(git_dir.join("worktrees"))
+        .map(|dir| {
+            dir.filter_map(|e| e.ok()?.file_name().to_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    entries.extend(moved.iter().cloned());
+    entries
+}
+
+/// The entry a dry-run line names (`Removing worktrees/<entry>: <reason>`,
+/// in any language): the longest known entry the line names that way, so an
+/// entry called `a: b` is never read as `a`.
+fn entry_of<'a>(line: &str, known: &'a [String]) -> Option<&'a str> {
+    known
+        .iter()
+        .filter(|entry| line.contains(&format!("worktrees/{entry}: ")))
+        .max_by_key(|entry| entry.len())
+        .map(String::as_str)
+}
+
+/// The folder git recorded for `entry`, or the entry itself when that
+/// cannot be read.
+fn listed_path(git_dir: &Path, entry: &str) -> String {
+    let admin = git_dir.join("worktrees").join(entry);
+    fs::read_to_string(admin.join("gitdir"))
+        .ok()
+        .map(|text| {
+            let dot_git = admin.join(text.trim());
+            dot_git
+                .parent()
+                .unwrap_or(&dot_git)
+                .to_string_lossy()
+                .into_owned()
+        })
+        .unwrap_or_else(|| format!("worktrees/{entry}"))
+}
+
+/// The prune failure's detail: which other worktrees git would forget.
+fn would_also_forget(others: &[String]) -> String {
+    const NAMED: usize = 3;
+    let mut names = others
+        .iter()
+        .take(NAMED)
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    if others.len() > NAMED {
+        names.push_str(&format!(" and {} more", others.len() - NAMED));
+    }
+    let whose = if others.len() == 1 {
+        "whose folder is"
+    } else {
+        "whose folders are"
+    };
+    format!("pruning would also forget {names}, {whose} missing")
 }
