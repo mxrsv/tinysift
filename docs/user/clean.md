@@ -101,6 +101,9 @@ along. Those overlapping selections are retained and explained in the final repo
   ([`user_caches.rs`](../../crates/tiny-core/src/clean/providers/user_caches.rs)). `gradle-maven` lists only
   Gradle's caches: Maven's `~/.m2/repository` also holds what `mvn install` put there, so it is not offered.
 - `npm` offers only npm's package cache (`_cacache`), never `_npx`, where the packages `npx` runs live.
+- `user-logs` lists every entry of `~/Library/Logs` except the `DiagnosticReports` folder: `crash-reports`
+  lists the reports inside it, and the folder itself stays for macOS to save the next one
+  ([`user_logs.rs`](../../crates/tiny-core/src/clean/providers/user_logs.rs)).
 - `puppeteer` leaves out just the builds of a browser that is running (Chrome for Testing or
   `chrome-headless-shell`), without a message.
 - `browser-caches`, `chat-caches`, `streaming-caches` and `user-caches` instead leave out
