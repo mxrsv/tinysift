@@ -7,8 +7,8 @@
 //! keep" rules (held for the whole run through the lease, a change stops the
 //! run), `/System`, the path still the file the scan saw (size and mtime for
 //! a file), not a symlink, on the home volume, inside a folder the scan
-//! looked at through real folders, and not a protected path. A file's
-//! open-file check is the plan's backlog item, not done here.
+//! looked at through real folders, no running process holding it
+//! (`open_files`), and not a protected path.
 
 use std::fs;
 use std::io;

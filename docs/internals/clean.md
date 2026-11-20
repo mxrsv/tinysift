@@ -325,13 +325,16 @@ one is not offered whole (`npm` offers its other children). A category that name
 **Re-check before a move (SF2).** `validate` skips an item whose owning app runs (`AppRunning`, cause
 `InUse`) and one whose fingerprint differs (`Changed`, cause `ChangedSinceScan`): a file's size or
 mtime, a folder's identity. A folder's contents are not compared, since caches churn between scan and
-confirmation (only the Trash row also compares its listing). A move or a deletion is also skipped as
-`InUse` while a process holds the path or something inside it: its executable, its working folder or
-an open file, read in one libproc pass that answers for two seconds
-([`open_files.rs`](../../crates/tiny-core/src/clean/open_files.rs)). That answer is a floor: another
-user's processes and files mapped without a descriptor are not seen, so "nothing holds it" never
-stands in for the app gate. A tool's removal and Empty Trash are not asked; over FFI the skip is
-`AppRunning` with the process's name.
+confirmation (only the Trash row also compares its listing). A `MoveToTrash` or a `Delete` is also
+skipped as `InUse` while a process holds the path or something still on disk inside it: its
+executable, its working folder or an open file, read in one libproc pass that answers for two seconds
+([`open_files.rs`](../../crates/tiny-core/src/clean/open_files.rs)). That answer is a floor, and a
+read that fails counts as nothing held: another user's processes, a file mapped without a descriptor
+and a file read and closed again (a runtime loading its modules, so build output is rarely caught)
+are not seen. "Nothing holds it" never stands in for the app gate, and never proves a path unused. A
+tool's removal, Empty Trash and deletion as administrator are not asked, and neither are the CLI's
+executor, uninstall or the worktree move, which keep their own gates. Over FFI the skip is
+`AppRunning` with the process's name, which is not always an app's.
 
 **Placeholders.** A simulator runtime has no path: its item is `<simulator-runtime:UUID>` with
 `Evidence::SimulatorRuntime`. Homebrew's cleanup (`<homebrew:cleanup>`) and Docker's kinds
@@ -684,7 +687,9 @@ a failed rule read must never become an empty successful rule list. The
 
 ## Test seams
 
-Tests never depend on what is installed or running on the machine:
+Tests never depend on what is installed or running on the machine, except the two in
+[`open_files.rs`](../../crates/tiny-core/src/clean/open_files.rs) that read the real process list for
+a holder they start themselves:
 
 - [`process.rs`](../../crates/tiny-core/src/clean/process.rs) — `ProcessChecker` and
   `AppProbe`, both implemented by `MockChecker`.
@@ -694,6 +699,9 @@ Tests never depend on what is installed or running on the machine:
   (with a fake `Trash`, `Delete` and `ElevatedDelete`) take those seams; so do `discover_clean`,
   `execute_clean` and `remove_clean` in `tiny-ffi`. `clean_remove` itself panics under
   `cfg!(test)`, so no test can reach the real dialog. Native clients must inject fake cleanup engines in their UI tests.
+- [`open_files.rs`](../../crates/tiny-core/src/clean/open_files.rs) — `OpenFiles`, implemented by
+  `HeldPaths` (a fixed list) and `NoOpenFiles`. In `tiny-ffi`, `remove_clean`, `execute_clean` and
+  `move_large_files` run as if nothing were held; their `*_holding` twins take the list.
 
 [`clean_smoke.rs`](../../crates/tiny/tests/clean_smoke.rs) runs only `--dry-run` and validation
 failures, so it passes on any machine without touching data.

@@ -2,9 +2,12 @@
 //! working folder and open files, read in one libproc pass.
 //!
 //! The answer is a floor. macOS describes only this user's processes, a file
-//! a process has mapped without keeping a descriptor is not listed, and a
-//! process may open a file right after the pass. "Nothing holds it" therefore
-//! never proves a path unused; "something holds it" is enough to leave it.
+//! a process has mapped without keeping a descriptor is not listed, a process
+//! that reads a file and closes it (a runtime loading its modules) holds
+//! nothing, and a process may open a file right after the pass. A read that
+//! fails is the same as nothing held. "Nothing holds it" therefore never
+//! proves a path unused, and a caller that must know has to ask for more than
+//! this; "something holds it" is enough to leave it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -58,13 +61,31 @@ impl HeldPaths {
         }
     }
 
+    /// Every held path that is `path` or lies inside it, with its holder.
     /// Compared component by component, so `/a/cache` never holds
     /// `/a/cache-old`.
-    pub fn holder_inside(&self, path: &Path) -> Option<&str> {
+    pub fn holders_inside<'a>(
+        &'a self,
+        path: &'a Path,
+    ) -> impl Iterator<Item = (&'a Path, &'a str)> + 'a {
         self.held
             .iter()
-            .find(|(held, _)| held.starts_with(path))
-            .map(|(_, holder)| holder.as_str())
+            .filter(move |(held, _)| held.starts_with(path))
+            .map(|(held, holder)| (held.as_path(), holder.as_str()))
+    }
+
+    pub fn holder_inside<'a>(&'a self, path: &'a Path) -> Option<&'a str> {
+        self.holders_inside(path).next().map(|(_, holder)| holder)
+    }
+
+    /// The holder of a path inside `path` that is still on disk. macOS keeps
+    /// naming a file's old path after it is unlinked, so a process holding
+    /// only removed files holds nothing a removal would take from it, and an
+    /// item that is gone must read as missing, not as in use.
+    pub fn live_holder_inside<'a>(&'a self, path: &'a Path) -> Option<&'a str> {
+        self.holders_inside(path)
+            .find(|(held, _)| std::fs::symlink_metadata(held).is_ok())
+            .map(|(_, holder)| holder)
     }
 }
 
@@ -103,7 +124,7 @@ impl OpenFiles for ProcessOpenFiles {
         }
         snapshot
             .as_ref()
-            .and_then(|(_, held)| held.holder_inside(path))
+            .and_then(|(_, held)| held.live_holder_inside(path))
             .map(str::to_string)
     }
 }
@@ -291,12 +312,12 @@ mod tests {
     #[test]
     fn a_path_is_held_by_a_file_inside_it_or_by_itself() {
         let held = held(&[
-            ("/h/proj/node_modules/pkg/index.js", "node"),
+            ("/h/proj/node_modules/.cache/build.lock", "vite"),
             ("/h/tools/versions/2.1.0", "claude"),
         ]);
         assert_eq!(
             held.holder_inside(Path::new("/h/proj/node_modules")),
-            Some("node")
+            Some("vite")
         );
         assert_eq!(
             held.holder_inside(Path::new("/h/tools/versions/2.1.0")),
@@ -313,6 +334,22 @@ mod tests {
         ]);
         assert_eq!(held.holder_inside(Path::new("/h/cache")), None);
         assert_eq!(held.holder_inside(Path::new("/h/proj/target")), None);
+    }
+
+    #[test]
+    fn a_held_path_that_is_gone_holds_nothing() {
+        let folder = tempfile::tempdir().unwrap();
+        let root = std::fs::canonicalize(folder.path()).unwrap();
+        std::fs::write(root.join("kept.db"), b"data").unwrap();
+        let unlinked = HeldPaths::new([(root.join("gone.log"), "tail".to_string())]);
+        let both = HeldPaths::new([
+            (root.join("gone.log"), "tail".to_string()),
+            (root.join("kept.db"), "app".to_string()),
+        ]);
+
+        assert_eq!(unlinked.holder_inside(&root), Some("tail"));
+        assert_eq!(unlinked.live_holder_inside(&root), None);
+        assert_eq!(both.live_holder_inside(&root), Some("app"));
     }
 
     #[test]
@@ -365,9 +402,16 @@ mod tests {
         holder.wait().unwrap();
         let after_exit = read_held_paths();
 
-        assert_eq!(while_open.holder_inside(&item), Some("tail"));
+        let holders = |held: &HeldPaths| -> Vec<String> {
+            held.holders_inside(&item)
+                .map(|(_, holder)| holder.to_string())
+                .collect()
+        };
+        // Another process of this user may look at the file too; `tail` is
+        // the one this test answers for.
+        assert!(holders(&while_open).iter().any(|holder| holder == "tail"));
         assert_eq!(while_open.holder_inside(&root.join("other")), None);
-        assert_eq!(after_exit.holder_inside(&item), None);
+        assert!(!holders(&after_exit).iter().any(|holder| holder == "tail"));
     }
 
     #[cfg(target_os = "macos")]
