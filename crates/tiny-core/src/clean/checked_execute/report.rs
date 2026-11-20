@@ -30,6 +30,11 @@ pub enum SkipReason {
     /// The provider's own guard refused the path.
     ProviderGuard(String),
     AppRunning(String),
+    /// A running process holds the path or something inside it: its
+    /// executable, its working folder or an open file.
+    InUse {
+        holder: String,
+    },
     /// A required safety check could not run; acting would be a guess.
     SafetyCheckFailed(String),
     /// A saved rule keeps the path itself, or it lies inside a kept folder.

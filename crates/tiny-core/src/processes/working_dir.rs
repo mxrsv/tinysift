@@ -12,7 +12,7 @@ pub fn working_directory(pid: u32) -> Option<String> {
 /// The raw bytes of `pid`'s working directory, as `proc_pidinfo` gives them;
 /// `None` as for `working_directory`, never empty.
 #[cfg(target_os = "macos")]
-fn working_directory_bytes(pid: u32) -> Option<Vec<u8>> {
+pub(crate) fn working_directory_bytes(pid: u32) -> Option<Vec<u8>> {
     let pid = libc::c_int::try_from(pid).ok()?;
     // SAFETY: an all-zero `proc_vnodepathinfo` is a valid value of plain integers.
     let mut info: libc::proc_vnodepathinfo = unsafe { std::mem::zeroed() };
@@ -63,7 +63,7 @@ pub fn all_working_directories() -> Vec<std::path::PathBuf> {
 /// Every PID on the machine, read with room for the processes that start
 /// while it is read.
 #[cfg(target_os = "macos")]
-fn all_pids() -> Vec<u32> {
+pub(crate) fn all_pids() -> Vec<u32> {
     // SAFETY: a null buffer asks only for the count.
     let count = unsafe { libc::proc_listallpids(std::ptr::null_mut(), 0) };
     let Ok(count) = usize::try_from(count) else {

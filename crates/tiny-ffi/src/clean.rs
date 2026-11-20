@@ -21,6 +21,7 @@ use tiny_core::clean::discover::{
 use tiny_core::clean::freed_size::SharedBlocks;
 use tiny_core::clean::fs_safe::PathFingerprint;
 use tiny_core::clean::native_trash::NativeTrash;
+use tiny_core::clean::open_files::ProcessOpenFiles;
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::PolicySnapshot;
 use tiny_core::clean::protection_store::ProtectionStore;
@@ -190,10 +191,11 @@ impl TinySession {
         let probe = RunnerProbe(runner.as_ref());
         let providers = |options: &CleanOptions| all_providers_with(options, runner.clone());
         // The real saved rules: execution never runs without them.
-        self.execute_clean(
+        self.execute_clean_holding(
             &preview_id,
             &providers,
             &probe,
+            &ProcessOpenFiles::new(),
             &NativeTrash::default(),
             &token,
             progress.as_ref(),

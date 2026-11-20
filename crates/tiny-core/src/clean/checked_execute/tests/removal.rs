@@ -6,6 +6,7 @@
 use super::*;
 use crate::clean::failure_cause::FailureCause;
 use crate::clean::fs_safe::dir_size_checked;
+use crate::clean::open_files::{HeldPaths, NoOpenFiles, OpenFiles};
 
 /// Records every Trash move, Empty Trash, deletion and batch deleted as
 /// administrator in one log, so the order across routes is visible; fails
@@ -120,6 +121,17 @@ fn run_sinks(
     probe: &dyn AppProbe,
     sinks: &Sinks,
 ) -> CheckedExecReport {
+    run_sinks_holding(store, plan, probe, sinks, &NoOpenFiles)
+}
+
+/// `run_sinks` while running processes hold what `open_files` says.
+fn run_sinks_holding(
+    store: &TempStore,
+    plan: &[PlannedItem],
+    probe: &dyn AppProbe,
+    sinks: &Sinks,
+    open_files: &dyn OpenFiles,
+) -> CheckedExecReport {
     let providers = providers();
     let home = std::env::temp_dir();
     let lease = store.store.lease().unwrap();
@@ -127,6 +139,7 @@ fn run_sinks(
         providers: &providers,
         home: Some(&home),
         probe,
+        open_files,
         trash: sinks,
         delete: sinks,
         elevated: sinks,
@@ -537,6 +550,74 @@ fn the_trash_is_emptied_only_as_discovery_listed_it() {
         vec![ItemOutcome::Skipped(SkipReason::Changed)]
     );
     assert!(sinks.log().is_empty());
+    let _ = remove_recursive_safe(&root);
+}
+
+#[test]
+fn an_item_a_process_holds_stays_whichever_way_it_would_go() {
+    let root = fixture_root("in-use", &["b", "c"]);
+    fs::create_dir(root.join("cache")).unwrap();
+    fs::write(root.join("cache/index.db"), b"1234").unwrap();
+    let plan = [
+        planned("user-logs", &root, "cache", Removal::Delete),
+        planned("downloads-old", &root, "b", Removal::MoveToTrash),
+        planned("user-logs", &root, "c", Removal::Delete),
+    ];
+    // One process has a file inside the folder open, another runs `b`.
+    let held = HeldPaths::new([
+        (root.join("cache/index.db"), "node".to_string()),
+        (root.join("b"), "b".to_string()),
+    ]);
+    let sinks = Sinks::default();
+    let report = run_sinks_holding(
+        &TempStore::new(),
+        &plan,
+        &MockChecker::none(),
+        &sinks,
+        &held,
+    );
+    assert_eq!(
+        outcomes(&report),
+        vec![
+            ItemOutcome::Skipped(SkipReason::InUse {
+                holder: "node".into()
+            }),
+            ItemOutcome::Skipped(SkipReason::InUse { holder: "b".into() }),
+            ItemOutcome::Deleted,
+        ]
+    );
+    assert_eq!(sinks.log(), ["delete c"]);
+    let causes: Vec<Option<FailureCause>> = report
+        .results
+        .iter()
+        .map(|r| r.failure.as_ref().map(|f| f.cause))
+        .collect();
+    assert_eq!(
+        causes,
+        [Some(FailureCause::InUse), Some(FailureCause::InUse), None]
+    );
+    let _ = remove_recursive_safe(&root);
+}
+
+/// Finder decides what in the Trash is still in use, so a held file there
+/// never keeps the row from being emptied.
+#[test]
+fn the_trash_row_is_not_asked_whether_a_process_holds_it() {
+    let root = fixture_root("in-use-trash", &[]);
+    let row = trash_row(&root);
+    let held = HeldPaths::new([(root.join(".Trash/old"), "Preview".to_string())]);
+    let sinks = Sinks {
+        bin: Some(root.join(".Trash")),
+        ..Sinks::default()
+    };
+    let report = run_sinks_holding(
+        &TempStore::new(),
+        &[row],
+        &MockChecker::none(),
+        &sinks,
+        &held,
+    );
+    assert_eq!(outcomes(&report), vec![ItemOutcome::TrashEmptied]);
     let _ = remove_recursive_safe(&root);
 }
 

@@ -369,12 +369,24 @@ impl Run {
         trash: &FakeTrash,
         cancel: Option<&AtomicBool>,
     ) -> super::move_run::MoveReport {
+        self.run_holding(plan, trash, &crate::clean::open_files::NoOpenFiles, cancel)
+    }
+
+    /// `run` while running processes hold what `open_files` says.
+    fn run_holding(
+        &self,
+        plan: &[PlannedMove],
+        trash: &FakeTrash,
+        open_files: &dyn crate::clean::open_files::OpenFiles,
+        cancel: Option<&AtomicBool>,
+    ) -> super::move_run::MoveReport {
         let lease = self.store.lease().unwrap();
         let roots = self.fixture.roots().folders;
         let ctx = MoveContext {
             home: &self.fixture.home,
             roots: &roots,
             trash,
+            open_files,
             cancel,
             progress: None,
             policy: &lease,
@@ -530,6 +542,33 @@ fn a_saved_keep_rule_holds_the_file_and_is_not_a_failure() {
 }
 
 #[test]
+fn a_file_a_process_holds_stays_and_the_rest_move() {
+    use crate::clean::failure_cause::FailureCause;
+    use crate::clean::open_files::HeldPaths;
+
+    let run = Run::new();
+    let a = run.fixture.download("A.dmg", 2);
+    let b = run.fixture.download("B.dmg", 2);
+    let held = HeldPaths::new([(a.clone(), "DiskImageMounter".to_string())]);
+    let trash = FakeTrash::new(&run.fixture);
+    let report = run.run_holding(&run.plan(&[&a, &b]), &trash, &held, None);
+    assert_eq!(
+        report.results[0].outcome,
+        MoveOutcome::Skipped(SkipReason::InUse {
+            holder: "DiskImageMounter".into()
+        })
+    );
+    let cause = report.results[0].failure.as_ref().map(|f| f.cause);
+    assert_eq!(cause, Some(FailureCause::InUse));
+    assert!(matches!(
+        report.results[1].outcome,
+        MoveOutcome::Moved { .. }
+    ));
+    assert!(a.exists());
+    assert!(!b.exists());
+}
+
+#[test]
 fn cancelling_stops_the_run_and_the_rest_are_not_attempted() {
     let run = Run::new();
     let a = run.fixture.download("A.dmg", 2);
@@ -551,6 +590,7 @@ fn cancelling_stops_the_run_and_the_rest_are_not_attempted() {
         home: &run.fixture.home,
         roots: &roots,
         trash: &raising,
+        open_files: &crate::clean::open_files::NoOpenFiles,
         cancel: Some(&flag),
         progress: None,
         policy: &lease,

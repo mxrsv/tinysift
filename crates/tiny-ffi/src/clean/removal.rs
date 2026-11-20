@@ -15,6 +15,7 @@ use tiny_core::clean::elevated_delete::{ElevatedDelete, ElevatedError, Osascript
 use tiny_core::clean::finder_trash::Trash;
 use tiny_core::clean::fs_safe::{Delete, SafeDelete};
 use tiny_core::clean::native_trash::NativeTrash;
+use tiny_core::clean::open_files::{OpenFiles, ProcessOpenFiles};
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::PolicySnapshot;
 use tiny_core::clean::providers::{all_providers_with, CleanProvider};
@@ -38,6 +39,7 @@ pub use report::*;
 pub(super) struct Run<'a> {
     providers: ProviderFactory<'a>,
     probe: &'a dyn AppProbe,
+    open_files: &'a dyn OpenFiles,
     trash: &'a dyn Trash,
     delete: &'a dyn Delete,
     elevated: &'a dyn ElevatedDelete,
@@ -74,10 +76,11 @@ impl TinySession {
         let runner = app_runner();
         let probe = RunnerProbe(runner.as_ref());
         let providers = |options: &CleanOptions| all_providers_with(options, runner.clone());
-        self.remove_clean(
+        self.remove_clean_holding(
             &preview_id,
             &providers,
             &probe,
+            &ProcessOpenFiles::new(),
             &NativeTrash::default(),
             &SafeDelete,
             &OsascriptDelete,
@@ -90,6 +93,7 @@ impl TinySession {
 impl TinySession {
     /// `clean_remove` with injected providers, probe, Trash, deletion and
     /// deletion as administrator (the test seam).
+    #[cfg(test)]
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn remove_clean(
         &self,
@@ -102,9 +106,38 @@ impl TinySession {
         token: &CancellationToken,
         progress: &dyn ProgressListener,
     ) -> Result<FfiRemovalReport, FfiError> {
+        self.remove_clean_holding(
+            preview_id,
+            providers,
+            probe,
+            &tiny_core::clean::open_files::NoOpenFiles,
+            trash,
+            delete,
+            elevated,
+            token,
+            progress,
+        )
+    }
+
+    /// `remove_clean` while running processes hold what `open_files` says;
+    /// `remove_clean` itself runs as if nothing were held.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn remove_clean_holding(
+        &self,
+        preview_id: &str,
+        providers: ProviderFactory<'_>,
+        probe: &dyn AppProbe,
+        open_files: &dyn OpenFiles,
+        trash: &dyn Trash,
+        delete: &dyn Delete,
+        elevated: &dyn ElevatedDelete,
+        token: &CancellationToken,
+        progress: &dyn ProgressListener,
+    ) -> Result<FfiRemovalReport, FfiError> {
         let run = Run {
             providers,
             probe,
+            open_files,
             trash,
             delete,
             elevated,
@@ -115,6 +148,7 @@ impl TinySession {
 
     /// `clean_execute` with injected providers, probe and Trash (the test
     /// seam).
+    #[cfg(test)]
     pub(crate) fn execute_clean(
         &self,
         preview_id: &str,
@@ -124,9 +158,34 @@ impl TinySession {
         token: &CancellationToken,
         progress: &dyn ProgressListener,
     ) -> Result<FfiExecReport, FfiError> {
+        self.execute_clean_holding(
+            preview_id,
+            providers,
+            probe,
+            &tiny_core::clean::open_files::NoOpenFiles,
+            trash,
+            token,
+            progress,
+        )
+    }
+
+    /// `execute_clean` while running processes hold what `open_files` says;
+    /// `execute_clean` itself runs as if nothing were held.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn execute_clean_holding(
+        &self,
+        preview_id: &str,
+        providers: ProviderFactory<'_>,
+        probe: &dyn AppProbe,
+        open_files: &dyn OpenFiles,
+        trash: &dyn Trash,
+        token: &CancellationToken,
+        progress: &dyn ProgressListener,
+    ) -> Result<FfiExecReport, FfiError> {
         let run = Run {
             providers,
             probe,
+            open_files,
             trash,
             // Never reached: the preview is refused before it is spent.
             delete: &SafeDelete,
@@ -163,6 +222,7 @@ impl TinySession {
             providers: &providers,
             home: Some(&home),
             probe: run.probe,
+            open_files: run.open_files,
             trash: run.trash,
             delete: run.delete,
             elevated: run.elevated,

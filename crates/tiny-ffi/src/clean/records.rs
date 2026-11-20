@@ -618,6 +618,9 @@ pub(super) fn skip_reason(reason: SkipReason) -> (FfiSkipReason, Option<String>)
         SkipReason::NotOnHomeVolume => (FfiSkipReason::NotOnHomeVolume, None),
         SkipReason::ProviderGuard(d) => (FfiSkipReason::ProviderGuard, Some(d)),
         SkipReason::AppRunning(app) => (FfiSkipReason::AppRunning, Some(app)),
+        // A process that holds the path is reported as its running app:
+        // the same cause and the same thing to do, quit it and scan again.
+        SkipReason::InUse { holder } => (FfiSkipReason::AppRunning, Some(holder)),
         SkipReason::SafetyCheckFailed(d) => (FfiSkipReason::SafetyCheckUnavailable, Some(d)),
         SkipReason::Kept { rule_path } => (FfiSkipReason::Kept, Some(lossy(&rule_path))),
         SkipReason::HoldsKept { rule_path } => (FfiSkipReason::HoldsKept, Some(lossy(&rule_path))),

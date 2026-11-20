@@ -8,6 +8,7 @@ pub mod freed_size;
 pub mod fs_safe;
 pub mod large_files;
 pub mod native_trash;
+pub mod open_files;
 pub mod private_size;
 pub mod process;
 pub mod protection;

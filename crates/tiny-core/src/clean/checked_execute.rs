@@ -23,6 +23,7 @@ use super::failure_cause::{
 };
 use super::finder_trash::{Trash, TrashError};
 use super::fs_safe::{Delete, PathFingerprint, TreeRemoval};
+use super::open_files::OpenFiles;
 use super::process::AppProbe;
 use super::protection::{Evaluation, Matcher, Relation, INTERNAL_ID_PREFIX};
 use super::protection_store::{StoreError, StoreLease};
@@ -46,6 +47,9 @@ pub struct ExecContext<'a> {
     /// The home folder (`trash_plan::trusted_home` in the app).
     pub home: Option<&'a Path>,
     pub probe: &'a dyn AppProbe,
+    /// Which paths running processes hold, asked right before a move or a
+    /// deletion.
+    pub open_files: &'a dyn OpenFiles,
     pub trash: &'a dyn Trash,
     /// Permanent deletion, for items planned as `Removal::Delete`.
     pub delete: &'a dyn Delete,
@@ -522,8 +526,9 @@ fn skip_for(policy: &StoreLease<'_>, evaluation: &Evaluation) -> SkipReason {
 /// and the user's explicit choice); then slow checks come
 /// before the path checks so those sit right before the removal: provider
 /// eligibility for the planned removal, the running-app probe, the
-/// providers' guards, then `symlink_metadata`, fingerprint (with the listing
-/// for the Trash row), volume, root containment and protected paths. Guards
+/// providers' guards, whether a process holds the path (`not_in_use`), then
+/// `symlink_metadata`, fingerprint (with the listing for the Trash row),
+/// volume, root containment and protected paths. Guards
 /// and app gates of every item merged into this one apply too, in every
 /// removal mode.
 /// `run` holds what this run already learned about each project's activity.
@@ -584,12 +589,26 @@ pub fn validate(
         }
         return Ok(());
     }
+    not_in_use(planned, ctx)?;
     same_file(planned, ctx)?;
     let tool_printed = gated.iter().any(|(p, _)| p.roots_from_tool_output());
     if let Some(reason) = protected_reason(&item.path, ctx.home, tool_printed) {
         return Err(SkipReason::ProtectedPath(reason));
     }
     Ok(())
+}
+
+/// No running process holds the path or anything inside it. Asked only for a
+/// move or a deletion done from here: a tool judges its own cache, and Finder
+/// decides what in the Trash is still in use.
+fn not_in_use(planned: &PlannedItem, ctx: &ExecContext<'_>) -> Result<(), SkipReason> {
+    if !matches!(planned.removal, Removal::MoveToTrash | Removal::Delete) {
+        return Ok(());
+    }
+    match ctx.open_files.holder_inside(&planned.item.path) {
+        Some(holder) => Err(SkipReason::InUse { holder }),
+        None => Ok(()),
+    }
 }
 
 /// The path is still the file discovery fingerprinted (with the listing for

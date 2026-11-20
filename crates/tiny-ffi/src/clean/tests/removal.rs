@@ -204,6 +204,55 @@ fn permanent_mode_deletes_what_comes_back_and_trashes_your_files() {
     remove(&dir);
 }
 
+/// A held item crosses the boundary as a skip for a running app: the
+/// process's name, and the cause the app already has an action for.
+#[test]
+fn an_item_a_process_holds_is_reported_as_in_use_by_that_process() {
+    use tiny_core::clean::open_files::HeldPaths;
+
+    let dir = layout("held");
+    let session = TestSession::new();
+    let discovery = discover(&session, &providers(&dir)).unwrap();
+    let preview = session
+        .clean_preview_with_mode(movable(&discovery), FfiDeleteMode::Permanent)
+        .unwrap();
+    let held = HeldPaths::new([(dir.join("logs/a"), "node".to_string())]);
+    let sinks = FakeTrash {
+        deletes: true,
+        ..Default::default()
+    };
+    let fixtures = dir.clone();
+    let providers = move |_: &CleanOptions| providers(&fixtures);
+    let report = session
+        .remove_clean_holding(
+            &preview.preview_id,
+            &providers,
+            &NotRunning,
+            &held,
+            &sinks,
+            &sinks,
+            &sinks,
+            &CancellationToken::default(),
+            &Progress::default(),
+        )
+        .unwrap();
+    assert_eq!(
+        removal_outcomes(&report),
+        [
+            FfiRemovalOutcome::MovedToTrash,
+            FfiRemovalOutcome::Skipped {
+                reason: FfiSkipReason::AppRunning,
+                detail: Some("node".into())
+            },
+            FfiRemovalOutcome::Deleted
+        ]
+    );
+    assert_eq!(sinks.steps(), ["delete t", "trash d"]);
+    assert_eq!(report.results[1].cause, Some(FfiFailureCause::InUse));
+    assert_eq!(report.results[1].bytes_freed, 0);
+    remove(&dir);
+}
+
 #[test]
 fn trash_mode_moves_everything_to_the_trash() {
     let dir = layout("trash-mode");

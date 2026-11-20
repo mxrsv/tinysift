@@ -140,7 +140,7 @@ pub fn skip_failure(reason: &SkipReason) -> Option<Failure> {
         SkipReason::Symlink | SkipReason::Changed | SkipReason::OutsideRoots => {
             FailureCause::ChangedSinceScan
         }
-        SkipReason::AppRunning(_) => FailureCause::InUse,
+        SkipReason::AppRunning(_) | SkipReason::InUse { .. } => FailureCause::InUse,
         SkipReason::ProtectedPath(reason) if reason == INSIDE_SYSTEM => {
             FailureCause::ProtectedByMacOs
         }

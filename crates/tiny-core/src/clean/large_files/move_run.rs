@@ -22,6 +22,7 @@ use crate::clean::checked_execute::{
 use crate::clean::failure_cause::{skip_failure, trash_failure, Failure};
 use crate::clean::finder_trash::{Trash, TrashError};
 use crate::clean::fs_safe::PathFingerprint;
+use crate::clean::open_files::OpenFiles;
 use crate::clean::private_size::private_allocated_bytes;
 use crate::clean::protection_store::StoreLease;
 use crate::clean::trash_plan::{inside_system, protected_reason};
@@ -45,6 +46,8 @@ pub struct MoveContext<'a> {
     /// The folders the scan listed; a path must still lie inside one.
     pub roots: &'a [PathBuf],
     pub trash: &'a dyn Trash,
+    /// Which paths running processes hold, asked right before each move.
+    pub open_files: &'a dyn OpenFiles,
     pub cancel: Option<&'a AtomicBool>,
     pub progress: ProgressCallback<'a>,
     /// The saved rules, locked for the whole run.
@@ -251,6 +254,9 @@ fn check(planned: &PlannedMove, ctx: &MoveContext<'_>) -> Result<(), SkipReason>
         .any(|root| path.starts_with(root) && ancestors_are_real_dirs(path));
     if !inside {
         return Err(SkipReason::OutsideRoots);
+    }
+    if let Some(holder) = ctx.open_files.holder_inside(path) {
+        return Err(SkipReason::InUse { holder });
     }
     match protected_reason(path, Some(ctx.home), false) {
         Some(reason) => Err(SkipReason::ProtectedPath(reason)),

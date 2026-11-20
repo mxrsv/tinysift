@@ -56,6 +56,7 @@ fn run_admin_cancellable(
         providers: &providers,
         home: Some(&home),
         probe,
+        open_files: &crate::clean::open_files::NoOpenFiles,
         trash: sinks,
         delete: sinks,
         elevated: sinks,

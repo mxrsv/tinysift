@@ -32,6 +32,7 @@ use tiny_core::clean::large_files::{
     LargeFile, Limits, INSTALLER_MIN_BYTES,
 };
 use tiny_core::clean::native_trash::NativeTrash;
+use tiny_core::clean::open_files::{OpenFiles, ProcessOpenFiles};
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::{Matcher, PolicySnapshot};
 
@@ -160,9 +161,10 @@ impl TinySession {
         token: Arc<CancellationToken>,
         progress: Arc<dyn ProgressListener>,
     ) -> Result<FfiLargeFilesMoveReport, FfiError> {
-        self.move_large_files(
+        self.move_large_files_holding(
             &preview_id,
             &NativeTrash::default(),
+            &ProcessOpenFiles::new(),
             &token,
             progress.as_ref(),
         )
@@ -496,10 +498,25 @@ impl TinySession {
     /// rules stay locked until the report is built, and the lease is taken
     /// before the preview is spent, so a busy or unreadable store fails
     /// without spending it.
+    #[cfg(test)]
     pub(crate) fn move_large_files(
         &self,
         preview_id: &str,
         trash: &dyn Trash,
+        token: &CancellationToken,
+        progress: &dyn ProgressListener,
+    ) -> Result<FfiLargeFilesMoveReport, FfiError> {
+        let nothing_held = tiny_core::clean::open_files::NoOpenFiles;
+        self.move_large_files_holding(preview_id, trash, &nothing_held, token, progress)
+    }
+
+    /// `move_large_files` while running processes hold what `open_files`
+    /// says; `move_large_files` itself runs as if nothing were held.
+    pub(crate) fn move_large_files_holding(
+        &self,
+        preview_id: &str,
+        trash: &dyn Trash,
+        open_files: &dyn OpenFiles,
         token: &CancellationToken,
         progress: &dyn ProgressListener,
     ) -> Result<FfiLargeFilesMoveReport, FfiError> {
@@ -517,6 +534,7 @@ impl TinySession {
             home: &home,
             roots: &roots,
             trash,
+            open_files,
             cancel: Some(token.flag()),
             progress: Some(&on_progress),
             policy: &policy,

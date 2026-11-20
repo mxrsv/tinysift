@@ -325,8 +325,13 @@ one is not offered whole (`npm` offers its other children). A category that name
 **Re-check before a move (SF2).** `validate` skips an item whose owning app runs (`AppRunning`, cause
 `InUse`) and one whose fingerprint differs (`Changed`, cause `ChangedSinceScan`): a file's size or
 mtime, a folder's identity. A folder's contents are not compared, since caches churn between scan and
-confirmation (only the Trash row also compares its listing), and no check asks whether a process holds
-a file open.
+confirmation (only the Trash row also compares its listing). A move or a deletion is also skipped as
+`InUse` while a process holds the path or something inside it: its executable, its working folder or
+an open file, read in one libproc pass that answers for two seconds
+([`open_files.rs`](../../crates/tiny-core/src/clean/open_files.rs)). That answer is a floor: another
+user's processes and files mapped without a descriptor are not seen, so "nothing holds it" never
+stands in for the app gate. A tool's removal and Empty Trash are not asked; over FFI the skip is
+`AppRunning` with the process's name.
 
 **Placeholders.** A simulator runtime has no path: its item is `<simulator-runtime:UUID>` with
 `Evidence::SimulatorRuntime`. Homebrew's cleanup (`<homebrew:cleanup>`) and Docker's kinds
@@ -486,8 +491,9 @@ order and with its pieces: cancellation, the rules unchanged, `/System`, the sav
 the file the scan saw (`PathFingerprint`: a file's size and mtime), not a symlink, on the home volume, inside a folder the
 scan listed through real folders, and not a protected path; then the rules again and cancellation. A refusal is a skip
 with its RM2 cause (`failure_cause.rs`) and the run goes on; cancellation, a denied Automation or a changed rule set
-stops it and the rest are `NotAttempted`. The open-file check and a running-app check are not done (an installer has no
-owning app; the open-file check is the plan's backlog item).
+stops it and the rest are `NotAttempted`. A file a process holds is skipped as `InUse`
+([`open_files.rs`](../../crates/tiny-core/src/clean/open_files.rs)); a running-app check is not done (an installer has no
+owning app).
 
 **What a move reports.** A move frees nothing by itself (FG3). `bytes_moved` is the file's private allocated bytes
 measured right before the move (`private_allocated_bytes`: blocks shared with an APFS clone do not count, and a
