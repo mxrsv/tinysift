@@ -396,6 +396,11 @@ pub enum FfiSkipReason {
     HoldsKept,
     /// Whether a saved rule covers it could not be decided; `detail` says why.
     KeepUncertain,
+    /// A running process holds it or something inside it: its executable,
+    /// its working folder or an open file. `detail` is that process's name,
+    /// which is not always an app's: a shell or a background helper holds
+    /// files too, and cannot be quit from the Dock.
+    HeldByProcess,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
@@ -618,9 +623,7 @@ pub(super) fn skip_reason(reason: SkipReason) -> (FfiSkipReason, Option<String>)
         SkipReason::NotOnHomeVolume => (FfiSkipReason::NotOnHomeVolume, None),
         SkipReason::ProviderGuard(d) => (FfiSkipReason::ProviderGuard, Some(d)),
         SkipReason::AppRunning(app) => (FfiSkipReason::AppRunning, Some(app)),
-        // A process that holds the path is reported as its running app:
-        // the same cause and the same thing to do, quit it and scan again.
-        SkipReason::InUse { holder } => (FfiSkipReason::AppRunning, Some(holder)),
+        SkipReason::InUse { holder } => (FfiSkipReason::HeldByProcess, Some(holder)),
         SkipReason::SafetyCheckFailed(d) => (FfiSkipReason::SafetyCheckUnavailable, Some(d)),
         SkipReason::Kept { rule_path } => (FfiSkipReason::Kept, Some(lossy(&rule_path))),
         SkipReason::HoldsKept { rule_path } => (FfiSkipReason::HoldsKept, Some(lossy(&rule_path))),

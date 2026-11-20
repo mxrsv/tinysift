@@ -36,6 +36,23 @@ pub trait OpenFiles {
     /// The name of a process whose executable, working folder or open file
     /// is `path` or lies inside it; `None` when no readable process has one.
     fn holder_inside(&self, path: &Path) -> Option<String>;
+
+    /// Whether a process runs a file that is `path` or lies inside it. Unlike
+    /// `holder_inside` this says when it cannot tell, so a caller that must
+    /// keep what it cannot judge can.
+    fn running_from(&self, path: &Path) -> Running;
+}
+
+/// Whether a running process executes a file at or inside a path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Running {
+    /// The named process does. Certain even when the list is incomplete.
+    By(String),
+    /// Every live process named its executable, and none is inside.
+    Nobody,
+    /// The process list, or a live process's executable, could not be read;
+    /// the text says which.
+    CannotTell(String),
 }
 
 /// Answers that nothing is held, for platforms without libproc and for
@@ -46,18 +63,63 @@ impl OpenFiles for NoOpenFiles {
     fn holder_inside(&self, _path: &Path) -> Option<String> {
         None
     }
+
+    fn running_from(&self, _path: &Path) -> Running {
+        Running::Nobody
+    }
 }
 
 /// One pass's result: each held path with the process holding it.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct HeldPaths {
     held: Vec<(PathBuf, String)>,
+    /// The file each process runs, also part of `held`.
+    executables: Vec<(PathBuf, String)>,
+    /// Why `executables` may be short; `None` when every live process named
+    /// its own.
+    executables_unread: Option<String>,
 }
 
 impl HeldPaths {
     pub fn new(held: impl IntoIterator<Item = (PathBuf, String)>) -> Self {
         Self {
             held: held.into_iter().collect(),
+            ..Self::default()
+        }
+    }
+
+    /// With the files processes run, which `running_from` answers from.
+    pub fn with_executables(
+        self,
+        executables: impl IntoIterator<Item = (PathBuf, String)>,
+    ) -> Self {
+        let executables: Vec<(PathBuf, String)> = executables.into_iter().collect();
+        Self {
+            held: self.held.into_iter().chain(executables.clone()).collect(),
+            executables,
+            ..self
+        }
+    }
+
+    /// With a reason the list of executables is incomplete.
+    pub fn with_executables_unread(self, why: impl Into<String>) -> Self {
+        Self {
+            executables_unread: Some(why.into()),
+            ..self
+        }
+    }
+
+    /// A process found running from `path` is certain; none found is only
+    /// "nobody" when the list is complete.
+    pub fn running_from(&self, path: &Path) -> Running {
+        let runner = self
+            .executables
+            .iter()
+            .find(|(executable, _)| executable.starts_with(path));
+        match (runner, &self.executables_unread) {
+            (Some((_, name)), _) => Running::By(name.clone()),
+            (None, Some(why)) => Running::CannotTell(why.clone()),
+            (None, None) => Running::Nobody,
         }
     }
 
@@ -93,6 +155,10 @@ impl OpenFiles for HeldPaths {
     fn holder_inside(&self, path: &Path) -> Option<String> {
         HeldPaths::holder_inside(self, path).map(str::to_string)
     }
+
+    fn running_from(&self, path: &Path) -> Running {
+        HeldPaths::running_from(self, path)
+    }
 }
 
 /// The real check: reads the process list when asked, and again once the
@@ -108,24 +174,31 @@ impl ProcessOpenFiles {
     }
 }
 
-impl OpenFiles for ProcessOpenFiles {
-    fn holder_inside(&self, path: &Path) -> Option<String> {
+impl ProcessOpenFiles {
+    /// Asks the current pass, reading a new one first when the last is too
+    /// old.
+    fn ask<R>(&self, question: impl FnOnce(&HeldPaths) -> R) -> R {
         // A poisoned lock only means another thread panicked mid-read; the
         // snapshot inside is replaced whole, never half-written.
         let mut snapshot = self
             .snapshot
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        let fresh = snapshot
-            .as_ref()
-            .is_some_and(|(read_at, _)| read_at.elapsed() < SNAPSHOT_MAX_AGE);
-        if !fresh {
-            *snapshot = Some((Instant::now(), read_held_paths()));
-        }
-        snapshot
-            .as_ref()
-            .and_then(|(_, held)| held.live_holder_inside(path))
-            .map(str::to_string)
+        let (_, held) = match snapshot.take() {
+            Some(pass) if pass.0.elapsed() < SNAPSHOT_MAX_AGE => snapshot.insert(pass),
+            _ => snapshot.insert((Instant::now(), read_held_paths())),
+        };
+        question(held)
+    }
+}
+
+impl OpenFiles for ProcessOpenFiles {
+    fn holder_inside(&self, path: &Path) -> Option<String> {
+        self.ask(|held| held.live_holder_inside(path).map(str::to_string))
+    }
+
+    fn running_from(&self, path: &Path) -> Running {
+        self.ask(|held| held.running_from(path))
     }
 }
 
@@ -133,37 +206,66 @@ fn is_indexer(name: &str) -> bool {
     INDEXERS.contains(&name)
 }
 
-/// Every path a readable process holds, except this process's own and the
-/// indexers'.
+/// What every process this user may read holds, except this process's own
+/// and, for working folders and open files, the indexers'. Which file each
+/// process runs is kept apart, with whether that list is complete.
 #[cfg(target_os = "macos")]
 pub fn read_held_paths() -> HeldPaths {
+    use libproc::Executable;
+
     let own = std::process::id();
-    let held = crate::processes::working_dir::all_pids()
+    let pids = crate::processes::working_dir::all_pids();
+    let list_unread = pids
+        .is_empty()
+        .then(|| "the process list could not be read".to_string());
+    let processes: Vec<(u32, Executable)> = pids
         .into_iter()
         .filter(|&pid| pid != own)
-        .flat_map(|pid| {
-            let executable = libproc::executable(pid);
-            let name = executable
-                .as_deref()
-                .and_then(Path::file_name)
-                .map(|name| name.to_string_lossy().into_owned())
-                .unwrap_or_else(|| format!("process {pid}"));
-            if is_indexer(&name) {
-                return Vec::new();
-            }
-            executable
-                .into_iter()
-                .chain(libproc::working_directory(pid))
-                .chain(libproc::open_files(pid))
-                .map(|path| (path, name.clone()))
-                .collect()
-        });
-    HeldPaths::new(held)
+        .map(|pid| (pid, libproc::executable(pid)))
+        .collect();
+    let unnamed = processes
+        .iter()
+        .filter(|(_, executable)| matches!(executable, Executable::Unreadable))
+        .count();
+    let executables: Vec<(PathBuf, String)> = processes
+        .iter()
+        .filter_map(|(pid, executable)| {
+            let path = executable.path()?;
+            Some((path.to_path_buf(), process_name(*pid, executable)))
+        })
+        .collect();
+    let held = processes.iter().flat_map(|(pid, executable)| {
+        let name = process_name(*pid, executable);
+        if is_indexer(&name) {
+            return Vec::new();
+        }
+        libproc::working_directory(*pid)
+            .into_iter()
+            .chain(libproc::open_files(*pid))
+            .map(|path| (path, name.clone()))
+            .collect()
+    });
+    HeldPaths {
+        executables_unread: list_unread.or_else(|| {
+            (unnamed > 0).then(|| format!("{unnamed} running processes did not name their file"))
+        }),
+        ..HeldPaths::new(held).with_executables(executables)
+    }
+}
+
+/// The file name of what `pid` runs, or the pid when macOS will not say.
+#[cfg(target_os = "macos")]
+fn process_name(pid: u32, executable: &libproc::Executable) -> String {
+    executable
+        .path()
+        .and_then(Path::file_name)
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| format!("process {pid}"))
 }
 
 #[cfg(not(target_os = "macos"))]
 pub fn read_held_paths() -> HeldPaths {
-    HeldPaths::default()
+    HeldPaths::default().with_executables_unread("this platform cannot list running processes")
 }
 
 #[cfg(target_os = "macos")]
@@ -203,16 +305,43 @@ mod libproc {
         (!bytes.is_empty()).then(|| OsString::from_vec(bytes).into())
     }
 
-    /// The file `pid` runs, `None` when macOS will not say.
-    pub(super) fn executable(pid: u32) -> Option<PathBuf> {
-        let pid = libc::c_int::try_from(pid).ok()?;
+    /// What macOS says a process runs.
+    pub(super) enum Executable {
+        At(PathBuf),
+        /// The process ended, or is a zombie that runs nothing (`ESRCH`).
+        Gone,
+        /// A live process whose file macOS would not name.
+        Unreadable,
+    }
+
+    impl Executable {
+        pub(super) fn path(&self) -> Option<&std::path::Path> {
+            match self {
+                Executable::At(path) => Some(path),
+                Executable::Gone | Executable::Unreadable => None,
+            }
+        }
+    }
+
+    /// The file `pid` runs.
+    pub(super) fn executable(pid: u32) -> Executable {
+        let Ok(pid) = libc::c_int::try_from(pid) else {
+            return Executable::Gone;
+        };
         let mut buffer = vec![0u8; libc::PROC_PIDPATHINFO_MAXSIZE as usize];
         // SAFETY: `buffer` holds the `buffersize` bytes the call may write.
         let written =
             unsafe { libc::proc_pidpath(pid, buffer.as_mut_ptr().cast(), buffer.len() as u32) };
-        let written = usize::try_from(written).ok()?;
+        let Some(written) = usize::try_from(written).ok().filter(|&n| n > 0) else {
+            let gone = std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            return if gone {
+                Executable::Gone
+            } else {
+                Executable::Unreadable
+            };
+        };
         buffer.truncate(written.min(buffer.len()));
-        path_from(buffer)
+        path_from(buffer).map_or(Executable::Unreadable, Executable::At)
     }
 
     pub(super) fn working_directory(pid: u32) -> Option<PathBuf> {
@@ -353,6 +482,35 @@ mod tests {
     }
 
     #[test]
+    fn running_from_tells_a_runner_from_nobody_from_cannot_tell() {
+        let release = Path::new("/h/tools/versions/2.1.0");
+        let old = Path::new("/h/tools/versions/2.0.9");
+        let complete =
+            HeldPaths::default().with_executables([(release.to_path_buf(), "claude".to_string())]);
+        let incomplete = complete
+            .clone()
+            .with_executables_unread("2 running processes did not name their file");
+
+        assert_eq!(complete.running_from(release), Running::By("claude".into()));
+        assert_eq!(complete.running_from(old), Running::Nobody);
+        // A runner that was found is certain; only "nobody" needs the whole list.
+        assert_eq!(
+            incomplete.running_from(release),
+            Running::By("claude".into())
+        );
+        assert!(matches!(
+            incomplete.running_from(old),
+            Running::CannotTell(_)
+        ));
+        // The file a process runs is held like any other path it has open.
+        assert_eq!(
+            complete.holder_inside(Path::new("/h/tools")),
+            Some("claude")
+        );
+        assert_eq!(NoOpenFiles.running_from(release), Running::Nobody);
+    }
+
+    #[test]
     fn nothing_held_answers_none() {
         assert_eq!(HeldPaths::default().holder_inside(Path::new("/h")), None);
         assert_eq!(NoOpenFiles.holder_inside(Path::new("/h")), None);
@@ -398,6 +556,10 @@ mod tests {
             .unwrap();
 
         let while_open = read_held_paths();
+        assert_eq!(
+            while_open.running_from(Path::new("/usr/bin/tail")),
+            Running::By("tail".into())
+        );
         holder.kill().unwrap();
         holder.wait().unwrap();
         let after_exit = read_held_paths();

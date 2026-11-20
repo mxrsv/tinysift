@@ -204,8 +204,8 @@ fn permanent_mode_deletes_what_comes_back_and_trashes_your_files() {
     remove(&dir);
 }
 
-/// A held item crosses the boundary as a skip for a running app: the
-/// process's name, and the cause the app already has an action for.
+/// A held item crosses the boundary under its own reason, with the process's
+/// name and the in-use cause, so the app never calls a shell an open app.
 #[test]
 fn an_item_a_process_holds_is_reported_as_in_use_by_that_process() {
     use tiny_core::clean::open_files::HeldPaths;
@@ -241,7 +241,7 @@ fn an_item_a_process_holds_is_reported_as_in_use_by_that_process() {
         [
             FfiRemovalOutcome::MovedToTrash,
             FfiRemovalOutcome::Skipped {
-                reason: FfiSkipReason::AppRunning,
+                reason: FfiSkipReason::HeldByProcess,
                 detail: Some("node".into())
             },
             FfiRemovalOutcome::Deleted

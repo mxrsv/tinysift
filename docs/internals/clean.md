@@ -334,7 +334,10 @@ and a file read and closed again (a runtime loading its modules, so build output
 are not seen. "Nothing holds it" never stands in for the app gate, and never proves a path unused. A
 tool's removal, Empty Trash and deletion as administrator are not asked, and neither are the CLI's
 executor, uninstall or the worktree move, which keep their own gates. Over FFI the skip is
-`AppRunning` with the process's name, which is not always an app's.
+`HeldByProcess` with the process's name, apart from `AppRunning`, because a shell or a background
+helper is not an app the user can quit. `running_from` asks the same pass a narrower question, whether
+a process runs a file at or inside a path, and is the only answer with a third state: a live process
+that will not name its file makes it `CannotTell`, which a caller that must not guess treats as held.
 
 **Placeholders.** A simulator runtime has no path: its item is `<simulator-runtime:UUID>` with
 `Evidence::SimulatorRuntime`. Homebrew's cleanup (`<homebrew:cleanup>`) and Docker's kinds
