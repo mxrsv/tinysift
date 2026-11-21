@@ -61,7 +61,9 @@ if [ "$NOTARIZE" = 1 ]; then
   ditto -c -k --keepParent "$STAGE/$BINARY" "$OUT/$NAME.zip"
   xcrun notarytool submit "$OUT/$NAME.zip" --keychain-profile "$NOTARY_PROFILE" --wait
   rm "$OUT/$NAME.zip"
-  spctl --assess --type execute -v "$STAGE/$BINARY"
+  # spctl --type execute rejects every bare executable ("does not seem to be an app"), notarized or
+  # not, so ask codesign whether Apple holds a ticket for this exact signature.
+  codesign --verify --strict -R="notarized" --check-notarization "$STAGE/$BINARY"
 else
   printf 'release-cli: --no-notarize: signed but NOT notarized. Do not publish this archive.\n' >&2
 fi
