@@ -109,11 +109,18 @@ fn manifest_files(models: &Path, ctx: &ScanContext<'_>) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = level
         .iter()
         .flat_map(|dir| read_entries(&root, dir, ctx))
-        .filter(|(_, meta)| meta.file_type().is_file())
+        // Finder's `.DS_Store` and other hidden files are not manifests.
+        .filter(|(path, meta)| meta.file_type().is_file() && !is_hidden(path))
         .map(|(path, _)| path)
         .collect();
     files.sort();
     files
+}
+
+fn is_hidden(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name.starts_with('.'))
 }
 
 /// The blob file a digest names: `sha256:<hex>` is stored as `sha256-<hex>`.
@@ -261,6 +268,12 @@ mod tests {
         let items = ollama_items(&ctx, &models);
         assert_eq!(items.len(), 1);
         assert!(ctx.take_findings().size_upper_bound.contains(&good));
+        // A hidden file Finder leaves beside the tags is not a manifest.
+        fs::remove_file(&bad).unwrap();
+        fs::write(bad.with_file_name(".DS_Store"), b"\0\0").unwrap();
+        let ctx = ScanContext::unchecked();
+        assert_eq!(ollama_items(&ctx, &models).len(), 1);
+        assert!(ctx.take_findings().size_upper_bound.is_empty());
     }
 
     /// AC-M4 and AM6: the store's root and its blobs are never an item, and

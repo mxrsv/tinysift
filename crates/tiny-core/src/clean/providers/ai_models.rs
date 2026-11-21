@@ -25,6 +25,15 @@ fn file_name(path: &Path) -> Option<&str> {
     path.file_name().and_then(|name| name.to_str())
 }
 
+/// The CLI's hard delete moves a model to the Trash too, as the desktop's
+/// Permanent mode does (`trash_in_every_mode`, AM5).
+fn trash_instead_of_delete(action: ExecAction) -> ExecAction {
+    match action {
+        ExecAction::HardDelete => ExecAction::Trash,
+        other => other,
+    }
+}
+
 fn visible_dir(path: &Path) -> bool {
     file_name(path).is_some_and(|name| !name.is_empty() && !name.starts_with('.'))
         && is_dir_safe(path)
@@ -77,7 +86,7 @@ impl CleanProvider for HuggingFace {
             .unwrap_or_default())
     }
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
-        execute_per_item(items, action, HUGGING_FACE_ID)
+        execute_per_item(items, trash_instead_of_delete(action), HUGGING_FACE_ID)
     }
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         match home() {
@@ -230,7 +239,7 @@ impl CleanProvider for LmStudio {
         Ok(home().map(|h| lm_studio_items(ctx, &h)).unwrap_or_default())
     }
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
-        execute_per_item(items, action, LM_STUDIO_ID)
+        execute_per_item(items, trash_instead_of_delete(action), LM_STUDIO_ID)
     }
     fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
         match home() {
@@ -413,6 +422,22 @@ mod tests {
                 assert!(!private.starts_with(&item.path), "{:?}", item.path);
             }
         }
+    }
+
+    #[test]
+    fn a_hard_delete_moves_a_model_to_the_trash() {
+        assert_eq!(
+            trash_instead_of_delete(ExecAction::HardDelete),
+            ExecAction::Trash
+        );
+        assert_eq!(
+            trash_instead_of_delete(ExecAction::Trash),
+            ExecAction::Trash
+        );
+        assert_eq!(
+            trash_instead_of_delete(ExecAction::EmptyTrash),
+            ExecAction::EmptyTrash
+        );
     }
 
     #[test]

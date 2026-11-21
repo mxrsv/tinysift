@@ -162,7 +162,8 @@ private-looking downloads and never ticks them for you.
   repository in `~/.cache/huggingface/hub` (the whole hub when its folders share stored
   files), and `lmstudio-models` each folder in `~/.lmstudio/models/<publisher>/`. Tokens,
   settings and chat history beside them are never listed. A model folder you moved
-  elsewhere is not found.
+  elsewhere is not found. These two go to the Trash even with `--hard`: a model you imported
+  does not download again.
 - **`ollama-models` is report only.** It lists each model with the bytes only that model
   uses; layers several models share are counted in none. Remove one with `ollama rm`.
 - **`app-orphans` is report only.** It lists Application Support folders that match no
