@@ -1,4 +1,4 @@
-//! End-to-end smoke tests for `tiny clean`. We only assert on outputs that
+//! End-to-end smoke tests for `sift clean`. We only assert on outputs that
 //! must hold regardless of what's actually on disk, so the suite stays
 //! green on any developer machine and in CI.
 
@@ -11,7 +11,7 @@ fn dry_run_with_includes_preserves_an_isolated_fixture() {
     let log = home.path().join("Library/Logs/fixture.log");
     std::fs::create_dir_all(log.parent().unwrap()).unwrap();
     std::fs::write(&log, b"kept").unwrap();
-    Command::cargo_bin("tiny")
+    Command::cargo_bin("tinysift")
         .unwrap()
         .env("HOME", home.path())
         .args([
@@ -30,7 +30,7 @@ fn dry_run_with_includes_preserves_an_isolated_fixture() {
 
 #[test]
 fn unknown_category_fails_with_clear_message() {
-    Command::cargo_bin("tiny")
+    Command::cargo_bin("tinysift")
         .unwrap()
         .args(["clean", "--category", "definitely-not-a-category"])
         .assert()
@@ -40,7 +40,7 @@ fn unknown_category_fails_with_clear_message() {
 
 #[test]
 fn idle_days_zero_is_rejected() {
-    Command::cargo_bin("tiny")
+    Command::cargo_bin("tinysift")
         .unwrap()
         .args(["clean", "--dry-run", "--idle-days", "0"])
         .assert()
@@ -70,7 +70,7 @@ fn build_output_lists_only_idle_projects_by_default() {
     project(home.path(), "active-web", "package.json", "node_modules", 2);
     project(home.path(), "idle-crate", "Cargo.toml", "target", 40);
     project(home.path(), "active-crate", "Cargo.toml", "target", 2);
-    let output = Command::cargo_bin("tiny")
+    let output = Command::cargo_bin("tinysift")
         .unwrap()
         .env("HOME", home.path())
         .args([
@@ -104,7 +104,7 @@ fn build_output_lists_only_idle_projects_by_default() {
 
 #[test]
 fn simulator_categories_list_read_only() {
-    Command::cargo_bin("tiny")
+    Command::cargo_bin("tinysift")
         .unwrap()
         .args([
             "clean",
@@ -126,7 +126,7 @@ fn simulator_categories_list_read_only() {
 
 #[test]
 fn explicitly_requested_missing_tool_is_not_reported_as_an_empty_success() {
-    Command::cargo_bin("tiny")
+    Command::cargo_bin("tinysift")
         .unwrap()
         .env("PATH", "/nonexistent-tiny-test-path")
         .args(["clean", "--dry-run", "--category", "docker"])

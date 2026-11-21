@@ -1,4 +1,4 @@
-//! `tiny processes`: list, show and quit, backed by the same
+//! `sift processes`: list, show and quit, backed by the same
 //! `tiny_core::processes` calls as the native app.
 
 use anyhow::{bail, Context, Result};

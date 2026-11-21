@@ -317,7 +317,7 @@ pub trait CleanProvider {
 }
 
 /// Why the CLI refuses a category that `needs_admin`.
-pub(crate) const NEEDS_ADMIN: &str = "needs administrator rights; the tiny CLI never runs sudo";
+pub(crate) const NEEDS_ADMIN: &str = "needs administrator rights; the sift CLI never runs sudo";
 
 /// Why the desktop only reports a category instead of moving its items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
