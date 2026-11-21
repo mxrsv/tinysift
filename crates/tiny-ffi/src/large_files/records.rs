@@ -94,6 +94,13 @@ pub struct FfiLargeFile {
     /// With `extracted_path`: how many files, folders and links it lists.
     #[uniffi(default = None)]
     pub extracted_entries: Option<u64>,
+    /// True for a row the size filter for groups 3 and 4 hides under its
+    /// minimum (LV-L5): every group 3 and 4 row, by `frees_bytes`, and a
+    /// group 5 file that frees nothing found by the home walk, by
+    /// `shared_bytes` (FN1). False for every other row; an installer that
+    /// frees nothing keeps group 2's 100 MB.
+    #[uniffi(default = false)]
+    pub follows_size_filter: bool,
 }
 
 /// What a Large Files scan lists (`large_files_scan_with`).
@@ -256,6 +263,7 @@ pub(super) fn file_record(id: &str, file: &LargeFile) -> FfiLargeFile {
             .as_ref()
             .map(|e| e.beside.to_string_lossy().into_owned()),
         extracted_entries: file.extracted.as_ref().map(|e| e.entries),
+        follows_size_filter: file.follows_size_filter(),
     }
 }
 

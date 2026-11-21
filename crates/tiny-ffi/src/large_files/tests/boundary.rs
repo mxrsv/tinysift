@@ -224,3 +224,130 @@ fn an_unpacked_archive_moves_alone_and_only_while_its_copy_stays() {
     ));
     assert!(archive.exists());
 }
+
+/// A stored zip of `entries` written at `relative`, each entry also written
+/// unpacked beside it under the same name. CRCs are 0.
+fn unpacked_zip(world: &World, relative: &str, entries: &[(&str, Vec<u8>)]) -> PathBuf {
+    let (mut out, mut central) = (Vec::new(), Vec::new());
+    for (name, data) in entries {
+        let offset = out.len() as u32;
+        let size = (data.len() as u32).to_le_bytes();
+        out.extend(0x0403_4b50u32.to_le_bytes());
+        out.extend([20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        out.extend(size);
+        out.extend(size);
+        out.extend((name.len() as u16).to_le_bytes());
+        out.extend([0, 0]);
+        out.extend(name.as_bytes());
+        out.extend(data);
+        central.extend(0x0201_4b50u32.to_le_bytes());
+        central.extend([20, 3, 20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        central.extend(size);
+        central.extend(size);
+        central.extend((name.len() as u16).to_le_bytes());
+        central.extend([0; 12]);
+        central.extend(offset.to_le_bytes());
+        central.extend(name.as_bytes());
+    }
+    let at = out.len() as u32;
+    let count = (entries.len() as u16).to_le_bytes();
+    out.extend(&central);
+    out.extend(0x0605_4b50u32.to_le_bytes());
+    out.extend([0, 0, 0, 0]);
+    out.extend(count);
+    out.extend(count);
+    out.extend((central.len() as u32).to_le_bytes());
+    out.extend(at.to_le_bytes());
+    out.extend([0, 0]);
+    let archive = file(world, relative, &out, 30);
+    let parent = archive.parent().unwrap();
+    for (name, data) in entries {
+        let path = parent.join(name.trim_end_matches('/'));
+        if name.ends_with('/') {
+            fs::create_dir_all(&path).unwrap();
+        } else {
+            fs::create_dir_all(path.parent().unwrap()).unwrap();
+            fs::write(&path, data).unwrap();
+        }
+    }
+    archive
+}
+
+#[test]
+fn an_archive_moves_only_while_every_unpacked_file_is_still_there() {
+    let entries = |_: ()| {
+        [
+            ("Set/", Vec::new()),
+            (
+                "Set/movie.bin",
+                (0..3 * MB).map(|i| (i % 251) as u8).collect(),
+            ),
+            ("Set/talk.mp4", big(7)),
+        ]
+    };
+    // Whole: it moves.
+    let whole = World::new();
+    let archive = unpacked_zip(&whole, "Documents/Set.zip", &entries(()));
+    let listed = scan(&whole);
+    // The unpacked files are copies of what the archive holds (LV-L6).
+    assert!(by_path(&listed, &whole.home.join("Documents/Set/talk.mp4")).is_none());
+    let row = by_path(&listed, &archive).unwrap();
+    let preview = whole
+        .session
+        .preview_large_files(std::slice::from_ref(&row.id))
+        .unwrap();
+    let report = whole.run(&preview.preview_id, &whole.trash()).unwrap();
+    assert_eq!(report.moved_count, 1, "{:?}", report.results[0].outcome);
+    // A file other than the largest went after the scan (by any route):
+    // the archive is no longer a copy of anything whole, so it stays.
+    let partial = World::new();
+    let archive = unpacked_zip(&partial, "Documents/Set.zip", &entries(()));
+    let listed = scan(&partial);
+    let row = by_path(&listed, &archive).unwrap();
+    let preview = partial
+        .session
+        .preview_large_files(std::slice::from_ref(&row.id))
+        .unwrap();
+    fs::remove_file(partial.home.join("Documents/Set/talk.mp4")).unwrap();
+    let report = partial.run(&preview.preview_id, &partial.trash()).unwrap();
+    assert!(
+        matches!(
+            report.results[0].outcome,
+            FfiItemOutcome::Skipped {
+                reason: FfiSkipReason::Changed,
+                ..
+            }
+        ),
+        "{:?}",
+        report.results[0].outcome
+    );
+    assert!(archive.exists());
+}
+
+#[test]
+fn records_say_which_rows_the_size_filter_hides() {
+    let world = World::new();
+    let video = file(&world, "Documents/talk.mp4", &big(8), 2);
+    let archive = unpacked_archive(&world, "Documents/Set.zip");
+    // Two files that free nothing: an installer the installer scan hands
+    // over (group 2's 100 MB) and a file the home walk hands over (groups 3
+    // and 4's minimum, so the size filter applies to it).
+    let base = world.home.parent().unwrap().to_path_buf();
+    let dmg = file(&world, "Downloads/Tool.dmg", &big(9), 2);
+    fs::hard_link(&dmg, base.join("Tool-link.dmg")).unwrap();
+    let export = file(&world, "Documents/export.bin", &big(10), 2);
+    fs::hard_link(&export, base.join("export-link.bin")).unwrap();
+    let scan = scan(&world);
+    let follows = |path: &Path| {
+        let row = by_path(&scan, path).unwrap();
+        (row.group.clone(), row.follows_size_filter)
+    };
+    assert_eq!(follows(&video), ("only_copy".into(), true));
+    assert_eq!(follows(&archive), ("copies".into(), false));
+    assert_eq!(follows(&dmg), ("elsewhere".into(), false));
+    assert_eq!(follows(&export), ("elsewhere".into(), true));
+    assert_eq!(
+        by_path(&scan, &export).unwrap().shared_bytes,
+        Some(fs::metadata(&export).unwrap().blocks() * 512)
+    );
+}

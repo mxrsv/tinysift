@@ -359,6 +359,7 @@ fn sizes_read_as_the_app_writes_them() {
         fingerprint: PathFingerprint::of(
             &fs::symlink_metadata(world.home.join("Documents/x.bin")).unwrap(),
         ),
+        follows_size_filter: true,
     };
     let rows = world.scan(&quiet(), vec![file]);
     assert_eq!(
@@ -366,6 +367,8 @@ fn sizes_read_as_the_app_writes_them() {
         Some(8_530_000_000)
     );
     assert!(rows[0].elsewhere.as_ref().unwrap().kind == "File");
+    // The walk's flag reaches the row: the size filter applies to it.
+    assert!(rows[0].follows_size_filter());
 }
 
 #[test]
@@ -378,6 +381,7 @@ fn a_hard_linked_file_says_another_link_stays() {
         modified: None,
         fingerprint: PathFingerprint::of(&fs::symlink_metadata(&path).unwrap()),
         path,
+        follows_size_filter: false,
     };
     let rows = world.scan(&quiet(), vec![file]);
     assert!(
@@ -385,4 +389,5 @@ fn a_hard_linked_file_says_another_link_stays() {
         "{}",
         rows[0].reason
     );
+    assert!(!rows[0].follows_size_filter());
 }

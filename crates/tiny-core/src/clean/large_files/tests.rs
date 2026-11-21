@@ -359,6 +359,7 @@ impl Run {
                 path: (*path).clone(),
                 fingerprint: crate::clean::fs_safe::fingerprint(path).unwrap(),
                 must_remain: None,
+                must_stay_unpacked: None,
             })
             .collect()
     }

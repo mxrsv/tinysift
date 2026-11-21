@@ -12,7 +12,7 @@ use std::time::{Duration, SystemTime};
 use tempfile::TempDir;
 
 use super::archive_beside::{extracted_beside, parse_directory, EntryKind};
-use super::last_used::NoLastUsed;
+use super::last_used::{LastUsed, NoLastUsed};
 use super::owned::{owner_of_folder, scan_known_locations, OwnedItem};
 use super::where_from::{binary_plist_strings, web_host};
 use super::*;
@@ -70,12 +70,16 @@ impl Home {
     }
 
     fn scan_with(&self, limits: Limits) -> HomeScan {
+        self.scan_used(limits, &NoLastUsed)
+    }
+
+    fn scan_used(&self, limits: Limits, last_used: &dyn LastUsed) -> HomeScan {
         let claimed = HashSet::new();
         scan_home(
             &HomeWalk {
                 home: &self.root,
                 limits,
-                last_used: &NoLastUsed,
+                last_used,
                 now: self.now,
                 claimed: &claimed,
             },
@@ -98,14 +102,32 @@ fn row<'a>(scan: &'a HomeScan, path: &Path) -> Option<&'a LargeFile> {
     scan.files.iter().find(|f| f.path == path)
 }
 
+/// Spotlight says one file was opened at one time.
+struct OpenedAt(PathBuf, SystemTime);
+
+impl LastUsed for OpenedAt {
+    fn last_used(&self, path: &Path) -> Option<SystemTime> {
+        (path == self.0).then_some(self.1)
+    }
+}
+
 // ---------- LV-L5: Smart Clean's category beats group 4 ----------
 
 #[test]
-fn an_old_download_old_downloads_lists_is_not_group_4() {
+fn an_old_download_old_downloads_lists_is_not_group_3_or_4() {
     let home = Home::new();
     let top = home.file("Downloads/export.bin", 2, 120);
     let nested = home.file("Downloads/kept/export.bin", 2, 120);
     let video = home.file("Downloads/talk.mp4", 2, 120);
+    let recent_video = home.file("Downloads/new.mp4", 2, 5);
+    let nested_video = home.file("Downloads/kept/talk.mp4", 2, 120);
+    let archive = unpacked_archive(&home, "Downloads/Set.zip", 2);
+    fs::File::options()
+        .write(true)
+        .open(&archive)
+        .unwrap()
+        .set_modified(home.now - DAY * 120)
+        .unwrap();
     // The overlap was real: Smart Clean's own provider lists the file.
     let smart_clean: Vec<PathBuf> = list_old_files(
         &ScanContext::unchecked(),
@@ -116,19 +138,27 @@ fn an_old_download_old_downloads_lists_is_not_group_4() {
     .into_iter()
     .map(|item| item.path)
     .collect();
-    assert!(smart_clean.contains(&top));
+    assert!(smart_clean.contains(&top) && smart_clean.contains(&video));
     let scan = home.scan();
     assert!(row(&scan, &top).is_none(), "Old Downloads owns it");
-    // Old Downloads does not look into folders; group 4 keeps that one.
+    // A kind is no more specific than age (LV-L5 (3)): Old Downloads owns it.
+    assert!(row(&scan, &video).is_none(), "Old Downloads owns it too");
+    // Old Downloads does not look into folders; groups 3 and 4 keep those.
     assert_eq!(row(&scan, &nested).unwrap().group, Group::OtherLarge);
-    // A more specific reason than age keeps its group.
-    assert_eq!(row(&scan, &video).unwrap().group, Group::OnlyCopy);
+    assert_eq!(row(&scan, &nested_video).unwrap().group, Group::OnlyCopy);
+    assert_eq!(row(&scan, &recent_video).unwrap().group, Group::OnlyCopy);
+    // An unpacked archive is the more specific reason: group 1 keeps it.
+    assert_eq!(row(&scan, &archive).unwrap().group, Group::Copies);
+    // Opened since, by Spotlight: Old Downloads does not list it, group 3 does.
+    let opened = home.scan_used(home.limits(), &OpenedAt(video.clone(), home.now - DAY * 3));
+    assert_eq!(row(&opened, &video).unwrap().group, Group::OnlyCopy);
     // Without the claim the same file is group 4's: the claim is the cause.
     let unclaimed = home.scan_with(Limits {
         old_downloads_days: None,
         ..home.limits()
     });
     assert_eq!(row(&unclaimed, &top).unwrap().group, Group::OtherLarge);
+    assert_eq!(row(&unclaimed, &video).unwrap().group, Group::OnlyCopy);
 }
 
 #[test]
@@ -333,6 +363,46 @@ fn an_archive_whose_contents_sit_unpacked_beside_it_is_a_copy() {
     assert_eq!(extracted.anchor, home.root.join("Documents/Set/movie.bin"));
     // Listed once: the copy row left group 3.
     assert_eq!(scan.files.iter().filter(|f| f.path == archive).count(), 1);
+}
+
+#[test]
+fn an_archives_unpacked_files_leave_groups_3_and_4_and_other_files_stay() {
+    let home = Home::new();
+    let talk = bytes(2, 7);
+    let old = bytes(2, 8);
+    let archive = home.write(
+        "Documents/Set.zip",
+        &zip(&[
+            ("Set/", Vec::new()),
+            ("Set/talk.mp4", talk.clone()),
+            ("Set/old.bin", old.clone()),
+        ]),
+        5,
+    );
+    let unpacked_video = home.write("Documents/Set/talk.mp4", &talk, 5);
+    let unpacked_old = home.write("Documents/Set/old.bin", &old, 200);
+    // In the folder, but not one of the archive's files: still the only copy.
+    let extra = home.file("Documents/Set/extra.mp4", 2, 5);
+    let scan = home.scan();
+    assert_eq!(row(&scan, &archive).unwrap().group, Group::Copies);
+    assert!(
+        row(&scan, &unpacked_video).is_none(),
+        "the archive holds a copy"
+    );
+    assert!(
+        row(&scan, &unpacked_old).is_none(),
+        "the archive explains it"
+    );
+    assert_eq!(row(&scan, &extra).unwrap().group, Group::OnlyCopy);
+    // Without the unpacked copy complete, nothing is a copy: both stay.
+    fs::remove_file(&extra).unwrap();
+    fs::write(&unpacked_old, b"edited").unwrap();
+    let changed = home.scan();
+    assert_eq!(row(&changed, &archive).unwrap().group, Group::OnlyCopy);
+    assert_eq!(
+        row(&changed, &unpacked_video).unwrap().group,
+        Group::OnlyCopy
+    );
 }
 
 #[test]

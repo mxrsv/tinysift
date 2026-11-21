@@ -71,6 +71,12 @@ pub fn is_checked_archive(path: &Path) -> bool {
 
 /// The unpacked copy beside `archive`, when every entry is there as listed.
 pub fn extracted_beside(archive: &Path) -> Option<Extracted> {
+    unpacked_beside(archive).map(|(extracted, _)| extracted)
+}
+
+/// `extracted_beside` with the unpacked file of every file entry: each one
+/// is a copy of what the archive holds (LV-L6), so it is not "the only copy".
+pub(crate) fn unpacked_beside(archive: &Path) -> Option<(Extracted, Vec<PathBuf>)> {
     if !is_checked_archive(archive) {
         return None;
     }
@@ -94,6 +100,7 @@ pub fn extracted_beside(archive: &Path) -> Option<Extracted> {
         return None;
     }
     let mut anchor: Option<(u64, PathBuf, fs::Metadata)> = None;
+    let mut files = Vec::new();
     for entry in &entries {
         let path = base.join(entry.name.trim_end_matches('/'));
         let meta = fs::symlink_metadata(&path).ok()?;
@@ -106,19 +113,21 @@ pub fn extracted_beside(archive: &Path) -> Option<Extracted> {
                     return None;
                 }
                 if anchor.as_ref().is_none_or(|(size, ..)| entry.size > *size) {
-                    anchor = Some((entry.size, path, meta));
+                    anchor = Some((entry.size, path.clone(), meta));
                 }
+                files.push(path);
             }
             _ => {}
         }
     }
     let (_, anchor, meta) = anchor?;
-    Some(Extracted {
+    let extracted = Extracted {
         beside,
         entries: entries.len() as u64,
         anchor_fingerprint: PathFingerprint::of(&meta),
         anchor,
-    })
+    };
+    Some((extracted, files))
 }
 
 /// The archive's entries, `None` when it is not a readable zip, is too large

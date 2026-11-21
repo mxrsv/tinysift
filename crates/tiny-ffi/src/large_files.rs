@@ -529,6 +529,8 @@ impl TinySession {
                                 .as_ref()
                                 .map(|e| (e.anchor.clone(), e.anchor_fingerprint.clone()))
                         }),
+                    // ...and an archive only while all of its unpacked copy is.
+                    must_stay_unpacked: file.extracted.as_ref().map(|e| e.beside.clone()),
                 },
             ));
         }

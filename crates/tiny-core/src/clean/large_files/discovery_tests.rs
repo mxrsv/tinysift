@@ -213,10 +213,11 @@ fn rows_sort_by_what_they_free_across_both_groups() {
 fn a_file_another_group_claimed_is_left_out() {
     let home = Home::new();
     let claimed = home.file("Downloads/Cap.dmg", 2, 100);
-    home.file("Downloads/Orphan.dmg", 2, 100);
+    // Younger than Old Downloads' 30 days, which would otherwise own it.
+    home.file("Downloads/Orphan.dmg", 2, 10);
     let scan = home.scan_with(&NoLastUsed, &HashSet::from([claimed]));
     assert_eq!(home.names(&scan), ["Orphan"]);
-    // A disk image no installed app matched: group 3, whatever its age.
+    // A disk image no installed app matched: group 3.
     assert_eq!(scan.files[0].group, Group::OnlyCopy);
 }
 
@@ -356,6 +357,8 @@ fn a_hard_linked_file_frees_nothing_while_a_link_stays_and_is_listed_once_for_gr
     let scan = home.scan();
     assert!(scan.files.is_empty(), "{:?}", home.names(&scan));
     assert_eq!(scan.frees_nothing.len(), 1);
+    // The walk's handover follows the size filter (FN1, LV-L5).
+    assert!(scan.frees_nothing[0].follows_size_filter);
     // The other link outside the home changes nothing.
     let alone = Home::new();
     let one = alone.file("Documents/c.zip", 2, 400);

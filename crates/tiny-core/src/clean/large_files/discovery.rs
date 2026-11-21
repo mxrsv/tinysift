@@ -2,8 +2,8 @@
 //! items the same walk meets: one read-only walk of the user's home,
 //! metadata only, nothing hashed. A file of a kind group 3 holds (video,
 //! audio, disk image, archive, database dump) is "Only copy on this Mac";
-//! any other file that has not changed for 90 days is "Other large files",
-//! unless Smart Clean's Old Downloads already lists it (LV-L5). Both groups
+//! any other file that has not changed for 90 days is "Other large files";
+//! neither when Smart Clean's Old Downloads already lists it (LV-L5). Both groups
 //! list from `Limits::only_copy_min_bytes` / `other_min_bytes` (500 MB by
 //! default, the size filter's choice, never under the 100 MB scan floor).
 //!
@@ -34,7 +34,7 @@ use crate::clean::private_size::private_allocated_bytes;
 use crate::options::CleanOptions;
 use crate::progress::{report, ProgressCallback};
 
-use super::archive_beside::{extracted_beside, is_checked_archive};
+use super::archive_beside::{is_checked_archive, unpacked_beside};
 use super::copies::{find_pairs, CopyOf, VideoEntry, COPY_MIN_BYTES};
 use super::last_used::LastUsed;
 use super::lens::Lens;
@@ -346,6 +346,9 @@ fn add_copies(scan: &mut HomeScan, videos: &[VideoEntry], min_bytes: u64) {
 
 /// Group 1 (LV-L6): an archive whose contents sit unpacked beside it leaves
 /// groups 3 and 4. It needs `min_bytes` of private bytes, as a video copy.
+/// Its unpacked files leave groups 3 and 4 too: the archive holds a copy of
+/// each, so none is "the only copy", and the archive's row explains them.
+/// A file in the folder that the archive does not list stays where it was.
 fn add_archive_copies(
     scan: &mut HomeScan,
     archives: &[PathBuf],
@@ -356,7 +359,7 @@ fn add_archive_copies(
         if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
             return;
         }
-        let Some(extracted) = extracted_beside(path) else {
+        let Some((extracted, unpacked)) = unpacked_beside(path) else {
             continue;
         };
         let (Ok(meta), Ok(frees)) = (fs::symlink_metadata(path), private_allocated_bytes(path))
@@ -373,7 +376,12 @@ fn add_archive_copies(
             .beside
             .file_name()
             .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
-        scan.files.retain(|f| f.path != *path);
+        let unpacked: HashSet<PathBuf> = unpacked.into_iter().collect();
+        scan.files.retain(|f| {
+            f.path != *path
+                && !(matches!(f.group, Group::OnlyCopy | Group::OtherLarge)
+                    && unpacked.contains(&f.path))
+        });
         scan.files.push(LargeFile {
             path: path.clone(),
             name: stem.to_string(),
@@ -459,6 +467,7 @@ fn candidate(
                 allocated: allocated(meta),
                 modified: meta.modified().ok(),
                 fingerprint: PathFingerprint::of(meta),
+                follows_size_filter: true,
             });
         }
         return None;
@@ -474,8 +483,16 @@ fn candidate(
             if frees.bytes < walk.limits.only_copy_min_bytes {
                 return None;
             }
-            let from = downloaded_from(path);
             let days = days_between(modified, walk.now);
+            // A kind is no more specific than Old Downloads' age (LV-L5 (3)).
+            if old_downloads_owns(path, walk, days) {
+                // Spotlight is asked only once the change date alone passes.
+                let used = walk.last_used.last_used(path).filter(|u| *u > modified);
+                if used.is_none_or(|u| old_downloads_owns(path, walk, days_between(u, walk.now))) {
+                    return None;
+                }
+            }
+            let from = downloaded_from(path);
             let reason = only_copy_reason(kind, from.as_deref(), days);
             (Group::OnlyCopy, reason, from)
         }
@@ -515,8 +532,10 @@ fn candidate(
     })
 }
 
-/// True when Smart Clean's Old Downloads lists this group 4 file (LV-L5:
-/// Smart Clean's category beats group 4). That category lists every visible
+/// True when Smart Clean's Old Downloads lists this group 3 or 4 file (LV-L5
+/// (3): no Smart Clean category may already own its path; only a copy, an
+/// installer or an unpacked archive is the more specific reason, and groups 1
+/// and 2 are decided apart from this). That category lists every visible
 /// regular file directly in `~/Downloads` neither changed nor opened for more
 /// than its days; `days` is the same fact here (the newer of the change
 /// date and Spotlight's last-used date), counted in whole days.

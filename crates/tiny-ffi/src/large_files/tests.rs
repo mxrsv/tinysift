@@ -657,7 +657,8 @@ mod home_walk {
     fn a_scan_returns_the_three_groups_and_an_installer_is_listed_once() {
         let world = World::new();
         let cap = world.installer("Cap", "Cap-1.4.2.dmg");
-        let orphan = old_file(&world, "Downloads/Gone-2.0.dmg", 120);
+        // Younger than Old Downloads' 30 days, which would otherwise own it.
+        let orphan = old_file(&world, "Downloads/Gone-2.0.dmg", 20);
         let video = old_file(&world, "Documents/stream.mp4", 3);
         let archive = old_file(&world, "Documents/backup.zip", 200);
         let other = old_file(&world, "Documents/export.bin", 200);

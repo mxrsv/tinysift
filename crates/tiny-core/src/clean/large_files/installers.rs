@@ -139,6 +139,7 @@ fn installer(
             allocated: meta.blocks().saturating_mul(512),
             modified: meta.modified().ok(),
             fingerprint: PathFingerprint::of(&meta),
+            follows_size_filter: false,
         });
         return None;
     }

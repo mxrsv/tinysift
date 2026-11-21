@@ -59,6 +59,19 @@ pub enum Group {
     Elsewhere,
 }
 
+impl LargeFile {
+    /// True for a row the size filter for groups 3 and 4 hides under its
+    /// minimum (LV-L5): those groups' rows, and a file that frees nothing
+    /// the home walk handed over (FN1).
+    pub fn follows_size_filter(&self) -> bool {
+        matches!(self.group, Group::OnlyCopy | Group::OtherLarge)
+            || self
+                .elsewhere
+                .as_ref()
+                .is_some_and(|e| e.follows_size_filter)
+    }
+}
+
 impl Group {
     /// The stable identifier the clients key on.
     pub fn id(self) -> &'static str {
@@ -128,6 +141,10 @@ pub struct Elsewhere {
     pub shared_with: Option<String>,
     /// The newest change inside the item, or the file's own date.
     pub last_changed: Option<SystemTime>,
+    /// A file that frees nothing the home walk handed over: like groups 3
+    /// and 4, the size filter hides it under its minimum, by its shared
+    /// size (FN1). False for every other row of the group.
+    pub follows_size_filter: bool,
 }
 
 /// A large file whose private bytes are 0 (every block shared with a clone):
@@ -139,6 +156,10 @@ pub struct FreesNothing {
     pub allocated: u64,
     pub modified: Option<SystemTime>,
     pub fingerprint: PathFingerprint,
+    /// Found by the home walk, which hands such a file over from its groups
+    /// 3 and 4 minimum, so the size filter applies to it; false for the
+    /// installer scan's, which hands over from group 2's 100 MB.
+    pub follows_size_filter: bool,
 }
 
 #[cfg(test)]
