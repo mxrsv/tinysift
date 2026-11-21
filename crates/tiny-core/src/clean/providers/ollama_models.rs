@@ -17,7 +17,7 @@ use crate::error::Result;
 use super::{CleanProvider, ReportOnly};
 use crate::clean::fs_safe::{is_dir_safe, read_entries};
 use crate::clean::scan_context::ScanContext;
-use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
+use crate::clean::types::{CleanItem, Evidence, ExecAction, ExecReport, RiskLevel};
 
 pub(crate) const ID: &str = "ollama-models";
 const LABEL: &str = "Ollama models";
@@ -130,9 +130,28 @@ fn blob_path(models: &Path, digest: &str) -> Option<PathBuf> {
     (valid(algorithm) && valid(hex)).then(|| models.join(BLOBS).join(format!("{algorithm}-{hex}")))
 }
 
+/// `llama3.2:latest` for `…/library/llama3.2/latest`, `me/tuned:v2` for
+/// another namespace: the name `ollama rm` takes.
+fn model_name(manifests: &Path, file: &Path) -> String {
+    let parts: Vec<String> = file
+        .strip_prefix(manifests)
+        .unwrap_or(file)
+        .components()
+        .map(|part| part.as_os_str().to_string_lossy().into_owned())
+        .collect();
+    match parts.as_slice() {
+        [_, namespace, model, tag] if namespace == "library" => format!("{model}:{tag}"),
+        [_, namespace, model, tag] => format!("{namespace}/{model}:{tag}"),
+        _ => file.to_string_lossy().into_owned(),
+    }
+}
+
 fn ollama_items(ctx: &ScanContext<'_>, models: &Path) -> Vec<CleanItem> {
+    let manifests = models.join(MANIFESTS);
     let files = manifest_files(models, ctx);
-    let mut digests: Vec<(PathBuf, Vec<String>)> = Vec::new();
+    // Tags naming exactly the same layers are one model: one row, every
+    // name on it. Keyed by the sorted, deduplicated digests.
+    let mut groups: Vec<(Vec<String>, Vec<PathBuf>)> = Vec::new();
     // A manifest that cannot be read may name any blob, so no size can be
     // told to be a model's own.
     let mut all_known = true;
@@ -150,22 +169,27 @@ fn ollama_items(ctx: &ScanContext<'_>, models: &Path) -> Vec<CleanItem> {
                     .collect();
                 names.sort();
                 names.dedup();
-                digests.push((file.clone(), names));
+                match groups.iter_mut().find(|(digests, _)| *digests == names) {
+                    Some((_, tags)) => tags.push(file.clone()),
+                    None => groups.push((names, vec![file.clone()])),
+                }
             }
             None => all_known = false,
         }
     }
     let mut users: HashMap<&str, usize> = HashMap::new();
-    for (_, names) in &digests {
+    for (names, _) in &groups {
         for name in names {
             *users.entry(name.as_str()).or_default() += 1;
         }
     }
     if !files.is_empty() {
-        ctx.add_root(&models.join(MANIFESTS));
+        ctx.add_root(&manifests);
     }
     let mut items = Vec::new();
-    for (file, names) in &digests {
+    for (names, tags) in &groups {
+        // Files are listed sorted, so the first tag is the same every scan.
+        let file = &tags[0];
         let mut size = 0u64;
         for name in names.iter().filter(|name| users[name.as_str()] == 1) {
             let Some(blob) = blob_path(models, name) else {
@@ -182,15 +206,23 @@ fn ollama_items(ctx: &ScanContext<'_>, models: &Path) -> Vec<CleanItem> {
         if !all_known {
             ctx.note_size_upper_bound(file);
         }
+        let evidence = if tags.len() > 1 {
+            vec![Evidence::ModelTags {
+                names: tags.iter().map(|tag| model_name(&manifests, tag)).collect(),
+            }]
+        } else {
+            Vec::new()
+        };
         items.push(CleanItem {
             category_id: ID.to_string(),
             category_label: LABEL.to_string(),
             path: file.clone(),
             size,
             risk: RiskLevel::Review,
-            evidence: Vec::new(),
+            evidence,
         });
     }
+    items.sort_by(|a, b| a.path.cmp(&b.path));
     items
 }
 
@@ -251,6 +283,37 @@ mod tests {
         assert!(items[0].size < base, "the shared layer is not llama3's own");
         assert!(items[1].size >= 4 * BLOB as u64 && items[1].size < base);
         assert!(ctx.take_findings().size_upper_bound.is_empty());
+    }
+
+    /// One model under two tags is one row with both names and the size of
+    /// the layers only it uses, not two rows of zero bytes.
+    #[test]
+    fn tags_naming_the_same_layers_are_one_model() {
+        let home = tempfile::tempdir().unwrap();
+        let models = models_dir(home.path());
+        blob(&models, "c", 1);
+        blob(&models, "w", 6);
+        let latest = manifest(&models, "llama3.2", "latest", "c", &["w"]);
+        manifest(&models, "llama3.2", "3b", "c", &["w"]);
+        let items = ollama_items(&ScanContext::unchecked(), &models);
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0].path,
+            models
+                .join(MANIFESTS)
+                .join("registry.ollama.ai/library/llama3.2/3b")
+        );
+        assert!(items[0].size >= 6 * BLOB as u64);
+        assert_eq!(
+            items[0].evidence,
+            vec![Evidence::ModelTags {
+                names: vec!["llama3.2:3b".into(), "llama3.2:latest".into()]
+            }]
+        );
+        assert_eq!(
+            model_name(&models.join(MANIFESTS), &latest),
+            "llama3.2:latest"
+        );
     }
 
     #[test]

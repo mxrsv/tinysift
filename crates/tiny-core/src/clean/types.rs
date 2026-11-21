@@ -77,6 +77,10 @@ pub enum Evidence {
     },
     /// The Trash's other top-level items, after the listed `TrashEntry`s.
     TrashRest { count: u64, bytes: u64 },
+    /// Every name of one Ollama model (`llama3.2:latest`, `llama3.2:3b`):
+    /// the tags whose manifests name exactly the same layers, so one row
+    /// stands for all of them.
+    ModelTags { names: Vec<String> },
 }
 
 /// How a category's items come back after they are moved to the Trash.

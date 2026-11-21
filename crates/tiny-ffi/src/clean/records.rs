@@ -205,6 +205,11 @@ pub enum FfiEvidence {
         count: u64,
         bytes: u64,
     },
+    /// Every name of one Ollama model: the tags naming exactly the same
+    /// layers, shown as one row.
+    ModelTags {
+        names: Vec<String>,
+    },
 }
 
 /// How a category's items come back after a move to Trash.
@@ -519,6 +524,7 @@ impl From<Evidence> for FfiEvidence {
                 added_at,
             },
             Evidence::TrashRest { count, bytes } => Self::TrashRest { count, bytes },
+            Evidence::ModelTags { names } => Self::ModelTags { names },
         }
     }
 }
