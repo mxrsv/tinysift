@@ -89,6 +89,10 @@ from the app.
    Command Line Tools from every user. The cask links `tinysift`, and links `sift` only when no
    other `sift` is on the Mac. Check with `brew install --cask mxrsv/tap/tinysift-cli`.
 
+Users get the new version with `brew upgrade --cask mxrsv/tap/tinysift-cli` once step 5 is pushed;
+the CLI does not update itself. `brew livecheck --cask mxrsv/tap/tinysift-cli` reports when the tap
+is behind the newest `cli-v` tag.
+
 ## Release notes
 
 Write in English, in this order:

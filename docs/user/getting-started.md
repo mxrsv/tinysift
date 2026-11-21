@@ -7,16 +7,30 @@ defaults to Move to Trash. Processes and cache cleanup also have a [desktop app]
 
 ## Install
 
-`sift` is built from source. You need Rust 1.91 or newer (`rustup` installs it). From the
-root of a checkout of this repository:
+With [Homebrew](https://brew.sh), on an Apple silicon Mac with macOS 14 or later:
+
+```bash
+brew install --cask mxrsv/tap/tinysift-cli
+```
+
+It installs one program under two names, `tinysift` and the short `sift` every guide uses. If
+another `sift` is already on your Mac, Homebrew leaves it alone: type `tinysift` wherever a guide
+says `sift`. Keep the full `mxrsv/tap/` name in the command; Homebrew trusts only the item you name.
+
+To update, run `brew upgrade --cask mxrsv/tap/tinysift-cli`. To remove it, `brew uninstall --cask tinysift-cli`.
+
+Without Homebrew, download `tinysift-<version>-aarch64-apple-darwin.tar.gz` from the
+[Releases page](https://github.com/mxrsv/tinysift/releases) (tags `cli-v…`), unpack it and put
+`tinysift` on your `PATH`. It is Developer ID signed and notarized by Apple.
+
+### From source
+
+You need Rust 1.91 or newer (`rustup` installs it). From the root of a checkout of this repository:
 
 ```bash
 cargo install --path crates/tiny     # puts `tinysift` on your PATH (~/.cargo/bin)
-ln -s tinysift ~/.cargo/bin/sift     # the short name every guide uses
+ln -s tinysift ~/.cargo/bin/sift     # the short name
 ```
-
-If another `sift` is already on your Mac, skip the second line and type `tinysift` wherever a guide
-says `sift`: it is the same tool.
 
 To try it without installing, replace `sift` with `cargo run -p tinysift --` in every example.
 
