@@ -126,7 +126,7 @@ pub enum ActionChoice {
     Cancel,
 }
 
-/// Action menu shown after the plan is printed. Mirrors `tiny uninstall`.
+/// Action menu shown after the plan is printed. Mirrors `sift uninstall`.
 /// Returns `CleanAction` (UI choice `ReviewPaths` not exposed by this entry —
 /// see `pick_action_with_review`).
 #[allow(dead_code)]

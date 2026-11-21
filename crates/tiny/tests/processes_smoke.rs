@@ -1,4 +1,4 @@
-//! End-to-end checks for `tiny processes`. Signals only reach disposable
+//! End-to-end checks for `sift processes`. Signals only reach disposable
 //! children spawned here; refusal checks assert the reason so a missing TTY
 //! cannot make them pass by accident.
 
@@ -31,18 +31,18 @@ fn sleeper() -> Disposable {
     )
 }
 
-fn tiny() -> Command {
-    Command::cargo_bin("tiny").unwrap()
+fn sift() -> Command {
+    Command::cargo_bin("tinysift").unwrap()
 }
 
 fn json_stdout(args: &[&str]) -> Value {
-    let output = tiny().args(args).assert().success().get_output().clone();
+    let output = sift().args(args).assert().success().get_output().clone();
     serde_json::from_slice(&output.stdout).unwrap()
 }
 
 #[test]
 fn list_prints_a_table() {
-    tiny()
+    sift()
         .args(["processes", "--limit", "5"])
         .assert()
         .success()
@@ -88,7 +88,7 @@ fn show_reports_a_disposable_child() {
 fn quit_sends_sigterm_to_a_disposable_child() {
     let mut child = sleeper();
     let pid = child.0.id().to_string();
-    tiny()
+    sift()
         .args(["processes", "quit", &pid, "--yes"])
         .assert()
         .success()
@@ -101,7 +101,7 @@ fn quit_without_yes_and_without_a_tty_signals_nothing() {
     let mut child = sleeper();
     let pid = child.0.id().to_string();
     for extra in [&[][..], &["--force"][..]] {
-        tiny()
+        sift()
             .args(["processes", "quit", &pid])
             .args(extra)
             .env("TINY_CONFIRM_FORCE", "1")
@@ -119,14 +119,14 @@ fn quit_without_yes_and_without_a_tty_signals_nothing() {
 fn force_yes_needs_the_env_then_sends_sigkill() {
     let mut child = sleeper();
     let pid = child.0.id().to_string();
-    tiny()
+    sift()
         .args(["processes", "quit", &pid, "--force", "--yes"])
         .env_remove("TINY_CONFIRM_FORCE")
         .assert()
         .failure()
         .stderr(predicate::str::contains("TINY_CONFIRM_FORCE=1"));
     assert!(child.0.try_wait().unwrap().is_none(), "child must survive");
-    tiny()
+    sift()
         .args(["processes", "quit", &pid, "--force", "--yes"])
         .env("TINY_CONFIRM_FORCE", "1")
         .assert()
@@ -137,7 +137,7 @@ fn force_yes_needs_the_env_then_sends_sigkill() {
 
 #[test]
 fn launchd_is_refused() {
-    tiny()
+    sift()
         .args(["processes", "quit", "1", "--yes"])
         .assert()
         .failure()
@@ -146,8 +146,8 @@ fn launchd_is_refused() {
 
 #[test]
 fn tiny_refuses_to_quit_itself() {
-    // `exec` keeps the shell's PID, so `$$` is the PID of `tiny` itself.
-    let tiny_bin = assert_cmd::cargo::cargo_bin("tiny");
+    // `exec` keeps the shell's PID, so `$$` is the PID of `sift` itself.
+    let tiny_bin = assert_cmd::cargo::cargo_bin("tinysift");
     let output = std::process::Command::new("/bin/sh")
         .args(["-c", r#"exec "$0" processes quit $$ --yes"#])
         .arg(tiny_bin)
@@ -161,7 +161,7 @@ fn tiny_refuses_to_quit_itself() {
 #[test]
 fn tiny_refuses_to_quit_its_parent() {
     // No --yes: even a broken refusal would stop at the prompt without a TTY.
-    tiny()
+    sift()
         .args(["processes", "quit", &std::process::id().to_string()])
         .assert()
         .failure()
@@ -209,7 +209,7 @@ fn port_filter_lists_a_disposable_listener_with_the_caveat() {
         .unwrap()
         .contains("does not mean the port is free"));
 
-    tiny()
+    sift()
         .args(["processes", "--port", &port])
         .assert()
         .success()
@@ -218,7 +218,7 @@ fn port_filter_lists_a_disposable_listener_with_the_caveat() {
 
 #[test]
 fn port_zero_is_rejected() {
-    tiny()
+    sift()
         .args(["processes", "--port", "0"])
         .assert()
         .failure()

@@ -4,7 +4,6 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 
 #[derive(Parser, Debug)]
 #[command(
-    name = "tiny",
     version,
     about = "A small, practical CLI for performance and productivity",
     long_about = None

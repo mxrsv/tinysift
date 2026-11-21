@@ -1011,20 +1011,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "tiny"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "assert_cmd",
- "clap",
- "dialoguer",
- "predicates",
- "serde_json",
- "tempfile",
- "tiny-core",
-]
-
-[[package]]
 name = "tiny-core"
 version = "0.1.0"
 dependencies = [
@@ -1049,6 +1035,20 @@ dependencies = [
  "thiserror 2.0.21",
  "tiny-core",
  "uniffi",
+]
+
+[[package]]
+name = "tinysift"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "assert_cmd",
+ "clap",
+ "dialoguer",
+ "predicates",
+ "serde_json",
+ "tempfile",
+ "tiny-core",
 ]
 
 [[package]]
