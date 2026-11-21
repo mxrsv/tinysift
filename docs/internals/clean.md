@@ -194,7 +194,7 @@ widens: a cache folder that holds a path which only goes to the Trash goes to th
 
 | `Removal` | Chosen when | Sink |
 | --- | --- | --- |
-| `MoveToTrash` | Trash mode; Your files always; a uv, pnpm, Bun or pip cache in Trash mode | [`NativeTrash`](../../crates/tiny-core/src/clean/native_trash.rs): `NSFileManager trashItemAtURL`, no Finder, no Put Back |
+| `MoveToTrash` | Trash mode; Your files always; `huggingface` and `lmstudio-models` always (`trash_in_every_mode`: an imported model does not download again); a uv, pnpm, Bun or pip cache in Trash mode | [`NativeTrash`](../../crates/tiny-core/src/clean/native_trash.rs): `NSFileManager trashItemAtURL`, no Finder, no Put Back |
 | `Delete` | Permanent mode and the item and all it covers are Rebuilt or Project build output | `SafeDelete` ([`fs_safe.rs`](../../crates/tiny-core/src/clean/fs_safe.rs)): no symlinks, no other volume |
 | `RunTool(Prune)` | uv, pnpm, Bun, pip in Permanent mode, tool found | the category's tool |
 | `RunTool(Request)` | simulator runtimes, both modes (no Trash route) | `simctl runtime delete` |
@@ -334,7 +334,15 @@ and a file read and closed again (a runtime loading its modules, so build output
 are not seen. "Nothing holds it" never stands in for the app gate, and never proves a path unused. A
 tool's removal, Empty Trash and deletion as administrator are not asked, and neither are the CLI's
 executor, uninstall or the worktree move, which keep their own gates. Over FFI the skip is
-`AppRunning` with the process's name, which is not always an app's.
+`HeldByProcess` with the process's name, apart from `AppRunning`, because a shell or a background
+helper is not an app the user can quit. A scan asks the same question once, when its last category is
+done, and names the holder on every candidate a removal would ask about
+([`in_use_by`](../../crates/tiny-ffi/src/clean/records.rs)), so a client leaves that item unticked
+instead of offering it and skipping it again after the next scan. The removal still asks for itself:
+the scan's answer is as old as the scan. A category that prunes with its tool in the delete mode is
+marked too, since its items are moved in the Trash mode. `running_from` asks the same pass a narrower question, whether
+a process runs a file at or inside a path, and is the only answer with a third state: a live process
+that will not name its file makes it `CannotTell`, which a caller that must not guess treats as held.
 
 **Placeholders.** A simulator runtime has no path: its item is `<simulator-runtime:UUID>` with
 `Evidence::SimulatorRuntime`. Homebrew's cleanup (`<homebrew:cleanup>`) and Docker's kinds

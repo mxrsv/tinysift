@@ -21,7 +21,7 @@ use tiny_core::clean::discover::{
 use tiny_core::clean::freed_size::SharedBlocks;
 use tiny_core::clean::fs_safe::PathFingerprint;
 use tiny_core::clean::native_trash::NativeTrash;
-use tiny_core::clean::open_files::ProcessOpenFiles;
+use tiny_core::clean::open_files::{OpenFiles, ProcessOpenFiles};
 use tiny_core::clean::process::{AppProbe, RunnerProbe};
 use tiny_core::clean::protection::PolicySnapshot;
 use tiny_core::clean::protection_store::ProtectionStore;
@@ -133,7 +133,14 @@ impl TinySession {
         let runner = app_runner();
         let providers = select_providers_with(&options, runner.clone());
         let probe = RunnerProbe(runner.as_ref());
-        self.discover_clean(options, &providers, &probe, &token, progress.as_ref())
+        self.discover_clean_holding(
+            options,
+            &providers,
+            &probe,
+            &ProcessOpenFiles::new(),
+            &token,
+            progress.as_ref(),
+        )
     }
 
     /// The categories `clean_discover` would scan with these options, in scan
@@ -371,12 +378,37 @@ impl TinySession {
         Ok((discovery.id, plan_selection(discovery, candidate_ids)?))
     }
 
-    /// `clean_discover` with injected providers and probe (the test seam).
+    /// `clean_discover` with injected providers and probe, and no process
+    /// holding anything (the test seam).
+    #[cfg(test)]
     pub(crate) fn discover_clean(
         &self,
         options: CleanOptions,
         providers: &[Box<dyn CleanProvider>],
         probe: &dyn AppProbe,
+        token: &CancellationToken,
+        progress: &dyn ProgressListener,
+    ) -> Result<FfiDiscovery, FfiError> {
+        self.discover_clean_holding(
+            options,
+            providers,
+            probe,
+            &tiny_core::clean::open_files::NoOpenFiles,
+            token,
+            progress,
+        )
+    }
+
+    /// `discover_clean` that also asks `open_files` which candidates a
+    /// running process holds. It is asked once every category is scanned, so
+    /// one pass answers for the whole result, as close to the moment the
+    /// user sees it as a scan gets.
+    pub(crate) fn discover_clean_holding(
+        &self,
+        options: CleanOptions,
+        providers: &[Box<dyn CleanProvider>],
+        probe: &dyn AppProbe,
+        open_files: &dyn OpenFiles,
         token: &CancellationToken,
         progress: &dyn ProgressListener,
     ) -> Result<FfiDiscovery, FfiError> {
@@ -414,14 +446,13 @@ impl TinySession {
             .into_iter()
             .map(|category| {
                 let (action, tool) = desktop_action(providers, &category.id, &options);
-                let needs_admin = action == FfiDesktopAction::DeleteAsAdministrator;
                 store_category(
                     id,
                     &options,
                     category,
                     action,
                     tool,
-                    needs_admin,
+                    open_files,
                     &mut candidates,
                 )
             })
@@ -493,6 +524,23 @@ fn desktop_action(
     (action, None)
 }
 
+/// The process holding a candidate when the scan ends, for the candidates a
+/// removal would ask about (`checked_execute`'s `not_in_use`): a path on disk
+/// that the app moves to the Trash or deletes itself. A category that prunes
+/// with its tool in the delete mode is asked too, because its items are moved
+/// in the Trash mode; the tool then judges its own cache, so there the answer
+/// errs on leaving the item unticked.
+fn held_at_scan(
+    desktop_action: FfiDesktopAction,
+    item: &CleanItem,
+    open_files: &dyn OpenFiles,
+) -> Option<String> {
+    if desktop_action != FfiDesktopAction::MoveToTrash || !item.path.is_absolute() {
+        return None;
+    }
+    open_files.holder_inside(&item.path)
+}
+
 /// The provider's facts, or the path's own mtime when the category rule
 /// alone selected it, so every candidate shows at least one fact.
 fn candidate_evidence(item: &CleanItem) -> Vec<FfiEvidence> {
@@ -516,9 +564,10 @@ fn store_category(
     category: CheckedCategory,
     desktop_action: FfiDesktopAction,
     tool: Option<DesktopTool>,
-    needs_admin: bool,
+    open_files: &dyn OpenFiles,
     candidates: &mut HashMap<String, StoredCandidate>,
 ) -> FfiCleanCategory {
+    let needs_admin = desktop_action == FfiDesktopAction::DeleteAsAdministrator;
     let family = known_category_ids()
         .contains(&category.id.as_str())
         .then(|| category_family(&category.id).id().to_string());
@@ -571,6 +620,7 @@ fn store_category(
                     risk: item.risk.into(),
                     evidence: candidate_evidence(&item),
                     size_is_upper_bound: checked.size_is_upper_bound,
+                    in_use_by: held_at_scan(desktop_action, &item, open_files),
                 });
                 // A tool's placeholder names no file: never stat it.
                 let meta = item

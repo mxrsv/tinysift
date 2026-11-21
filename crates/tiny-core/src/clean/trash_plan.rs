@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 
 use super::freed_size::{union_bytes, SharedBlocks};
 use super::fs_safe::PathFingerprint;
-use super::providers::{category_section, DesktopTool, Section};
+use super::providers::{category_section, trash_in_every_mode, DesktopTool, Section};
 use super::types::CleanItem;
 
 /// One selected path with the trusted discovery-time data execution checks
@@ -63,7 +63,8 @@ pub enum DeleteMode {
 /// `Delete` when `mode` is permanent and the item, and everything it would
 /// carry along, sits in Rebuilt automatically or Project build output;
 /// otherwise `MoveToTrash`, so Your files and unregistered categories always
-/// go to the Trash (OC1, OC2). Merging never widens: a cache folder holding
+/// go to the Trash (OC1, OC2), and so do the categories `trash_in_every_mode`
+/// names. Merging never widens: a cache folder holding
 /// a path that only goes to the Trash goes to the Trash with it. A category
 /// with a `tool` runs it instead of deleting: a prune in Permanent mode only,
 /// a requested or tool removal in both, since they have no Trash route. The Trash
@@ -80,7 +81,7 @@ pub fn removal_for(
         matches!(
             category_section(&item.category_id),
             Some(Section::Rebuilt | Section::BuildOutput)
-        )
+        ) && !trash_in_every_mode(&item.category_id)
     };
     match tool {
         Some(tool @ (DesktopTool::Request | DesktopTool::Remove { .. })) => Removal::RunTool(tool),
@@ -273,6 +274,41 @@ mod tests {
                     Overlap::Inside { kept: 0 }
                 ),
             ]
+        );
+    }
+
+    #[test]
+    fn model_downloads_go_to_the_trash_in_permanent_mode_too() {
+        let item = |category: &str| CleanItem {
+            category_id: category.into(),
+            category_label: String::new(),
+            path: PathBuf::from("/m"),
+            size: 1,
+            risk: crate::clean::types::RiskLevel::Review,
+            evidence: Vec::new(),
+        };
+        for category in ["huggingface", "lmstudio-models"] {
+            for mode in [DeleteMode::Trash, DeleteMode::Permanent] {
+                assert_eq!(
+                    removal_for(&item(category), &[], mode, None),
+                    Removal::MoveToTrash,
+                    "{category}"
+                );
+            }
+        }
+        assert_eq!(
+            removal_for(&item("npm"), &[], DeleteMode::Permanent, None),
+            Removal::Delete
+        );
+        // A cache folder carrying a model goes to the Trash with it.
+        assert_eq!(
+            removal_for(
+                &item("user-caches"),
+                &[item("huggingface")],
+                DeleteMode::Permanent,
+                None
+            ),
+            Removal::MoveToTrash
         );
     }
 
