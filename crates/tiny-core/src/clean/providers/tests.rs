@@ -39,6 +39,9 @@ const DESKTOP_TRASH: &[(&str, Option<ReportOnly>)] = &[
     ("pip-cache", Some(ReportOnly::NotPerPathTrash)),
     ("puppeteer", None),
     ("huggingface", None),
+    ("lmstudio-models", None),
+    // Removal is `ollama rm`, which asks the local server (AM6).
+    ("ollama-models", Some(ReportOnly::NotPerPathTrash)),
     ("codex-runtimes", None),
     ("codex-releases", None),
     ("node-modules", None),
@@ -284,6 +287,8 @@ const SECTIONS: &[(&str, Section)] = &[
     ("pip-cache", Section::Rebuilt),
     ("puppeteer", Section::Rebuilt),
     ("huggingface", Section::Rebuilt),
+    ("lmstudio-models", Section::Rebuilt),
+    ("ollama-models", Section::Rebuilt),
     ("codex-runtimes", Section::Rebuilt),
     ("codex-releases", Section::Rebuilt),
     ("node-modules", Section::BuildOutput),

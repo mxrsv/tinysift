@@ -148,6 +148,42 @@ fn old_callers_keep_the_trash_only_flow() {
     remove(&dir);
 }
 
+/// AM5: a model goes to the Trash in Permanent mode too, and its section
+/// stays the one its download puts it in.
+#[test]
+fn permanent_mode_moves_models_to_the_trash() {
+    let dir = fixture_dir("models", &[], 0);
+    for folder in ["hub", "lmstudio", "logs"] {
+        fs::create_dir(dir.join(folder)).unwrap();
+        fs::write(dir.join(folder).join("m"), b"1234").unwrap();
+    }
+    let providers: Vec<Box<dyn CleanProvider>> = vec![
+        Box::new(Fixture::new("huggingface", &dir.join("hub"))),
+        Box::new(Fixture::new("lmstudio-models", &dir.join("lmstudio"))),
+        Box::new(Fixture::new("user-logs", &dir.join("logs"))),
+    ];
+    let session = TestSession::new();
+    let discovery = discover(&session, &providers).unwrap();
+    for id in ["huggingface", "lmstudio-models"] {
+        let row = discovery.categories.iter().find(|c| c.id == id).unwrap();
+        assert_eq!(row.section, Some(FfiCleanSection::Rebuilt), "{id}");
+    }
+    let preview = session
+        .clean_preview_with_mode(movable(&discovery), FfiDeleteMode::Permanent)
+        .unwrap();
+    let mut decided = permanent(&preview);
+    decided.sort();
+    assert_eq!(
+        decided,
+        [
+            ("huggingface", false),
+            ("lmstudio-models", false),
+            ("user-logs", true)
+        ]
+    );
+    remove(&dir);
+}
+
 #[test]
 fn permanent_mode_deletes_what_comes_back_and_trashes_your_files() {
     let dir = layout("permanent");

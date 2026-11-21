@@ -194,7 +194,7 @@ widens: a cache folder that holds a path which only goes to the Trash goes to th
 
 | `Removal` | Chosen when | Sink |
 | --- | --- | --- |
-| `MoveToTrash` | Trash mode; Your files always; a uv, pnpm, Bun or pip cache in Trash mode | [`NativeTrash`](../../crates/tiny-core/src/clean/native_trash.rs): `NSFileManager trashItemAtURL`, no Finder, no Put Back |
+| `MoveToTrash` | Trash mode; Your files always; `huggingface` and `lmstudio-models` always (`trash_in_every_mode`: an imported model does not download again); a uv, pnpm, Bun or pip cache in Trash mode | [`NativeTrash`](../../crates/tiny-core/src/clean/native_trash.rs): `NSFileManager trashItemAtURL`, no Finder, no Put Back |
 | `Delete` | Permanent mode and the item and all it covers are Rebuilt or Project build output | `SafeDelete` ([`fs_safe.rs`](../../crates/tiny-core/src/clean/fs_safe.rs)): no symlinks, no other volume |
 | `RunTool(Prune)` | uv, pnpm, Bun, pip in Permanent mode, tool found | the category's tool |
 | `RunTool(Request)` | simulator runtimes, both modes (no Trash route) | `simctl runtime delete` |

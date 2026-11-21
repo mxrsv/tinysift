@@ -11,6 +11,7 @@ use super::types::{CleanItem, ComesBack, ExecAction, ExecReport, RiskLevel};
 
 pub use tool_command::DesktopTool;
 
+pub mod ai_models;
 pub mod android_sdk;
 pub mod app_orphans;
 pub mod browser_caches;
@@ -31,6 +32,7 @@ pub mod jetbrains;
 pub mod mail_attachments;
 mod never_cache;
 pub mod node_modules;
+pub mod ollama_models;
 pub mod project_activity;
 pub mod project_walk;
 pub mod purged_caches;
@@ -87,6 +89,7 @@ pub fn category_family(category_id: &str) -> Family {
         // Dev family
         "cargo" | "npm" | "pnpm" | "yarn" | "uv" | "bun-cache" | "pip-cache" => Family::Dev,
         "puppeteer" | "huggingface" | "codex-runtimes" | "codex-releases" => Family::Dev,
+        "lmstudio-models" | "ollama-models" => Family::Dev,
         "node-modules" | "python-caches" | "rust-targets" | "build-folders" => Family::Dev,
         "gradle-maven" | "jetbrains" | "vscode" => Family::Dev,
         "ios-simulators" | "simulator-devices" | "android-sdk" => Family::Dev,
@@ -119,6 +122,7 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
         "streaming-caches" | "chat-caches" => Some(ComesBack::Redownload),
         "uv" | "bun-cache" | "pip-cache" => Some(ComesBack::Redownload),
         "huggingface" | "codex-runtimes" | "codex-releases" => Some(ComesBack::Redownload),
+        "lmstudio-models" | "ollama-models" => Some(ComesBack::Redownload),
         "simulator-runtimes" | "simulator-runtime-images" => Some(ComesBack::Redownload),
         "puppeteer" => rebuild("npx puppeteer browsers install"),
         "node-modules" => rebuild("npm, pnpm or yarn install"),
@@ -146,6 +150,16 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
         "time-machine-local" | "trash" | "docker-volumes" => Some(ComesBack::NotRecoverable),
         _ => None,
     }
+}
+
+/// Categories that go to the Trash in Permanent mode too, although a
+/// download brings most of their items back: a model imported or built on
+/// this Mac does not download again (AM5).
+pub fn trash_in_every_mode(category_id: &str) -> bool {
+    matches!(
+        category_id,
+        ai_models::HUGGING_FACE_ID | ai_models::LM_STUDIO_ID
+    )
 }
 
 /// The desktop section a category sits in, by what the user can expect
@@ -380,7 +394,9 @@ pub fn all_providers_with(
         Box::new(purged_caches::BunCache::with_runner(runner.clone())),
         Box::new(purged_caches::PipCache::with_runner(runner.clone())),
         Box::new(dot_cache::Puppeteer),
-        Box::new(dot_cache::HuggingFace),
+        Box::new(ai_models::HuggingFace),
+        Box::new(ai_models::LmStudio),
+        Box::new(ollama_models::OllamaModels),
         Box::new(dot_cache::CodexRuntimes),
         Box::new(codex_releases::CodexReleases),
         Box::new(node_modules::NodeModules::with_options(
@@ -461,6 +477,8 @@ pub fn known_category_ids() -> &'static [&'static str] {
         "pip-cache",
         "puppeteer",
         "huggingface",
+        "lmstudio-models",
+        "ollama-models",
         "codex-runtimes",
         "codex-releases",
         "node-modules",

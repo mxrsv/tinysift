@@ -19,11 +19,12 @@ Run `--dry-run` first on a new machine.
 
 ## Categories
 
-46 categories in three families. Each has a risk level that decides whether you see it by
+48 categories in three families. Each has a risk level that decides whether you see it by
 default.
 
 **Dev caches** — `cargo`, `npm`, `pnpm`, `yarn`, `uv`, `bun-cache`, `pip-cache`, `puppeteer`,
-`huggingface`, `codex-runtimes`, `codex-releases`, `node-modules`, `python-caches`,
+`huggingface`, `lmstudio-models`, `ollama-models`, `codex-runtimes`, `codex-releases`,
+`node-modules`, `python-caches`,
 `rust-targets`, `build-folders`, `gradle-maven`, `jetbrains`, `vscode`, `ios-simulators`,
 `simulator-devices`, `system-simulator-caches`, `simulator-runtimes`,
 `simulator-runtime-images`, `android-sdk`, `go-cache`, `homebrew`, `docker`, `docker-volumes`,
@@ -157,6 +158,13 @@ private-looking downloads and never ticks them for you.
   store to the Trash, so a script with `--category pnpm` now prunes instead.
 - **`simulator-runtime-images` is report only.** Without Xcode, `tiny` lists the simulator
   runtimes it finds but refuses to remove them; use System Settings → General → Storage.
+- **Local AI models are listed one per model.** `huggingface` lists each downloaded
+  repository in `~/.cache/huggingface/hub` (the whole hub when its folders share stored
+  files), and `lmstudio-models` each folder in `~/.lmstudio/models/<publisher>/`. Tokens,
+  settings and chat history beside them are never listed. A model folder you moved
+  elsewhere is not found.
+- **`ollama-models` is report only.** It lists each model with the bytes only that model
+  uses; layers several models share are counted in none. Remove one with `ollama rm`.
 - **`app-orphans` is report only.** It lists Application Support folders that match no
   installed app, but a folder name does not prove the app is gone, so `tiny` never moves
   them. Check them in Finder.
