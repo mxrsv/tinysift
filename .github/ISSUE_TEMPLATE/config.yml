@@ -1,0 +1,9 @@
+# The app opens app-report.yml by its file name, so that form keeps working with blank issues off.
+blank_issues_enabled: false
+contact_links:
+  - name: Question or idea to talk through
+    url: https://github.com/mxrsv/tinysift/discussions
+    about: Ask how something works or float an idea before it is a request.
+  - name: Security problem
+    url: https://github.com/mxrsv/tinysift/security/advisories/new
+    about: Report privately anything that removes, reads or runs more than it showed you.
