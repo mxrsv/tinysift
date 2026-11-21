@@ -1,18 +1,18 @@
 # Cleaning caches
 
-`tiny clean` finds caches and leftovers you can remove, shows how much space each category
+`sift clean` finds caches and leftovers you can remove, shows how much space each category
 takes, lets you pick, and asks what to do before touching anything. It needs macOS. The
 [desktop app](https://tinysift.app/docs) lists the same categories with its own review
 and consent steps.
 
 ```bash
-tiny clean                              # picker → plan → action menu
-tiny clean --dry-run                    # show the plan and exit
-tiny clean --include-review             # also list categories worth a look first
-tiny clean --include-destructive        # also list the permanent ones
-tiny clean --review-paths               # untick individual paths before acting
-tiny clean --category node-modules      # only this category (repeatable)
-tiny clean --category trash --hard      # Hard delete preselected: empties the Trash
+sift clean                              # picker → plan → action menu
+sift clean --dry-run                    # show the plan and exit
+sift clean --include-review             # also list categories worth a look first
+sift clean --include-destructive        # also list the permanent ones
+sift clean --review-paths               # untick individual paths before acting
+sift clean --category node-modules      # only this category (repeatable)
+sift clean --category trash --hard      # Hard delete preselected: empties the Trash
 ```
 
 Run `--dry-run` first on a new machine.
@@ -42,8 +42,8 @@ default.
 | Destructive | with `--include-destructive` | `trash`, `time-machine-local`, `docker-volumes`                                                 |
 
 Naming a category with `--category` shows it whatever its risk; the `--include-*` flags are
-then ignored. `system-simulator-caches` is Safe but needs administrator rights, which `tiny`
-never asks for: plain `tiny clean` leaves it out, and naming it lists it and then refuses it.
+then ignored. `system-simulator-caches` is Safe but needs administrator rights, which `sift`
+never asks for: plain `sift clean` leaves it out, and naming it lists it and then refuses it.
 The [desktop app](https://tinysift.app/docs) only shows its size: macOS refuses
 to let an app delete it, even after an administrator's password.
 
@@ -59,7 +59,7 @@ to let an app delete it, even after an administrator's password.
    - **Hard delete (NOT recoverable)** — asks you to confirm once more.
    - **Cancel**.
 
-At the end `tiny` prints how many paths it removed and lists any it could not.
+At the end `sift` prints how many paths it removed and lists any it could not.
 
 Unticking a path keeps it, its contents, and any selected parent folder that would carry it
 along. Those overlapping selections are retained and explained in the final report by the
@@ -88,7 +88,7 @@ along. Those overlapping selections are retained and explained in the final repo
 - A `node_modules`, `target/` or build folder that holds a file git tracks is never listed or
   removed, and neither is one whose tracked files git cannot list (for example without the
   Command Line Tools).
-- Some categories are skipped while their app is open, and `tiny` tells you which app to quit:
+- Some categories are skipped while their app is open, and `sift` tells you which app to quit:
   the Xcode categories (Xcode; `xcode-derived` also `xcodebuild`), `ios-simulators`, `simulator-devices` and
   `simulator-runtimes` (Xcode, Simulator or `xcodebuild`), `cargo` (cargo or rustc), `gradle-maven` (a Gradle daemon,
   client or wrapper, checked right before the move), `mail-attachments` (Mail), `vscode` (VS Code), `android-sdk`
@@ -114,7 +114,7 @@ along. Those overlapping selections are retained and explained in the final repo
 
 The desktop app can scan some categories without the rest. A scan replaces the results of the
 categories it covers and leaves every other category's results, and a plan already built from
-them, as they were. A scan that is stopped or fails changes nothing. `tiny clean` always scans
+them, as they were. A scan that is stopped or fails changes nothing. `sift clean` always scans
 afresh. How the app presents this is in the [desktop guide](https://tinysift.app/docs).
 
 ## Your own files
@@ -129,13 +129,13 @@ private-looking downloads and never ticks them for you.
 
 - **Move to Trash is the default.** It goes through Finder, so Put Back works.
 - **Hard delete is permanent** and asks you to confirm. `--hard` only preselects it in the
-  menu. With `-y` there is no prompt, so `tiny` also requires `TINY_CONFIRM_HARD=1`:
-  `TINY_CONFIRM_HARD=1 tiny clean --category cargo --hard -y`.
+  menu. With `-y` there is no prompt, so `sift` also requires `TINY_CONFIRM_HARD=1`:
+  `TINY_CONFIRM_HARD=1 sift clean --category cargo --hard -y`.
 - **`-y` needs `--category`**, so an unattended run always names its scope.
 - **The Trash can only be emptied**, with Hard delete. With `trash` selected, Move to Trash
   is refused and nothing is changed.
 - **Some cleanup has no Trash.** `homebrew` runs `brew cleanup --prune=30` (old versions and
-  downloads older than 30 days; never a formula, since `tiny` turns off Homebrew's autoremove),
+  downloads older than 30 days; never a formula, since `sift` turns off Homebrew's autoremove),
   and its size is what that command's dry run lists, measured on disk, leaving out
   `~/Library/Caches`, which `user-caches` already counts;
   `docker` prunes unused images and build cache, and its size is
@@ -152,13 +152,13 @@ private-looking downloads and never ticks them for you.
   `bun pm cache rm` and `pip-cache` runs `pip3 cache purge`, which empty the whole cache
   (`pip-cache` only through a Homebrew or Command Line Tools `pip3`, and only when
   `~/Library/Caches/pip` exists; otherwise that folder is part of `user-caches`). These are permanent
-  whichever action you choose, and `tiny` warns you when you pick Move to Trash. These are
-  Review for that reason, so plain `tiny clean` leaves them unticked. `pnpm` used to move its
+  whichever action you choose, and `sift` warns you when you pick Move to Trash. These are
+  Review for that reason, so plain `sift clean` leaves them unticked. `pnpm` used to move its
   store to the Trash, so a script with `--category pnpm` now prunes instead.
-- **`simulator-runtime-images` is report only.** Without Xcode, `tiny` lists the simulator
+- **`simulator-runtime-images` is report only.** Without Xcode, `sift` lists the simulator
   runtimes it finds but refuses to remove them; use System Settings → General → Storage.
 - **`app-orphans` is report only.** It lists Application Support folders that match no
-  installed app, but a folder name does not prove the app is gone, so `tiny` never moves
+  installed app, but a folder name does not prove the app is gone, so `sift` never moves
   them. Check them in Finder.
 - **Symlinks are never followed**, so nothing outside the listed paths can be removed.
 - **Always keep rules from the [desktop app](https://tinysift.app/docs)

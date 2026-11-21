@@ -1,14 +1,14 @@
 # Scanning files
 
-`tiny scan` reports large and old files so you can decide what to keep. It never deletes,
+`sift scan` reports large and old files so you can decide what to keep. It never deletes,
 moves or changes anything. For removing caches, see [Cleaning caches](clean.md).
 
 ```bash
-tiny scan                                   # ~/Downloads, ~/Desktop, ~/Documents
-tiny scan --min-size-mb 500 --older-than-days 365
-tiny scan --path ~/Movies --path ./assets   # scan these folders instead
-tiny scan --by-ext --duplicates             # add breakdowns
-tiny scan --json > report.json              # machine-readable
+sift scan                                   # ~/Downloads, ~/Desktop, ~/Documents
+sift scan --min-size-mb 500 --older-than-days 365
+sift scan --path ~/Movies --path ./assets   # scan these folders instead
+sift scan --by-ext --duplicates             # add breakdowns
+sift scan --json > report.json              # machine-readable
 ```
 
 ## What is reported
@@ -37,7 +37,7 @@ partial report; errors go to stderr and JSON stdout stays empty. See the
 [root validation](../../crates/tiny-core/src/scan/mod.rs) and
 [walker](../../crates/tiny-core/src/scan/walker.rs).
 
-Below each scan root, `tiny` skips version-control folders, build and package output (`node_modules`,
+Below each scan root, `sift` skips version-control folders, build and package output (`node_modules`,
 `target`, `dist`, `.venv` and similar), macOS metadata folders, and anything deeper than 12
 levels.
 
