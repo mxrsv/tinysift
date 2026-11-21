@@ -1,0 +1,15 @@
+# Licences accepted for the third-party notices that ship with the CLI archive
+# (scripts/release-cli.sh). A dependency under any other licence fails the release
+# until someone reads that licence and adds it here on purpose.
+accepted = [
+    "GPL-3.0-only",
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+]
+targets = ["aarch64-apple-darwin"]
+ignore-dev-dependencies = true
+ignore-build-dependencies = true
