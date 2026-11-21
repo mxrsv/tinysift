@@ -8,7 +8,7 @@
 
 A Mac app that shows which app or AI agent session is slowing your Mac and what fills its disk,
 then cleans only what you pick. This repository is its open-source engine, where the rules that
-touch your files live, and the `tiny` command-line tool.
+touch your files live, and the `sift` command-line tool.
 
 [![Latest release](https://img.shields.io/github/v/release/mxrsv/tinysift?label=release)](https://github.com/mxrsv/tinysift/releases)
 [![CI](https://img.shields.io/github/actions/workflow/status/mxrsv/tinysift/ci.yml?branch=main&label=CI)](https://github.com/mxrsv/tinysift/actions/workflows/ci.yml)
@@ -23,7 +23,7 @@ touch your files live, and the `tiny` command-line tool.
 
 > **Status:** early 0.x, built by one maintainer, with new versions most weeks. Monitor is free;
 > Clean and Uninstall work free for 14 days, then need a [$5 Lifetime license](https://tinysift.app)
-> for one Mac. The `tiny` CLI in this repository is free.
+> for one Mac. The `sift` CLI in this repository is free.
 
 ## Install
 
@@ -83,13 +83,18 @@ screens, so you can read and test them.
 
 ## Command line
 
-The same engine ships as `tiny`, a command-line tool for terminals and scripts. Build it from this
+The same engine ships as `sift`, a command-line tool for terminals and scripts. Build it from this
 checkout with Rust 1.91 or newer, then preview a cleanup without changing anything:
 
 ```bash
 cargo install --path crates/tiny
-tiny clean --dry-run
+ln -s tinysift ~/.cargo/bin/sift
+sift clean --dry-run
 ```
+
+The build installs the executable as `tinysift`; the second line adds the short name `sift` used
+in every guide. If another `sift` is already on your Mac, skip that line and type `tinysift` instead:
+it is the same tool.
 
 The dry run lists each category with its size and safety level, then the plan, path by path (up
 to 20 per category):
@@ -107,11 +112,11 @@ Cleanup candidates
 
 | Command | Guide |
 | --- | --- |
-| `tiny sys`, `tiny focus` | [Getting started](docs/user/getting-started.md) |
-| `tiny scan` | [Scanning files](docs/user/scan.md) |
-| `tiny clean` | [Cleaning caches](docs/user/clean.md) |
-| `tiny uninstall` | [Uninstalling apps](docs/user/uninstall.md) |
-| `tiny processes` | [Processes](docs/user/processes.md) |
+| `sift sys`, `sift focus` | [Getting started](docs/user/getting-started.md) |
+| `sift scan` | [Scanning files](docs/user/scan.md) |
+| `sift clean` | [Cleaning caches](docs/user/clean.md) |
+| `sift uninstall` | [Uninstalling apps](docs/user/uninstall.md) |
+| `sift processes` | [Processes](docs/user/processes.md) |
 
 ## License
 

@@ -4,13 +4,13 @@
 
 The [workspace](../../Cargo.toml) keeps three responsibilities together: operations in
 [tiny-core](../../crates/tiny-core/src/lib.rs), CLI parsing/presentation in
-[tiny](../../crates/tiny/src/main.rs), and native consent/session enforcement in
+[sift](../../crates/tiny/src/main.rs), and native consent/session enforcement in
 [tiny-ffi](../../crates/tiny-ffi/src/lib.rs). Native UI is a separate client.
 
 ## Adding a command
 
 Put the operation in `tiny-core`, with serde options in
-[`options.rs`](../../crates/tiny-core/src/options.rs) when both front ends pass them. In `tiny`,
+[`options.rs`](../../crates/tiny-core/src/options.rs) when both front ends pass them. In `sift`,
 add a `Commands` variant with its own `*Opts` struct and `From` conversion in `cli.rs`, one match
 arm in `main.rs`, and a `render/<command>` module whose `run` calls core and prints. Validate
 flag combinations before any I/O, as

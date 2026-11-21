@@ -1,15 +1,15 @@
 # Uninstalling apps
 
-`tiny uninstall` removes an app from `/Applications` together with the data it left in your
+`sift uninstall` removes an app from `/Applications` together with the data it left in your
 `~/Library`. It shows what it found and asks before removing anything. It needs macOS.
 
 ```bash
-tiny uninstall                       # pick apps from a list
-tiny uninstall AltTab                # one app by name
-tiny uninstall AltTab --dry-run      # report only
-tiny uninstall AltTab --shallow      # only the .app
-tiny uninstall AltTab --leftovers-only   # only the ~/Library data, keep the app
-tiny uninstall AltTab -y             # no menu, Move to Trash now
+sift uninstall                       # pick apps from a list
+sift uninstall AltTab                # one app by name
+sift uninstall AltTab --dry-run      # report only
+sift uninstall AltTab --shallow      # only the .app
+sift uninstall AltTab --leftovers-only   # only the ~/Library data, keep the app
+sift uninstall AltTab -y             # no menu, Move to Trash now
 ```
 
 ## Picking apps
@@ -42,7 +42,7 @@ The report labels every line:
 Folders derived from the app's display name, top-level dot folders and system `/Library` are
 never looked at. The subtotal counts only what the run can remove: with `-y` it leaves out `data` entries.
 
-If `tiny` cannot read the app's bundle identifier, or it is not a valid reverse-DNS name
+If `sift` cannot read the app's bundle identifier, or it is not a valid reverse-DNS name
 (at least two dot-separated parts of letters, digits and `-`, with no `/` or `..`), it lists
 only the `.app`, because guessing by name could hit folders that belong to macOS. Leftovers are
 looked up under your account's home folder from the user database, not the `HOME` variable.
@@ -62,7 +62,7 @@ entries. `report-only` and `uncertain` entries are never removed by any action.
 `-y` skips the menu and moves to the Trash, but only the app and `cache` entries: `data`
 entries are kept and the output says how many. Run without `-y` to remove them. **`-y --hard`
 deletes the app and the `cache` entries permanently with no confirmation at all** — unlike
-`tiny clean`, no environment variable is required.
+`sift clean`, no environment variable is required.
 
 ## What is refused
 
@@ -70,12 +70,12 @@ deletes the app and the `cache` entries permanently with no confirmation at all*
   identifier cannot be read.
 - Homebrew casks, recognised only when `/opt/homebrew/Caskroom/<app name>` exists, with the
   name in lower case and spaces as hyphens. Use `brew uninstall --cask <name>`, or pass
-  `--force` to remove them with `tiny` anyway. A cask installed under another prefix or
+  `--force` to remove them with `sift` anyway. A cask installed under another prefix or
   another name is not recognised and is removed like any other app.
 
-If any selected app is refused, `tiny` stops after the report and removes nothing.
+If any selected app is refused, `sift` stops after the report and removes nothing.
 
-If one app fails partway, the others still run and `tiny` lists the failure at the end; the
+If one app fails partway, the others still run and `sift` lists the failure at the end; the
 failed app may be partly removed.
 
 ## Execution checks

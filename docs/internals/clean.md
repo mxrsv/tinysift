@@ -66,7 +66,7 @@ home folder, its ancestors and tool-printed paths outside home
 ([`protected_reason`](../../crates/tiny-core/src/clean/trash_plan.rs)).
 
 App gating has two mechanisms, both `pgrep -a -x` on a process name (`pnpm` adds a third check, below). `-a` counts
-`pgrep`'s own ancestors, so `tiny clean` sees the terminal, editor, agent or package script it runs inside. `quit_apps()` (default
+`pgrep`'s own ancestors, so `sift clean` sees the terminal, editor, agent or package script it runs inside. `quit_apps()` (default
 `requires_app_quit()`) skips the whole category while its app runs. `browser-caches`,
 `chat-caches`, `streaming-caches` and `user-caches` instead drop only a running app's paths
 inside `discover()` (`ScanContext::known_running`). Right before each move the app re-checks
@@ -421,7 +421,7 @@ and keeps nothing; the root shell runs only `/bin/sh`, `/usr/bin/pgrep` and `/bi
   other failure is ever retried as administrator.
 
 The CLI never runs `sudo`: `execute` refuses a `needs_admin` category with
-`needs administrator rights; the tiny CLI never runs sudo`.
+`needs administrator rights; the sift CLI never runs sudo`.
 
 ## The desktop's checked uninstall
 

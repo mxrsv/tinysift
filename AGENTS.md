@@ -2,7 +2,7 @@
 
 # TinySift Core
 
-Rust workspace containing [`tiny-core`](crates/tiny-core/src/lib.rs), the [`tiny` CLI](crates/tiny/src/main.rs)
+Rust workspace containing [`tiny-core`](crates/tiny-core/src/lib.rs), the [`sift` CLI](crates/tiny/src/main.rs)
 and the [`tiny-ffi` UniFFI boundary](crates/tiny-ffi/src/lib.rs). Native presentation and the
 website live in the separate private app repository. Start with [docs](docs/README.md).
 This workspace's public GitHub repository is `mxrsv/tinysift`; its local directory remains
@@ -17,7 +17,7 @@ directory. See the [repository names](docs/operations/development.md#repository-
 | `cargo test --workspace --all-targets --locked` | Rust and CLI tests |
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | Lint |
 | `scripts/build-ffi.sh /absolute/output` | Static library and matching Swift bindings |
-| `cargo run -p tiny -- clean --dry-run` | Read-only cleanup discovery |
+| `cargo run -p tinysift -- clean --dry-run` | Read-only cleanup discovery |
 
 ## Conventions and boundaries
 

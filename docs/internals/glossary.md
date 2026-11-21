@@ -8,7 +8,10 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 
 - **TinySift** — The product and desktop app name in UI copy, docs and the landing page; the
   local build is `TinySift Dev.app`. Not: tiny, Tiny, Tinysift, Tiny Sift.
-- **`tiny`** — The command-line tool, always in code formatting. Crate names, the bundle ID
+- **`sift`** — The command-line tool as users type it, always in code formatting. The executable is
+  `tinysift`; `sift` is the same file under a second name, and `tinysift` is the name to use where
+  another `sift` is installed. Docs teach `sift`. Not: `tiny`, the name before 2026-11-21. The
+  `tiny-core` and `tiny-ffi` crates, the `crates/tiny` folder, the bundle ID
   `com.mxrsv.tiny.dev`, `TINY_*` variables and the saved-data folders `~/.tiny-cli` and
   `~/Library/Application Support/Tiny` keep the old name; renaming them would orphan saved
   data. Not: TinySift as a command.
@@ -73,7 +76,7 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 - **Always keep** — A saved desktop rule: an exact path and a scope, `File` (that path) or
   `Directory` (also everything inside it). It also keeps a containing folder from moving. Not:
   a protected path (`protected_reason`: the root, the home folder and its ancestors, which no
-  cleanup moves). Only the app edits rules; `tiny clean` and `tiny uninstall` obey them too
+  cleanup moves). Only the app edits rules; `sift clean` and `sift uninstall` obey them too
   ([rules](../../crates/tiny-core/src/clean/protection.rs),
   [clean](../../crates/tiny-core/src/clean/execute.rs),
   [uninstall](../../crates/tiny-core/src/uninstall.rs)).
