@@ -2,7 +2,7 @@
 
 ## User guides
 
-- [Getting started](user/getting-started.md) — local installation, sys and focus.
+- [Getting started](user/getting-started.md) — installation, sys and focus.
 - [Clean](user/clean.md) — preview, consent and cleanup categories.
 - [Processes](user/processes.md) — inspection and process actions.
 - [Scan](user/scan.md) — read-only filesystem inspection.
