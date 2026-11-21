@@ -125,8 +125,9 @@ Cleanup candidates
 This repository is licensed under [GPL-3.0-only](LICENSE). The code is open source; the
 TinySift name and logo are not, see the [trademark policy](TRADEMARK.md). The source became
 public on 2026-10-14 under the earlier MIT declaration, so copies obtained before the
-relicense on 2026-10-17 remain under MIT. Third-party distribution notices for the released binaries are
-still pending.
+relicense on 2026-10-17 remain under MIT. Each command-line archive carries the notices of the packages it
+is built from, generated at [release](docs/operations/release.md#the-command-line-tool); notices for
+the app DMG are still pending.
 
 ## Contributing
 

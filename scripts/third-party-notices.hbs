@@ -1,0 +1,26 @@
+# Third-party notices
+
+The `tinysift` command-line tool is licensed under GPL-3.0-only (see LICENSE). It is built
+from the packages below: its own two crates first, then every package they link. Each keeps its own
+licence; the full texts follow the list.
+
+## Packages
+
+{{#each licenses}}
+{{#each used_by}}
+- {{crate.name}} {{crate.version}} ({{../name}}){{#if crate.repository}}: {{crate.repository}}{{/if}}
+{{/each}}
+{{/each}}
+
+## Licence texts
+
+{{#each licenses}}
+### {{name}}
+
+Used by:{{#each used_by}} {{crate.name}} {{crate.version}}{{#unless @last}},{{/unless}}{{/each}}
+
+```text
+{{{text}}}
+```
+
+{{/each}}

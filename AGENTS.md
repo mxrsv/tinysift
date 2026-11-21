@@ -18,6 +18,7 @@ directory. See the [repository names](docs/operations/development.md#repository-
 | `cargo clippy --workspace --all-targets --locked -- -D warnings` | Lint |
 | `scripts/build-ffi.sh /absolute/output` | Static library and matching Swift bindings |
 | `cargo run -p tinysift -- clean --dry-run` | Read-only cleanup discovery |
+| `scripts/release-cli.sh <version> [--no-notarize]` | Signed CLI archive in `target/dist/`; publishes nothing ([guide](docs/operations/release.md#the-command-line-tool)) |
 
 ## Conventions and boundaries
 
@@ -52,7 +53,7 @@ directory. See the [repository names](docs/operations/development.md#repository-
 
 Commit and PR rules are in [CONTRIBUTING](CONTRIBUTING.md); run
 `git config core.hooksPath .githooks` once per clone so the commit-msg check enforces them.
-App DMG releases follow the [release guide](docs/operations/release.md).
+App DMG and CLI archive releases follow the [release guide](docs/operations/release.md).
 
 ## Documentation
 
