@@ -1,5 +1,6 @@
-# One grouped pull request a week for each ecosystem, so the header stays inside the 72
-# characters CONTRIBUTING.md allows. Security updates arrive on their own, outside this schedule.
+# Patch updates arrive as one grouped pull request a week. Minor and major updates each get their
+# own, because a 0.x crate may break its API in a minor version (sysinfo 0.32 to 0.40 did) and one
+# such bump must not hold the safe ones back. Security updates arrive outside this schedule.
 version: 2
 updates:
   - package-ecosystem: cargo
@@ -10,8 +11,9 @@ updates:
       prefix: build
       include: scope
     groups:
-      cargo:
+      cargo-patches:
         patterns: ["*"]
+        update-types: [patch]
   - package-ecosystem: github-actions
     directory: /
     schedule:
