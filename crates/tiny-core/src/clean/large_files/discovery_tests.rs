@@ -58,6 +58,9 @@ impl Home {
                 only_copy_min_bytes: MB as u64,
                 other_min_bytes: MB as u64,
                 other_min_age_days: 90,
+                old_downloads_days: Some(30),
+                owned_min_bytes: MB as u64,
+                cloud_min_bytes: MB as u64,
             },
             last_used: used,
             now: self.now,
@@ -75,6 +78,9 @@ impl Home {
                 only_copy_min_bytes: MB as u64,
                 other_min_bytes: MB as u64,
                 other_min_age_days: 90,
+                old_downloads_days: Some(30),
+                owned_min_bytes: MB as u64,
+                cloud_min_bytes: MB as u64,
             },
             last_used: &NoLastUsed,
             now: self.now,
@@ -130,23 +136,23 @@ fn every_video_extension_counts_and_a_small_video_does_not() {
 #[test]
 fn other_large_files_need_the_size_and_ninety_days() {
     let home = Home::new();
-    home.file("Documents/old.zip", 2, 91);
-    home.file("Documents/edge.zip", 2, 90);
-    home.file("Documents/young.zip", 2, 89);
-    home.file("Documents/tiny.zip", 0, 400);
+    home.file("Documents/old.pkg", 2, 91);
+    home.file("Documents/edge.pkg", 2, 90);
+    home.file("Documents/young.pkg", 2, 89);
+    home.file("Documents/tiny.pkg", 0, 400);
     let scan = home.scan();
     let mut names = home.names(&scan);
     names.sort();
     assert_eq!(names, ["edge", "old"]);
     let old = scan.files.iter().find(|f| f.name == "old").unwrap();
     assert_eq!(old.group, Group::OtherLarge);
-    assert_eq!(old.reason, "Archive · not changed for 91 days");
+    assert_eq!(old.reason, "Installer package · not changed for 91 days");
 }
 
 #[test]
 fn a_kind_comes_from_the_extension_or_says_it_is_a_file() {
     let home = Home::new();
-    home.file("Documents/a.dmg", 2, 100);
+    home.file("Documents/a.vmdk", 2, 100);
     home.file("Documents/b.xyz", 2, 100);
     home.file("Documents/c", 2, 100);
     let reasons: HashMap<_, _> = home
@@ -155,7 +161,7 @@ fn a_kind_comes_from_the_extension_or_says_it_is_a_file() {
         .into_iter()
         .map(|f| (f.name, f.reason))
         .collect();
-    assert_eq!(reasons["a"], "Disk image · not changed for 100 days");
+    assert_eq!(reasons["a"], "Virtual disk · not changed for 100 days");
     assert_eq!(reasons["b"], "XYZ file · not changed for 100 days");
     assert_eq!(reasons["c"], "File · not changed for 100 days");
 }
@@ -163,9 +169,9 @@ fn a_kind_comes_from_the_extension_or_says_it_is_a_file() {
 #[test]
 fn a_newer_spotlight_date_keeps_a_file_out_and_an_older_one_is_ignored() {
     let home = Home::new();
-    let used_lately = home.file("Documents/used.zip", 2, 200);
-    let used_long_ago = home.file("Documents/stale.zip", 2, 200);
-    let used_old_enough = home.file("Documents/opened.zip", 2, 200);
+    let used_lately = home.file("Documents/used.psd", 2, 200);
+    let used_long_ago = home.file("Documents/stale.psd", 2, 200);
+    let used_old_enough = home.file("Documents/opened.psd", 2, 200);
     let used = Used::default();
     {
         let mut table = used.0.lock().unwrap();
@@ -176,11 +182,8 @@ fn a_newer_spotlight_date_keeps_a_file_out_and_an_older_one_is_ignored() {
     let scan = home.scan_with(&used, &HashSet::new());
     let reasons: HashMap<_, _> = scan.files.iter().map(|f| (f.name.as_str(), f)).collect();
     assert!(!reasons.contains_key("used"));
-    assert_eq!(
-        reasons["stale"].reason,
-        "Archive · not changed for 200 days"
-    );
-    assert_eq!(reasons["opened"].reason, "Archive · not used for 120 days");
+    assert_eq!(reasons["stale"].reason, "Image · not changed for 200 days");
+    assert_eq!(reasons["opened"].reason, "Image · not used for 120 days");
 }
 
 #[test]
@@ -192,7 +195,7 @@ fn spotlight_is_never_asked_about_a_recent_file() {
         }
     }
     let home = Home::new();
-    home.file("Documents/young.zip", 2, 10);
+    home.file("Documents/young.bin", 2, 10);
     home.file("Documents/video.mp4", 2, 500);
     assert_eq!(home.scan_with(&Panics, &HashSet::new()).files.len(), 1);
 }
@@ -213,7 +216,8 @@ fn a_file_another_group_claimed_is_left_out() {
     home.file("Downloads/Orphan.dmg", 2, 100);
     let scan = home.scan_with(&NoLastUsed, &HashSet::from([claimed]));
     assert_eq!(home.names(&scan), ["Orphan"]);
-    assert_eq!(scan.files[0].group, Group::OtherLarge);
+    // A disk image no installed app matched: group 3, whatever its age.
+    assert_eq!(scan.files[0].group, Group::OnlyCopy);
 }
 
 // ---------- NL1: never listed ----------
@@ -412,6 +416,9 @@ fn a_cancelled_walk_stops_and_a_finished_one_reports_done() {
             only_copy_min_bytes: MB as u64,
             other_min_bytes: MB as u64,
             other_min_age_days: 90,
+            old_downloads_days: Some(30),
+            owned_min_bytes: MB as u64,
+            cloud_min_bytes: MB as u64,
         },
         last_used: &NoLastUsed,
         now: home.now,

@@ -476,7 +476,9 @@ every move goes through `Trash` (the app passes `NativeTrash`). Nothing here del
 
 | Call | Gate | What it does |
 | --- | --- | --- |
-| `large_files_scan(token, progress)` | takes it | Read-only. Replaces the earlier scan and any preview. Returns `FfiLargeFile` records (`id`, `path`, `name`, `group`, `reason`, `frees_bytes`, `frees_is_exact`, `matched_app_path`, and for group 5 `kind`, `app_name`, `app_bundle_id`, `app_running`, `preview_path`, `shared_bytes`, `last_changed`, and for group 1 `keeper_path`, `keeper_bytes`, `keep_rule`, `duration_ms`, `keeper_duration_ms`, `width`, `height`, `audio_tracks`) and `unreadable_folders`. |
+| `large_files_scan(token, progress)` | takes it | Read-only. Replaces the earlier scan and any preview. Returns `FfiLargeFile` records (`id`, `path`, `name`, `group`, `reason`, `frees_bytes`, `frees_is_exact`, `matched_app_path`, and for group 5 `kind`, `app_name`, `app_bundle_id`, `app_running`, `preview_path`, `shared_bytes`, `last_changed`, and for group 1 `keeper_path`, `keeper_bytes`, `keep_rule`, `duration_ms`, `keeper_duration_ms`, `width`, `height`, `audio_tracks`, and for an archive copy `extracted_path`, `extracted_entries`; every row carries `lens`, and groups 3 and 4 `downloaded_from`) and `unreadable_folders`. Groups 3 and 4 list from 500 MB. |
+| `large_files_scan_with(options, token, progress)` | takes it | The same scan with `FfiLargeFilesScanOptions`: `root` as `large_files_scan_in` (`None` is the whole home) and `groups_3_4_min_bytes` (default 500 MB), the size filter for groups 3 and 4 only (`Limits::with_size_filter`). A minimum under the 100 MB floor, or a `root` outside the home, is `InvalidInput` before anything is scanned. The app scans once at the floor and filters its own list, so a change of filter keeps the picks. |
+| `large_files_size_filters()` | none | `floor_bytes` (100 MB), `choices_bytes` (100 MB, 500 MB, 1 GB) and `default_bytes` (500 MB), so the app types none of them. |
 | `large_files_scan_in(root, token, progress)` | takes it | `large_files_scan` for one folder of the home ([`large_files.rs`](../../crates/tiny-ffi/src/large_files.rs)): the whole scan runs, so a copy is still a copy wherever its pair lives, then only the files inside `root` are listed and a later move reaches only them. `root` must resolve to an existing folder inside the home, else `InvalidInput` before anything is scanned. |
 | `large_files_preview(file_ids)` | none | Builds the one preview from IDs of the current scan. Unknown IDs and an empty list are refused; a file a saved "always keep" rule holds is returned in `held_ids` and left out. Unreadable rules fail it (`ProtectionUnavailable`). Replaces any earlier preview. |
 | `large_files_move(preview_id, token, progress)` | takes it | Spends the preview, then moves. Returns one result per item (`FfiItemOutcome`, `FfiFailureCause`, `bytes_moved`, `trashed_path`) and a `move_id`. |
@@ -512,7 +514,7 @@ that went back return to the scan's list (same IDs); items that did not stay in 
 later move replaces what Undo takes. Emptying the Trash (the app asks Finder through the Trash row) ends Undo.
 
 **Scan, step 1: Installers** ([`installers.rs`](../../crates/tiny-core/src/clean/large_files/installers.rs)). Direct
-children of `~/Downloads` and `~/Desktop` ending in `.dmg`, `.pkg`, `.iso` or `.xip` (regular files, not symlinks) whose
+children of `~/Downloads`, `~/Desktop` and `~/Documents` ending in `.dmg`, `.pkg`, `.iso` or `.xip` (regular files, not symlinks) whose
 private bytes are at least `INSTALLER_MIN_BYTES` (100 MB). A file is listed only when an app bundle directly inside
 `/Applications` or `~/Applications` has the same normalised name
 ([`name_match.rs`](../../crates/tiny-core/src/clean/large_files/name_match.rs): lower case, separators ignored, version,
@@ -527,21 +529,38 @@ architecture and "installer" tokens cut after the first word). The reason is `<A
 (`scan_home`): folder listings and file metadata only, nothing hashed, cancellable, progress every 2000 entries. A file
 is looked at only when its allocated blocks reach the smaller threshold; then its private bytes must be above 0 and reach
 the group's threshold, and a file whose private bytes are 0 (a full clone, or a hard link with another link elsewhere) goes to group 5
-instead, see step 3. A video (`mp4 mov mkv m4v avi webm`) of 500 MB or more is
-`OnlyCopy` ("only_copy"), reason `Video · changed N days ago`; the spec fixes no threshold for this group, so it takes
-group 4's. Any other file of 500 MB or more whose modification date is 90 days old is `OtherLarge` ("other_large"),
-reason `<kind> · not changed for N days`; Spotlight's last-used date (`mdls`, asked only for a file that already passed
-every other test) wins when newer, and then the reason says `not used for N days`. The kind comes from the extension
-(`Disk image`, `Archive`, ... or `<EXT> file`). A file an installer row claimed is left out; an installer with no
-installed app can land in group 4. Never listed (NL1), and never entered: symlinks (nothing outside the home is
-reached), hidden names, `~/Library`, `~/Music/Music`, `~/Movies/TV`, app bundles and package libraries by extension
+instead, see step 3. **Sizes (LV-L5):** nothing under `SCAN_FLOOR_BYTES` (100 MB) is listed by any group; groups 1 and
+2 list from it, groups 3 and 4 from `Limits::only_copy_min_bytes` / `other_min_bytes`, 500 MB by default
+(`DEFAULT_SIZE_FILTER_BYTES`) and the size filter's choice through `large_files_scan_with` (`SIZE_FILTER_BYTES`). A file of
+a kind group 3 holds (LV-L6, [`row_words.rs`](../../crates/tiny-core/src/clean/large_files/row_words.rs)) is `OnlyCopy`
+("only_copy") whatever its age: a video (`mp4 mov mkv m4v avi webm`), audio (`wav aif aiff flac mp3 m4a aac`), a disk
+image no installed app matched (`dmg iso img sparseimage toast`; step 1 claims the matched ones), an archive not
+unpacked beside it (`zip tar gz tgz bz2 xz zst 7z rar xip`; step 2b takes the unpacked ones) and a database dump
+(`sql dump`); reason `<Kind> · changed N days ago`. Any other file whose modification date is 90 days old is
+`OtherLarge` ("other_large"), reason `<kind> · not changed for N days`; Spotlight's last-used date (`mdls`, asked only
+for a file that already passed every other test) wins when newer, and then the reason says `not used for N days`. The
+kind comes from the extension (`Installer package`, `Virtual disk`, ... or `<EXT> file`). **Downloaded from:** a listed
+group 3 or 4 file whose `com.apple.metadata:kMDItemWhereFroms` attribute (a binary plist array, read with `getxattr`,
+never following a symlink, [`where_from.rs`](../../crates/tiny-core/src/clean/large_files/where_from.rs)) names an
+http(s) or ftp URL says so: `Disk image from github.com · changed 3 days ago`; only the host leaves core
+(`downloaded_from`), since a URL can carry a token. **Smart Clean beats group 4 (LV-L5):** a group 4 file directly in
+`~/Downloads` whose age (the same newer-of-change-and-Spotlight date) exceeds `Limits::old_downloads_days` (Smart
+Clean's `idle_days`, 30 by default, the value the app scans with) is left out, because Smart Clean's Old Downloads
+(`downloads_old.rs`) lists every visible regular file there neither changed nor opened for that long. Groups 1 to 3 keep
+such a file: a copy, an installer or a kind is the more specific reason. A file an installer row claimed is left out.
+**Lens:** every row carries `LargeFile::lens` ([`lens.rs`](../../crates/tiny-core/src/clean/large_files/lens.rs),
+`video installer archive virtual_machine audio other`), decided from the extension or a group 5 item's owner, never from
+the group. Never listed (NL1), and never entered: symlinks (nothing outside the home is reached), hidden names,
+`~/Library`, `~/Music/Music`, `~/Movies/TV`, app bundles and package libraries by extension
 (`app photoslibrary musiclibrary tvlibrary fcpbundle imovielibrary ...`) and any folder with an extension that macOS
 treats as a package (`NSURLIsPackageKey`, [`package_dir.rs`](../../crates/tiny-core/src/clean/large_files/package_dir.rs);
-a bundle-bit package without an extension is still walked), a folder on another volume than the home (`st_dev`), VM bundles (`utm vmwarevm pvm sparsebundle`),
-Smart Clean's build-output folder names (`node_modules target build DerivedData Pods ...`), a folder with a `.git` entry
-(the home itself is exempt, so a dotfiles repo does not hide everything), and an iCloud placeholder (`SF_DATALESS`).
-The walk is added to the move's scanned roots, so a group 3 or 4 file moves and undoes through the same checks.
-Tests inject the limits, "now", the Spotlight table and the claimed set (`Limits`, `HomeWalk`, `LastUsed`).
+a bundle-bit package without an extension is still walked), a folder on another volume than the home (`st_dev`), VM and
+disk bundles (`utm vmwarevm pvm sparsebundle`: one group 5 item when their marker is inside, see step 3), a folder that
+holds a `.vbox` file (a VirtualBox machine, one group 5 item), Smart Clean's build-output folder names
+(`node_modules target build DerivedData Pods ...`), a folder with a `.git` entry (the home itself is exempt, so a
+dotfiles repo does not hide everything), and an iCloud placeholder (`SF_DATALESS`). The walk is added to the move's
+scanned roots, so a group 3 or 4 file moves and undoes through the same checks. Tests inject the limits, "now", the
+Spotlight table and the claimed set (`Limits`, `HomeWalk`, `LastUsed`).
 
 **Scan, step 2b: Copies, the original stays**
 ([`copies.rs`](../../crates/tiny-core/src/clean/large_files/copies.rs),
@@ -565,6 +584,20 @@ file that stays remains in whatever group it was in. Both halves need 100 MB, so
 `PlannedMove::must_remain` makes the move skip (`Changed`) when the file that stays is gone or changed since the scan, and
 `large_files_preview` refuses a request that holds a copy together with its keeper (`InvalidInput`).
 
+**Scan, step 2c: Copies, an archive unpacked beside it**
+([`archive_beside.rs`](../../crates/tiny-core/src/clean/large_files/archive_beside.rs)). The walk keeps every `.zip` whose
+allocated blocks reach `copy_min_bytes`; after the walk its central directory is read (names, sizes, kinds; nothing is
+decompressed; Zip64 sizes and offsets are read; more than 50 000 entries or a directory over 32 MB is not checked). The
+unpacked copy is where Archive Utility puts it: beside the archive when every entry shares one top-level item, else in a
+folder named after the archive. It is a copy only when every listed file is there, a regular file of the same size and not an
+iCloud placeholder, every folder is a folder and every link a link; `__MACOSX/` and `.DS_Store` entries are left out, and a
+name that is absolute, holds `..`, a backslash or invalid UTF-8 makes the archive unchecked. The row is `Group::Copies`
+with `extracted: Some(Extracted)`, reason `Its contents sit unpacked beside it in <name>`, and needs 100 MB of private
+bytes; it leaves group 3. Tarballs stay group 3 archives (listing them means decompressing them whole). Safety: the
+preview's `must_remain` is the largest unpacked file with its fingerprint, so the move skips (`Changed`) once the copy
+is gone or changed, and `large_files_preview` refuses the archive together with any file inside its unpacked copy
+(`InvalidInput`).
+
 **Scan, step 3: Remove these elsewhere**
 ([`elsewhere.rs`](../../crates/tiny-core/src/clean/large_files/elsewhere.rs)). `Group::Elsewhere` ("elsewhere") is
 listed and never movable: `Group::movable()` is false and `large_files_preview` refuses its IDs (`InvalidInput`), alone
@@ -577,9 +610,25 @@ table of id, app name, bundle ID, process name, home-relative folder, bundle ext
 `recording-meta.json`, else the bundle name). It frees its private bytes (FG-L1); `last_changed` is the newest file date
 inside; the preview is UTM's `screenshot.png` or Cap's `screenshots/display.jpg` (else another image there); the owning
 app is the `.app` of that name in the Applications folders, and `app_running` is the app probe (`pgrep -x`) at scan time
-(an unknown answer is false; task 11's move asks again). (2) FN1: every large file whose private bytes are 0. The
-installer scan hands over installer-type files of 100 MB or more in Downloads and Desktop whatever their name, the home
-walk any file of 500 MB or more, both before the age and name tests; a path found twice counts once. The reason comes
+(an unknown answer is false; task 11's move asks again). (1b) Items an app owns
+([`owned.rs`](../../crates/tiny-core/src/clean/large_files/owned.rs), LV-L5, LV-L6), each one row with the owner named
+(`app_name`, `app_bundle_id`, `matched_app_path` when its `.app` is in an Applications folder or ships with macOS),
+`kind`, `lens` and a reason `<where to act>, not here · <checked fact>`; one that frees less than
+`Limits::owned_min_bytes` (the 100 MB floor) is left out. The walk lists, without entering: a `.pvm` holding `config.pvs`
+(Parallels Desktop), a `.vmwarevm` holding a `.vmx` (VMware Fusion), a `.utm` holding `config.plist` outside UTM's
+library (UTM), a folder holding a `.vbox` file (VirtualBox), and a `.sparsebundle` holding `Info.plist` and `bands/`
+(Disk Utility, kind `Disk image`). A bundle with one of these extensions but no marker is neither entered nor listed.
+`KNOWN_LOCATIONS` are the places the walk skips, each opened only to measure an item and name its owner:
+`~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw` or `Docker.qcow2` (Docker Desktop);
+`~/.colima/_lima/<instance>` and `_lima/_disks/<name>` holding `diffdisk`, `basedisk` or `datadisk` (Colima); each
+folder of `~/Library/Application Support/MobileSync/Backup` (Finder, named by `Info.plist`'s `Device Name` when the plist
+is XML); and every visible, local (not `SF_DATALESS`) file of `Limits::cloud_min_bytes` (500 MB, not moved by the size
+filter) under `~/Library/CloudStorage/<App>-<account>` (Dropbox, Google Drive, OneDrive, Box by the folder's first word,
+else that word), skipping git work trees. The paths follow each app's documented layout and were not read on a real Mac;
+tests use fixtures. A location that exists but cannot be listed (device backups without Full Disk Access) is added to
+`unreadable_folders`. Items on another volume are not listed. (2) FN1: every large file whose private bytes are 0. The
+installer scan hands over installer-type files of 100 MB or more in Downloads, Desktop and Documents whatever their name,
+the home walk any file of the groups 3 and 4 minimum or more, both before the age and name tests; a path found twice counts once. The reason comes
 from `sharing_of`: if the file is an APFS clone and a file with the same clone ID sits inside a known library, it reads
 `Frees nothing: UTM's Windows VM holds the same data` (and `app_name` is that app; reasons carry no formatted numbers, the app writes the size from `shared_bytes` in its own locale); if the clone's partner is
 elsewhere, `Frees nothing: another copy on this Mac uses the same space`; if it is not a full clone,

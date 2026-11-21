@@ -107,8 +107,10 @@ impl World {
                 home: &self.home,
                 applications: &applications,
                 probe,
+                owned_min_bytes: MB as u64,
             },
             frees_nothing,
+            Vec::new(),
             None,
         )
     }
@@ -136,6 +138,9 @@ impl World {
                         only_copy_min_bytes: MB as u64,
                         other_min_bytes: MB as u64,
                         other_min_age_days: 90,
+                        old_downloads_days: Some(30),
+                        owned_min_bytes: MB as u64,
+                        cloud_min_bytes: MB as u64,
                     },
                     last_used: &NoLastUsed,
                     now: SystemTime::now(),
@@ -278,7 +283,9 @@ fn a_cancelled_scan_lists_nothing_it_did_not_reach() {
             home: &world.home,
             applications: &applications,
             probe: &probe,
+            owned_min_bytes: MB as u64,
         },
+        vec![],
         vec![],
         Some(&flag),
     );

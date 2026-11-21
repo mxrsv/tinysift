@@ -630,6 +630,9 @@ mod home_walk {
             only_copy_min_bytes: MB as u64,
             other_min_bytes: MB as u64,
             other_min_age_days: 90,
+            old_downloads_days: Some(30),
+            owned_min_bytes: MB as u64,
+            cloud_min_bytes: MB as u64,
         };
         world
             .session
@@ -657,6 +660,7 @@ mod home_walk {
         let orphan = old_file(&world, "Downloads/Gone-2.0.dmg", 120);
         let video = old_file(&world, "Documents/stream.mp4", 3);
         let archive = old_file(&world, "Documents/backup.zip", 200);
+        let other = old_file(&world, "Documents/export.bin", 200);
         let scan = scan(&world);
         let group_of = |path: &Path| {
             let hits: Vec<_> = scan
@@ -668,11 +672,15 @@ mod home_walk {
             hits[0].group.clone()
         };
         assert_eq!(group_of(&cap), "installers");
-        assert_eq!(group_of(&orphan), "other_large");
+        // A disk image no app matched and an archive not unpacked are kinds
+        // group 3 holds (LV-L6); a file of no such kind is group 4's.
+        assert_eq!(group_of(&orphan), "only_copy");
         assert_eq!(group_of(&video), "only_copy");
-        assert_eq!(group_of(&archive), "other_large");
-        let video = scan.files.iter().find(|f| f.group == "only_copy").unwrap();
+        assert_eq!(group_of(&archive), "only_copy");
+        assert_eq!(group_of(&other), "other_large");
+        let video = scan.files.iter().find(|f| f.name == "stream").unwrap();
         assert_eq!(video.reason, "Video · changed 3 days ago");
+        assert_eq!(video.lens, "video");
         assert!(video.matched_app_path.is_none());
     }
 
@@ -921,3 +929,5 @@ fn a_scan_of_a_folder_outside_the_home_is_refused_before_it_starts() {
         "no current scan",
     );
 }
+
+mod boundary;

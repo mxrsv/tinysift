@@ -1,24 +1,30 @@
 //! Large Files: the user's own big files, found read-only and moved to the
 //! Trash only when picked (docs/internals/clean.md, "Large Files").
 //!
-//! Groups so far: Copies (one recording saved twice), Installers, Only copy on this Mac, Other large files and
-//! Remove these elsewhere (listed, never moved from here). Moves reuse Clean's pieces (path
+//! Groups (GR1, LV-L6): Copies (one recording saved twice, an archive whose
+//! contents sit unpacked beside it), Installers, Only copy on this Mac, Other
+//! large files and Remove these elsewhere (listed, never moved from here). Moves reuse Clean's pieces (path
 //! fingerprint, saved "always keep" rules, home volume, protected paths,
 //! the native Trash route, failure causes) in [`move_run`]; nothing here
 //! deletes for good, and [`undo`] only puts a trashed item back.
 
 pub mod app_version;
+pub mod archive_beside;
 mod copies;
 mod discovery;
 pub mod elsewhere;
 mod installers;
 pub mod last_used;
+pub mod lens;
 mod mkv_guard;
 pub mod move_run;
 mod name_match;
+pub mod owned;
 mod package_dir;
+mod row_words;
 pub mod undo;
 pub mod video_facts;
+pub mod where_from;
 
 use std::path::PathBuf;
 use std::time::SystemTime;
@@ -26,10 +32,13 @@ use std::time::SystemTime;
 use super::fs_safe::PathFingerprint;
 use super::private_size::PrivateSize;
 
+pub use archive_beside::Extracted;
+pub use lens::Lens;
+
 pub use copies::{CopyOf, KeepRule, COPY_MAX_LENGTH_GAP_MS, COPY_MIN_BYTES};
 pub use discovery::{
-    scan_home, HomeScan, HomeWalk, Limits, ONLY_COPY_MIN_BYTES, OTHER_MIN_AGE_DAYS,
-    OTHER_MIN_BYTES, VIDEO_EXTENSIONS,
+    scan_home, HomeScan, HomeWalk, Limits, DEFAULT_SIZE_FILTER_BYTES, ONLY_COPY_MIN_BYTES,
+    OTHER_MIN_AGE_DAYS, OTHER_MIN_BYTES, SCAN_FLOOR_BYTES, SIZE_FILTER_BYTES, VIDEO_EXTENSIONS,
 };
 pub use elsewhere::{scan_elsewhere, AppLibrary, ElsewhereRoots, LIBRARIES};
 pub use installers::{
@@ -87,13 +96,22 @@ pub struct LargeFile {
     pub elsewhere: Option<Elsewhere>,
     /// What only group 1 knows: the file that stays; `None` elsewhere.
     pub copy: Option<CopyOf>,
+    /// Group 1, an archive: its unpacked copy beside it; `None` elsewhere.
+    pub extracted: Option<Extracted>,
+    /// The kind the page's lens chips filter by (LV-L5).
+    pub lens: Lens,
+    /// The site the file was downloaded from (its where-from attribute),
+    /// for the rows whose reason states it (groups 3 and 4).
+    pub downloaded_from: Option<String>,
 }
 
 /// The facts behind a "Remove these elsewhere" row. `LargeFile::matched_app`
 /// is the owning app's bundle, when it is installed.
 #[derive(Debug, Clone)]
 pub struct Elsewhere {
-    /// "Virtual machine", "Screen recording", "Installer" or "File".
+    /// "Virtual machine", "Virtual machine disk", "Screen recording", "Disk
+    /// image", "Device backup", "Cloud-synced copy", and for a file that
+    /// frees nothing "Installer" or "File".
     pub kind: String,
     /// The app that owns the item, or whose library holds the clone partner.
     pub app_name: Option<String>,
@@ -134,3 +152,6 @@ mod elsewhere_tests;
 
 #[cfg(test)]
 mod copies_tests;
+
+#[cfg(test)]
+mod boundary_tests;

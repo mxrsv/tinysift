@@ -136,6 +136,24 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   ([`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)). Not: execute
   (the CLI's provider path).
 
+## Large Files
+
+- **Large Files group** (`Group`) — One of the five lists of the app's Large Files page, by how
+  sure a removal is: `copies`, `installers`, `only_copy`, `other_large`, `elsewhere` (group 5,
+  listed and never movable). Not: Clean's `CategoryGroup` or section. Rules:
+  [Large Files](clean.md#large-files).
+- **Scan floor** (`SCAN_FLOOR_BYTES`) — 100 MB: nothing smaller is listed by any group.
+- **Size filter** (`SIZE_FILTER_BYTES`, `groups_3_4_min_bytes`) — The minimum, 100 MB, 500 MB
+  (the default) or 1 GB, that groups 3 and 4 list from; no other group follows it.
+- **Lens** (`Lens`, `FfiLargeFile.lens`) — What a row is for the page's chips: `video`,
+  `installer` (an installer or a disk image), `archive`, `virtual_machine`, `audio`, `other`.
+  It comes from the file or its owner, never from the group. Not: kind (group 5's own words).
+- **Known location** (`KNOWN_LOCATIONS`) — A place the walk skips (`~/Library`, a dot-folder)
+  that group 5 still reads to measure an item and name the app that owns it: Docker's disk,
+  Colima, device backups, `CloudStorage`.
+- **Unpacked copy** (`Extracted`) — The folder or file beside a `.zip` that holds every file it
+  lists at the same size; it makes the archive a Copies row.
+
 ## Processes
 
 - **Identity** — PID plus start time, also name and executable when known; a mismatch returns

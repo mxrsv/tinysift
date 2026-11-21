@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, MutexGuard, PoisonError};
 use std::time::{Duration, Instant, SystemTime};
 
+use std::os::unix::fs::MetadataExt;
 use tiny_core::clean::failure_cause::Failure;
 use tiny_core::clean::finder_trash::Trash;
 use tiny_core::clean::fs_safe::PathFingerprint;
@@ -26,10 +27,12 @@ use tiny_core::clean::large_files::last_used::{LastUsed, SpotlightLastUsed};
 use tiny_core::clean::large_files::move_run::{
     move_to_trash, MoveContext, MoveOutcome, MoveReport, PlannedMove,
 };
+use tiny_core::clean::large_files::owned::scan_known_locations;
 use tiny_core::clean::large_files::undo::{undo_moves, UndoItem, UndoOutcome};
 use tiny_core::clean::large_files::{
     scan_elsewhere, scan_home, scan_installers_above, ElsewhereRoots, HomeWalk, InstallerRoots,
-    LargeFile, Limits, INSTALLER_MIN_BYTES,
+    LargeFile, Limits, DEFAULT_SIZE_FILTER_BYTES, INSTALLER_MIN_BYTES, SCAN_FLOOR_BYTES,
+    SIZE_FILTER_BYTES,
 };
 use tiny_core::clean::native_trash::NativeTrash;
 use tiny_core::clean::open_files::{OpenFiles, ProcessOpenFiles};
@@ -103,10 +106,10 @@ struct MovedFile {
 
 #[uniffi::export]
 impl TinySession {
-    /// Scans for Large Files: installers in Downloads and Desktop whose app is
-    /// in Applications, then one metadata-only walk of the home for "Only copy
-    /// on this Mac" (videos) and "Other large files" (500 MB, 90 days).
-    /// Read-only. Holds the Large Files scan slot of the operation gate, so
+    /// Scans for Large Files: installers in Downloads, Desktop and Documents
+    /// whose app is in Applications, then one metadata-only walk of the home
+    /// for Copies, "Only copy on this Mac" and "Other large files" (500 MB,
+    /// 90 days), then the items apps own (group 5). Read-only. Holds the Large Files scan slot of the operation gate, so
     /// it returns `Busy` while a write or another Large Files scan runs;
     /// other features' scans do not refuse it. Replaces the
     /// previous scan and any preview; a cancelled scan changes nothing.
@@ -116,7 +119,32 @@ impl TinySession {
         progress: Arc<dyn ProgressListener>,
     ) -> Result<FfiLargeFilesScan, FfiError> {
         let home = self.clean_home()?;
-        self.scan_large_files_of_home(&home, None, &token, progress.as_ref())
+        let limits = Limits::default();
+        self.scan_large_files_of_home(&home, None, limits, &token, progress.as_ref())
+    }
+
+    /// `large_files_scan` or `large_files_scan_in` with the size filter for
+    /// groups 3 and 4 (LV-L5). The app scans once at the floor and filters
+    /// its list, so a change of filter keeps the picks. A minimum under the
+    /// floor or a `root` outside the home is `InvalidInput`, and nothing is
+    /// scanned.
+    pub fn large_files_scan_with(
+        &self,
+        options: FfiLargeFilesScanOptions,
+        token: Arc<CancellationToken>,
+        progress: Arc<dyn ProgressListener>,
+    ) -> Result<FfiLargeFilesScan, FfiError> {
+        let limits = Limits::with_size_filter(options.groups_3_4_min_bytes).ok_or_else(|| {
+            FfiError::InvalidInput {
+                detail: "groups 3 and 4 cannot list below the scan floor".into(),
+            }
+        })?;
+        let home = self.clean_home()?;
+        let root = match &options.root {
+            Some(root) => Some(large_files_root(&home, Path::new(root))?),
+            None => None,
+        };
+        self.scan_large_files_of_home(&home, root.as_deref(), limits, &token, progress.as_ref())
     }
 
     /// `large_files_scan` for one folder of the home (Storage's "Find Large
@@ -133,7 +161,8 @@ impl TinySession {
     ) -> Result<FfiLargeFilesScan, FfiError> {
         let home = self.clean_home()?;
         let root = large_files_root(&home, Path::new(&root))?;
-        self.scan_large_files_of_home(&home, Some(&root), &token, progress.as_ref())
+        let limits = Limits::default();
+        self.scan_large_files_of_home(&home, Some(&root), limits, &token, progress.as_ref())
     }
 
     /// Builds a preview from file IDs of the current scan. Unknown or stale
@@ -233,6 +262,17 @@ impl TinySession {
     }
 }
 
+/// The Large Files size floor and filter choices (LV-L5): the numbers live
+/// here, the app shows them.
+#[uniffi::export]
+pub fn large_files_size_filters() -> FfiLargeFilesSizeFilters {
+    FfiLargeFilesSizeFilters {
+        floor_bytes: SCAN_FLOOR_BYTES,
+        choices_bytes: SIZE_FILTER_BYTES.to_vec(),
+        default_bytes: DEFAULT_SIZE_FILTER_BYTES,
+    }
+}
+
 /// The home walk of a scan (groups 3 and 4), injectable for tests.
 pub(crate) struct HomeSettings<'a> {
     pub home: &'a std::path::Path,
@@ -277,6 +317,7 @@ impl TinySession {
         &self,
         home: &Path,
         within: Option<&Path>,
+        limits: Limits,
         token: &CancellationToken,
         progress: &dyn ProgressListener,
     ) -> Result<FfiLargeFilesScan, FfiError> {
@@ -290,7 +331,7 @@ impl TinySession {
             &versions,
             Some(HomeSettings {
                 home,
-                limits: Limits::default(),
+                limits,
                 last_used: &last_used,
                 probe: &probe,
             }),
@@ -351,22 +392,36 @@ impl TinySession {
                 Some(&on_progress),
             );
             token.check()?;
-            // Group 5: app libraries, and every large file that frees nothing.
+            // Group 5: app libraries, items apps own (met by the walk or in
+            // the known locations), and every large file that frees nothing.
+            let device = fs::metadata(walk.home).map_or(0, |meta| meta.dev());
+            let known = scan_known_locations(
+                walk.home,
+                device,
+                walk.limits.cloud_min_bytes,
+                Some(token.flag()),
+            );
+            token.check()?;
             let mut frees_nothing = found.frees_nothing;
             frees_nothing.extend(home.frees_nothing);
+            let mut owned = home.owned;
+            owned.extend(known.items);
             let elsewhere = scan_elsewhere(
                 &ElsewhereRoots {
                     home: walk.home,
                     applications: &roots.applications,
                     probe: walk.probe,
+                    owned_min_bytes: walk.limits.owned_min_bytes,
                 },
                 frees_nothing,
+                owned,
                 Some(token.flag()),
             );
             token.check()?;
             found.files.extend(home.files);
             found.files.extend(elsewhere);
             found.unreadable.extend(home.unreadable);
+            found.unreadable.extend(known.unreadable);
             // A move may reach any file the walk listed, still through real folders.
             scanned_roots.push(walk.home.to_path_buf());
         }
@@ -439,12 +494,15 @@ impl TinySession {
                     detail: "that item is managed elsewhere and cannot be moved from here".into(),
                 });
             }
-            // The file that stays must not go in the same move (CP1).
+            // The file that stays must not go in the same move (CP1), nor
+            // anything of an archive's unpacked copy picked with it (LV-L6).
             if file_ids.iter().any(|other| {
-                scan.files
-                    .get(other)
-                    .and_then(|f| f.copy.as_ref())
-                    .is_some_and(|c| c.keeper == file.path)
+                scan.files.get(other).is_some_and(|f| {
+                    f.copy.as_ref().is_some_and(|c| c.keeper == file.path)
+                        || f.extracted
+                            .as_ref()
+                            .is_some_and(|e| file.path.starts_with(&e.beside))
+                })
             }) {
                 return Err(FfiError::InvalidInput {
                     detail: "that file is the one that stays for a copy picked with it".into(),
@@ -460,10 +518,17 @@ impl TinySession {
                 PlannedMove {
                     path: file.path.clone(),
                     fingerprint: file.fingerprint.clone(),
+                    // A copy goes only while what stays is still there: the
+                    // original, or the largest file of the unpacked archive.
                     must_remain: file
                         .copy
                         .as_ref()
-                        .map(|c| (c.keeper.clone(), c.keeper_fingerprint.clone())),
+                        .map(|c| (c.keeper.clone(), c.keeper_fingerprint.clone()))
+                        .or_else(|| {
+                            file.extracted
+                                .as_ref()
+                                .map(|e| (e.anchor.clone(), e.anchor_fingerprint.clone()))
+                        }),
                 },
             ));
         }

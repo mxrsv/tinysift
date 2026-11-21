@@ -7,6 +7,9 @@
 //!   it frees is its private bytes (FG-L1). Reading is read-only: folder
 //!   listings, file metadata, UTM's `config.plist` for the VM's name and the
 //!   owning app's running state through the app probe.
+//! - **Items an app owns** found elsewhere ([`super::owned`]): virtual
+//!   machines, disk image bundles, Docker's disk, device backups and cloud
+//!   copies, each measured as one item; one under the scan floor is left out.
 //! - **Files that free nothing** (FN1): the scans hand over every large file
 //!   whose blocks are all shared with a clone. If the clone's partner sits
 //!   inside a known library (same APFS clone ID), the reason names it;
@@ -25,6 +28,8 @@ use crate::clean::private_size::{private_allocated_bytes, PrivateSize};
 use crate::clean::process::AppProbe;
 
 use super::installers::INSTALLER_EXTENSIONS;
+use super::lens::Lens;
+use super::owned::OwnedItem;
 use super::{Elsewhere, FreesNothing, Group, LargeFile};
 
 /// How a library names its items and finds their pictures.
@@ -81,6 +86,8 @@ pub struct ElsewhereRoots<'a> {
     /// Folders whose direct `.app` children are installed apps.
     pub applications: &'a [PathBuf],
     pub probe: &'a dyn AppProbe,
+    /// An owned item ([`super::owned`]) that frees less is not listed.
+    pub owned_min_bytes: u64,
 }
 
 /// One bundle of a library, with the words that name it.
@@ -94,11 +101,13 @@ struct Item {
 }
 
 /// Group 5's rows, largest first. `frees_nothing` is every large file the
-/// other scans found with no private bytes; a path listed twice counts once.
-/// A cancelled scan returns what it had.
+/// other scans found with no private bytes, `owned` every item an app owns
+/// that the walk and the known locations met; a path listed twice counts
+/// once. A cancelled scan returns what it had.
 pub fn scan_elsewhere(
     roots: &ElsewhereRoots<'_>,
     frees_nothing: Vec<FreesNothing>,
+    owned: Vec<OwnedItem>,
     cancel: Option<&AtomicBool>,
 ) -> Vec<LargeFile> {
     let cancelled = || cancel.is_some_and(|flag| flag.load(Ordering::Acquire));
@@ -146,7 +155,23 @@ pub fn scan_elsewhere(
                 last_changed: newest_change(&item.path),
             }),
             copy: None,
+            extracted: None,
+            lens: match item.library.flavor {
+                Flavor::Utm => Lens::VirtualMachine,
+                Flavor::Cap => Lens::Video,
+            },
+            downloaded_from: None,
         });
+    }
+    let mut listed: HashSet<PathBuf> = rows.iter().map(|r| r.path.clone()).collect();
+    let mut probed: HashMap<&str, bool> = HashMap::new();
+    for item in owned {
+        if cancelled() {
+            return rows;
+        }
+        if listed.insert(item.path.clone()) {
+            rows.extend(owned_row(item, roots, &mut probed));
+        }
     }
     if !frees_nothing.is_empty() && !cancelled() {
         let partners = clone_partners(&items, cancel);
@@ -205,6 +230,7 @@ fn frees_nothing_row(
         Some(e) if INSTALLER_EXTENSIONS.contains(&e.as_str()) => "Installer",
         _ => "File",
     };
+    let lens = Lens::of_path(&file.path);
     LargeFile {
         name: file
             .path
@@ -230,7 +256,67 @@ fn frees_nothing_row(
             last_changed: file.modified,
         }),
         copy: None,
+        extracted: None,
+        lens,
+        downloaded_from: None,
     }
+}
+
+/// One item an app owns, measured; `None` when it is gone or frees less
+/// than the floor. `probed` keeps each process's answer for the scan.
+fn owned_row(
+    item: OwnedItem,
+    roots: &ElsewhereRoots<'_>,
+    probed: &mut HashMap<&str, bool>,
+) -> Option<LargeFile> {
+    let meta = fs::symlink_metadata(&item.path).ok()?;
+    let frees = private_allocated_bytes(&item.path).ok()?;
+    if frees.bytes < roots.owned_min_bytes {
+        return None;
+    }
+    let owner = &item.owner;
+    let app = owner
+        .app_file
+        .as_deref()
+        .and_then(|name| installed_app(roots.applications, name))
+        .or_else(|| {
+            owner
+                .app_path
+                .map(PathBuf::from)
+                .filter(|p| fs::symlink_metadata(p).is_ok_and(|m| m.is_dir()))
+        });
+    let app_running = owner.process_name.is_some_and(|name| {
+        *probed
+            .entry(name)
+            .or_insert_with(|| roots.probe.probe(name) == Ok(true))
+    });
+    let last_changed = match meta.is_file() {
+        true => meta.modified().ok(),
+        false => newest_change(&item.path),
+    };
+    Some(LargeFile {
+        name: item.name,
+        group: Group::Elsewhere,
+        reason: item.reason,
+        frees,
+        matched_app: app,
+        fingerprint: PathFingerprint::of(&meta),
+        elsewhere: Some(Elsewhere {
+            kind: item.kind.to_string(),
+            app_name: Some(owner.app_name.clone()),
+            app_bundle_id: owner.bundle_id.clone(),
+            app_running,
+            preview: None,
+            shared_bytes: None,
+            shared_with: None,
+            last_changed,
+        }),
+        copy: None,
+        extracted: None,
+        lens: item.lens,
+        downloaded_from: None,
+        path: item.path,
+    })
 }
 
 /// True for a regular file that has more than one hard link.
@@ -293,7 +379,7 @@ fn words_for(library: &AppLibrary, bundle: &Path) -> (String, String) {
 
 /// UTM's `Information › Name`, read from the XML `config.plist`. A binary
 /// plist or a missing key gives `None`, and the bundle's name stands in.
-fn utm_name(bundle: &Path) -> Option<String> {
+pub(super) fn utm_name(bundle: &Path) -> Option<String> {
     let text = fs::read_to_string(bundle.join("config.plist")).ok()?;
     let info = &text[text.find("<key>Information</key>")?..];
     let info = &info[..info.find("</dict>")?];
