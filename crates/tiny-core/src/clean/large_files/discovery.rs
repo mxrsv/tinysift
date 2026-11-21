@@ -27,7 +27,7 @@ use std::fs::{self, Metadata};
 use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 use crate::clean::fs_safe::PathFingerprint;
 use crate::clean::private_size::private_allocated_bytes;
@@ -54,6 +54,8 @@ pub const DEFAULT_SIZE_FILTER_BYTES: u64 = 500_000_000;
 pub const OTHER_MIN_BYTES: u64 = DEFAULT_SIZE_FILTER_BYTES;
 /// "Only copy" has no threshold of its own in the spec: it takes group 4's.
 pub const ONLY_COPY_MIN_BYTES: u64 = OTHER_MIN_BYTES;
+const SECONDS_PER_DAY: u64 = 86_400;
+
 /// Not changed for this many days (GR1 group 4).
 pub const OTHER_MIN_AGE_DAYS: u64 = 90;
 /// What makes a file a video.
@@ -485,10 +487,10 @@ fn candidate(
             }
             let days = days_between(modified, walk.now);
             // A kind is no more specific than Old Downloads' age (LV-L5 (3)).
-            if old_downloads_owns(path, walk, days) {
+            if old_downloads_owns(path, walk, modified) {
                 // Spotlight is asked only once the change date alone passes.
                 let used = walk.last_used.last_used(path).filter(|u| *u > modified);
-                if used.is_none_or(|u| old_downloads_owns(path, walk, days_between(u, walk.now))) {
+                if used.is_none_or(|u| old_downloads_owns(path, walk, u)) {
                     return None;
                 }
             }
@@ -500,14 +502,14 @@ fn candidate(
             if frees.bytes < walk.limits.other_min_bytes {
                 return None;
             }
-            let (days, verb) = idle_days(
+            let (days, verb, at) = idle_days(
                 path,
                 modified,
                 walk.now,
                 walk.limits.other_min_age_days,
                 walk.last_used,
             )?;
-            if old_downloads_owns(path, walk, days) {
+            if old_downloads_owns(path, walk, at) {
                 return None;
             }
             let from = downloaded_from(path);
@@ -537,10 +539,17 @@ fn candidate(
 /// installer or an unpacked archive is the more specific reason, and groups 1
 /// and 2 are decided apart from this). That category lists every visible
 /// regular file directly in `~/Downloads` neither changed nor opened for more
-/// than its days; `days` is the same fact here (the newer of the change
-/// date and Spotlight's last-used date), counted in whole days.
-fn old_downloads_owns(path: &Path, walk: &HomeWalk<'_>, days: u64) -> bool {
-    walk.limits
-        .old_downloads_days
-        .is_some_and(|limit| days > limit && path.parent() == Some(&walk.home.join("Downloads")))
+/// than its days; `at` is the same fact here (the newer of the change date
+/// and Spotlight's last-used date). The age is compared in seconds, as that
+/// category does (`> days * 86400`), so a file aged 30 to 31 days is in one
+/// place only, never in both and never in neither.
+fn old_downloads_owns(path: &Path, walk: &HomeWalk<'_>, at: SystemTime) -> bool {
+    walk.limits.old_downloads_days.is_some_and(|limit| {
+        let age = walk
+            .now
+            .duration_since(at)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+        age > limit * SECONDS_PER_DAY && path.parent() == Some(&walk.home.join("Downloads"))
+    })
 }

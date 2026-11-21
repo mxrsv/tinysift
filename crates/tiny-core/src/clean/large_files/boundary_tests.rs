@@ -161,6 +161,47 @@ fn an_old_download_old_downloads_lists_is_not_group_3_or_4() {
     assert_eq!(row(&unclaimed, &video).unwrap().group, Group::OnlyCopy);
 }
 
+/// Smart Clean's Old Downloads compares seconds (`> 30 * 86400`); the claim must too, or a file aged 30 to 31 days shows in both.
+#[test]
+fn a_file_aged_between_30_and_31_days_is_in_old_downloads_only() {
+    let home = Home::new();
+    let hour = Duration::from_secs(3_600);
+    let aged = |name: &str, age: Duration| {
+        let path = home.file(name, 2, 0);
+        fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(home.now - age)
+            .unwrap();
+        path
+    };
+    let video_over = aged("Downloads/over.mp4", DAY * 30 + hour);
+    let other_over = aged("Downloads/over.bin", DAY * 30 + hour);
+    let video_under = aged("Downloads/under.mp4", DAY * 30 - hour);
+    let other_under = aged("Downloads/under.bin", DAY * 30 - hour);
+    let smart_clean: Vec<PathBuf> = list_old_files(
+        &ScanContext::unchecked(),
+        &MockRunner::new(),
+        &home.root.join("Downloads"),
+        30,
+    )
+    .into_iter()
+    .map(|item| item.path)
+    .collect();
+    assert!(smart_clean.contains(&video_over) && smart_clean.contains(&other_over));
+    assert!(!smart_clean.contains(&video_under) && !smart_clean.contains(&other_under));
+    // 30 days and an hour: Old Downloads lists it, so Large Files does not.
+    let scan = home.scan_with(Limits {
+        other_min_age_days: 29,
+        ..home.limits()
+    });
+    assert!(row(&scan, &video_over).is_none() && row(&scan, &other_over).is_none());
+    // 29 days and 23 hours: Old Downloads does not, so group 3 and group 4 keep them.
+    assert_eq!(row(&scan, &video_under).unwrap().group, Group::OnlyCopy);
+    assert_eq!(row(&scan, &other_under).unwrap().group, Group::OtherLarge);
+}
+
 #[test]
 fn the_default_claim_uses_smart_cleans_own_days() {
     assert_eq!(

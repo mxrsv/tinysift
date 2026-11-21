@@ -50,17 +50,18 @@ pub(super) fn idle_days(
     now: SystemTime,
     min_days: u64,
     last_used: &dyn LastUsed,
-) -> Option<(u64, &'static str)> {
+) -> Option<(u64, &'static str, SystemTime)> {
     // Spotlight is asked only once the modification date alone passes.
     if days_between(modified, now) < min_days {
         return None;
     }
     let used = last_used.last_used(path).filter(|used| *used > modified);
-    let (days, verb) = match used {
-        Some(used) => (days_between(used, now), "used"),
-        None => (days_between(modified, now), "changed"),
+    let (at, verb) = match used {
+        Some(used) => (used, "used"),
+        None => (modified, "changed"),
     };
-    (days >= min_days).then_some((days, verb))
+    let days = days_between(at, now);
+    (days >= min_days).then_some((days, verb, at))
 }
 
 /// "Archive · not changed for 120 days", with the site when it is known.
