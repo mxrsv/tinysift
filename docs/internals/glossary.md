@@ -85,6 +85,11 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   leaves it out of the preview and skips it at execution
   ([`FfiProtectionGuard`](../../crates/tiny-ffi/src/clean/protection.rs)). Not: Review risk,
   which selecting more can override.
+- **In use at scan** — A candidate a running process held when the scan ended
+  ([`in_use_by`](../../crates/tiny-ffi/src/clean/records.rs)): the process's executable, working
+  folder or an open file is the path or inside it. It is not *held*: no rule keeps it and it can
+  be selected, but a client does not tick it for the user, because the removal would skip it as
+  `HeldByProcess`.
 - **Protection store** — The folder `~/Library/Application Support/Tiny/clean-protection/` with
   `rules.json`, plus the lock beside it. Unreadable or incomplete means cleanup is blocked, not
   that no rules exist ([contract](clean.md#the-store)).

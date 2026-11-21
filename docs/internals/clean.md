@@ -335,7 +335,12 @@ are not seen. "Nothing holds it" never stands in for the app gate, and never pro
 tool's removal, Empty Trash and deletion as administrator are not asked, and neither are the CLI's
 executor, uninstall or the worktree move, which keep their own gates. Over FFI the skip is
 `HeldByProcess` with the process's name, apart from `AppRunning`, because a shell or a background
-helper is not an app the user can quit. `running_from` asks the same pass a narrower question, whether
+helper is not an app the user can quit. A scan asks the same question once, when its last category is
+done, and names the holder on every candidate a removal would ask about
+([`in_use_by`](../../crates/tiny-ffi/src/clean/records.rs)), so a client leaves that item unticked
+instead of offering it and skipping it again after the next scan. The removal still asks for itself:
+the scan's answer is as old as the scan. A category that prunes with its tool in the delete mode is
+marked too, since its items are moved in the Trash mode. `running_from` asks the same pass a narrower question, whether
 a process runs a file at or inside a path, and is the only answer with a third state: a live process
 that will not name its file makes it `CannotTell`, which a caller that must not guess treats as held.
 

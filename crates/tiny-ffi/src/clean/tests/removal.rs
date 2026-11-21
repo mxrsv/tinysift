@@ -253,6 +253,166 @@ fn an_item_a_process_holds_is_reported_as_in_use_by_that_process() {
     remove(&dir);
 }
 
+/// `discover` with processes holding `held`.
+fn discover_holding(
+    session: &TinySession,
+    providers: &[Box<dyn CleanProvider>],
+    options: CleanOptions,
+    held: &tiny_core::clean::open_files::HeldPaths,
+) -> FfiDiscovery {
+    session
+        .discover_clean_holding(
+            options,
+            providers,
+            &NotRunning,
+            held,
+            &CancellationToken::default(),
+            &Progress::default(),
+        )
+        .unwrap()
+}
+
+/// Each candidate's path under `dir` with the process the scan named for it.
+fn held_at_scan(discovery: &FfiDiscovery, dir: &Path) -> Vec<(String, Option<String>)> {
+    let mut held: Vec<(String, Option<String>)> = discovery
+        .categories
+        .iter()
+        .flat_map(|c| &c.candidates)
+        .map(|c| {
+            let path = Path::new(&c.path).strip_prefix(dir).unwrap();
+            (path.to_string_lossy().into_owned(), c.in_use_by.clone())
+        })
+        .collect();
+    held.sort();
+    held
+}
+
+/// The scan already says which item a process holds, by the rule the run
+/// skips it with: the path itself or something inside it, never a sibling
+/// that only shares a prefix.
+#[test]
+fn a_scan_names_the_process_holding_a_candidate() {
+    use tiny_core::clean::open_files::HeldPaths;
+
+    let dir = layout("held-at-scan");
+    for folder in ["logs/session", "logs/session-old"] {
+        fs::create_dir(dir.join(folder)).unwrap();
+        fs::write(dir.join(folder).join("log"), b"1234").unwrap();
+    }
+    let held = HeldPaths::new([
+        (dir.join("logs/a"), "tail".to_string()),
+        (dir.join("logs/session/log"), "zsh".to_string()),
+    ]);
+    let session = TestSession::new();
+    let discovery = discover_holding(&session, &providers(&dir), CleanOptions::default(), &held);
+    assert_eq!(
+        held_at_scan(&discovery, &dir),
+        [
+            (".Trash".to_string(), None),
+            ("downloads/d".to_string(), None),
+            ("logs/a".to_string(), Some("tail".to_string())),
+            ("logs/session".to_string(), Some("zsh".to_string())),
+            ("logs/session-old".to_string(), None),
+            ("targets/t".to_string(), None),
+        ]
+    );
+    remove(&dir);
+}
+
+/// Only what the app would move or delete itself is asked about: the Trash
+/// row is emptied by Finder, which decides what is in use there, and a
+/// report-only category is never acted on.
+#[test]
+fn a_scan_asks_no_holder_for_the_trash_row_or_a_report_only_category() {
+    use tiny_core::clean::open_files::HeldPaths;
+
+    let dir = layout("held-not-asked");
+    fs::create_dir(dir.join("reports")).unwrap();
+    fs::write(dir.join("reports/r"), b"1234").unwrap();
+    let mut all = providers(&dir);
+    all.push(Box::new(Fixture {
+        desktop: false,
+        ..Fixture::new("crash-reports", &dir.join("reports"))
+    }));
+    let held = HeldPaths::new([
+        (dir.join(".Trash/old"), "Preview".to_string()),
+        (dir.join("reports/r"), "tail".to_string()),
+    ]);
+    let session = TestSession::new();
+    let discovery = discover_holding(&session, &all, with_trash(), &held);
+    let action = |id: &str| {
+        let category = discovery.categories.iter().find(|c| c.id == id).unwrap();
+        category.desktop_action
+    };
+    assert_eq!(action("trash"), FfiDesktopAction::EmptyTrash);
+    assert!(matches!(
+        action("crash-reports"),
+        FfiDesktopAction::ReportOnly { .. }
+    ));
+    assert!(held_at_scan(&discovery, &dir)
+        .iter()
+        .all(|(_, holder)| holder.is_none()));
+    remove(&dir);
+}
+
+/// What the scan marks is what the run then skips, so a client that leaves
+/// marked items unticked no longer offers an item only to skip it.
+#[test]
+fn the_items_a_scan_marks_are_the_ones_the_run_skips() {
+    use tiny_core::clean::open_files::HeldPaths;
+
+    let dir = layout("held-scan-and-run");
+    let held = HeldPaths::new([(dir.join("targets/t"), "cargo".to_string())]);
+    let session = TestSession::new();
+    let discovery = discover_holding(&session, &providers(&dir), CleanOptions::default(), &held);
+    let marked: Vec<String> = discovery
+        .categories
+        .iter()
+        .flat_map(|c| &c.candidates)
+        .filter(|c| c.in_use_by.is_some())
+        .map(|c| c.id.clone())
+        .collect();
+    assert_eq!(marked.len(), 1);
+    let preview = session
+        .clean_preview_with_mode(movable(&discovery), FfiDeleteMode::Permanent)
+        .unwrap();
+    let sinks = FakeTrash {
+        deletes: true,
+        ..Default::default()
+    };
+    let fixtures = dir.clone();
+    let providers = move |_: &CleanOptions| providers(&fixtures);
+    let report = session
+        .remove_clean_holding(
+            &preview.preview_id,
+            &providers,
+            &NotRunning,
+            &held,
+            &sinks,
+            &sinks,
+            &sinks,
+            &CancellationToken::default(),
+            &Progress::default(),
+        )
+        .unwrap();
+    let skipped: Vec<String> = report
+        .results
+        .iter()
+        .filter(|r| {
+            matches!(
+                r.outcome,
+                FfiRemovalOutcome::Skipped {
+                    reason: FfiSkipReason::HeldByProcess,
+                    ..
+                }
+            )
+        })
+        .map(|r| r.candidate_id.clone())
+        .collect();
+    assert_eq!(skipped, marked);
+    remove(&dir);
+}
+
 #[test]
 fn trash_mode_moves_everything_to_the_trash() {
     let dir = layout("trash-mode");

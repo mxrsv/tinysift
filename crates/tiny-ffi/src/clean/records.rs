@@ -144,6 +144,15 @@ pub struct FfiCleanCandidate {
     /// `size_bytes` counts them all: deleting frees at most that ("up to").
     #[uniffi(default = false)]
     pub size_is_upper_bound: bool,
+    /// The name of a running process that held this path or something inside
+    /// it when the scan ended: its executable, its working folder or an open
+    /// file (`open_files.rs`). A Clean would skip the candidate as
+    /// `HeldByProcess`, so a client does not tick it for the user. `None`
+    /// when no readable process did, and for a candidate the app does not
+    /// move or delete itself (a tool's, the Trash row's, report-only). It is
+    /// a floor, as the check before a removal is.
+    #[uniffi(default = None)]
+    pub in_use_by: Option<String>,
 }
 
 /// One checkable fact behind a candidate; Swift writes the copy. Times are
