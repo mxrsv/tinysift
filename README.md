@@ -81,6 +81,8 @@ screens, so you can read and test them.
 - **Your data stays on your Mac.** No account and no analytics; the app goes online only to check
   for updates and your license, and sends no system profile ([privacy](https://tinysift.app/privacy)).
 
+Found a way around one of these rules? Report it privately: see the [security policy](SECURITY.md).
+
 ## Command line
 
 The same engine ships as `tiny`, a command-line tool for terminals and scripts. Build it from this
