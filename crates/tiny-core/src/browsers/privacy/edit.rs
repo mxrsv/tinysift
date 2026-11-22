@@ -24,7 +24,13 @@ use super::files::with_suffix;
 use super::schema::{inspect, Db, Found, Role};
 use super::{CookieKey, PrivacyIssue, PrivacyIssueKind};
 
-const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long the edit waits for a database another connection holds; short
+/// in tests, which hold one on purpose.
+const BUSY_TIMEOUT: Duration = if cfg!(test) {
+    Duration::from_millis(200)
+} else {
+    Duration::from_secs(5)
+};
 
 /// What the edit did.
 #[derive(Debug, Default)]
@@ -39,18 +45,38 @@ pub(super) struct Removed {
     pub leftover_rows: u64,
 }
 
+/// Why the edit failed, and whether any database may hold a change.
+#[derive(Debug)]
+pub(super) enum EditError {
+    /// Before the commit (opening, locking, `BEGIN EXCLUSIVE`, the schema
+    /// check or a delete): the transaction rolled back, so no database
+    /// holds a change of this edit.
+    BeforeCommit(PrivacyIssue),
+    /// The commit itself failed: a database may hold the change (Firefox's
+    /// WAL files commit one by one).
+    AtCommit(PrivacyIssue),
+}
+
+impl EditError {
+    pub(super) fn issue(self) -> PrivacyIssue {
+        match self {
+            EditError::BeforeCommit(issue) | EditError::AtCommit(issue) => issue,
+        }
+    }
+}
+
 /// Deletes the listed cookies and history rows, with the leftovers.
 pub(super) fn apply(
     dbs: &[Db],
     cookies: &[CookieKey],
     history: &[i64],
-) -> Result<Removed, PrivacyIssue> {
+) -> Result<Removed, EditError> {
     let Some(first) = dbs.first() else {
         return Ok(Removed::default());
     };
     let fail = |path: &Path| {
         let path = path.to_path_buf();
-        move |e: rusqlite::Error| edit_issue(&path, &e)
+        move |e: rusqlite::Error| EditError::BeforeCommit(edit_issue(&path, &e))
     };
     let flags = OpenFlags::SQLITE_OPEN_READ_WRITE
         | OpenFlags::SQLITE_OPEN_URI
@@ -78,12 +104,13 @@ pub(super) fn apply(
         .map_err(fail(&first.path))?;
     let mut found = Vec::with_capacity(dbs.len());
     for (db, schema) in dbs.iter().zip(&schemas) {
-        found.push(inspect(&tx, schema, db)?);
+        found.push(inspect(&tx, schema, db).map_err(EditError::BeforeCommit)?);
     }
     let mut removed = Removed::default();
     delete_cookies(&tx, &found, cookies, &mut removed).map_err(fail(&first.path))?;
     delete_history(&tx, &found, history, &mut removed).map_err(fail(&first.path))?;
-    tx.commit().map_err(fail(&first.path))?;
+    tx.commit()
+        .map_err(|e| EditError::AtCommit(edit_issue(&first.path, &e)))?;
     Ok(removed)
 }
 

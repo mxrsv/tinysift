@@ -15,19 +15,17 @@ const LABEL: &str = "Browser caches";
 
 /// Cache-only folders. NEVER include Cookies, Login Data, Preferences,
 /// Secure Preferences, History, Local State, Extensions, Local Storage,
-/// IndexedDB or `Service Worker/CacheStorage` (`browser-offline-data`'s):
-/// those carry user state that is not cache. Tests below pin this.
+/// IndexedDB or anything under `Service Worker`: those carry user state
+/// that is not cache. `Service Worker/CacheStorage` is
+/// `browser-offline-data`'s; `ScriptCache` and `Database` are offered by
+/// no category, since a worker's registration without its scripts can
+/// lose the site's push subscription (B33). Tests below pin this.
 ///
 /// Inside a Chromium profile's cache folder
 /// (`~/Library/Caches/<vendor>/<browser>/<profile>`).
 const CHROMIUM_CACHE_FOLDERS: &[&str] = &["Cache", "Code Cache", "Storage"];
 /// Inside a Chromium profile's data folder (`Application Support`).
-const CHROMIUM_DATA_FOLDERS: &[&str] = &[
-    "Cache",
-    "Code Cache",
-    "GPUCache",
-    "Service Worker/ScriptCache",
-];
+const CHROMIUM_DATA_FOLDERS: &[&str] = &["Cache", "Code Cache", "GPUCache"];
 const SAFARI_CACHE: &str = "Library/Caches/com.apple.Safari";
 /// Firefox keeps its disk cache at `<profile>/cache2`, the profile under
 /// either root (`Caches` on current versions).
@@ -158,7 +156,7 @@ pub enum SpacePart {
     Cache,
     /// Chromium's `Code Cache`.
     CodeCache,
-    /// Chromium's `Storage`, `GPUCache` and `Service Worker/ScriptCache`.
+    /// Chromium's `Storage` and `GPUCache`.
     Other,
     /// `Service Worker/CacheStorage`, the `browser-offline-data` category.
     Offline,

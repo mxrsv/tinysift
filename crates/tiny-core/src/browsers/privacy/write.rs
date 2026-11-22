@@ -19,8 +19,12 @@
 //!    a file Chromium rebuilds, moves to the Trash instead of being edited.
 //! 8. The files are hashed again and the record is finished with them.
 //!
-//! A failure before step 7 changes no browser file. After a failed edit,
-//! a record is kept whenever some file did change, so Undo still applies.
+//! A failure before step 7 changes no browser file. An edit that fails
+//! before its commit changed nothing either: the unfinished record is
+//! dropped (the backup stays in the Trash) and the write is refused as
+//! `Running` or `Changed`, so the consent can be used again. Only after a
+//! failed commit, which may have changed a file, is a record kept whenever
+//! some file did change, so Undo still applies.
 
 use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
@@ -220,7 +224,18 @@ pub fn remove_privacy(
         forget(&mut document);
         return Err(error);
     }
-    let edited = edit::apply(&dbs, &cookie_targets, &history_targets);
+    let edited = match edit::apply(&dbs, &cookie_targets, &history_targets) {
+        // Nothing of ours was committed (a browser that started holds the
+        // lock, say): whatever changed since is the browser's, so no record
+        // is finished over it, and the consent stays for another try.
+        Err(edit::EditError::BeforeCommit(issue)) => {
+            forget(&mut document);
+            return Err(ensure_quit(env.processes, kind)
+                .err()
+                .unwrap_or_else(|| PrivacyWriteError::Changed(issue_text(&issue))));
+        }
+        other => other.map_err(edit::EditError::issue),
+    };
     let mut issues = Vec::new();
     if edited.is_ok() {
         for path in parts.iter().flat_map(|p| &p.drop) {
@@ -328,6 +343,13 @@ fn back_up(files: &[RecordedFile], staging: &Path, trash: &dyn Trash) -> Result<
     };
     files::verify_backup(&entries, &moved)?;
     Ok(moved)
+}
+
+fn issue_text(issue: &super::PrivacyIssue) -> String {
+    match &issue.path {
+        Some(path) => format!("{}: {}", path.display(), issue.detail),
+        None => issue.detail.clone(),
+    }
 }
 
 /// Every recorded file still hashes as it did before the scan.

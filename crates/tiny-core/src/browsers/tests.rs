@@ -450,9 +450,36 @@ fn bundle_ids_cover_helpers_without_case() {
     assert!(chrome.owns_bundle_id("com.google.Chrome.framework.AlertNotificationService"));
     assert!(!chrome.owns_bundle_id("com.google.Chrome2"));
     assert!(!chrome.owns_bundle_id("com.brave.Browser.helper"));
-    assert!(BrowserKind::Firefox.owns_bundle_id("org.mozilla.plugincontainer"));
     assert!(BrowserKind::Safari.owns_bundle_id("com.apple.Safari"));
     assert!(!BrowserKind::Safari.owns_bundle_id("com.apple.Safari.SafeBrowsing.Service"));
+}
+
+/// Firefox's other editions share its profiles, so they hold it too; its
+/// content processes run inside `Firefox.app`, which the running check
+/// reads as Firefox itself.
+#[test]
+fn every_firefox_edition_holds_firefox() {
+    let firefox = BrowserKind::Firefox;
+    for id in [
+        "org.mozilla.firefox",
+        "org.mozilla.firefoxdeveloperedition",
+        "org.mozilla.nightly",
+        "org.mozilla.Nightly",
+    ] {
+        assert!(firefox.owns_bundle_id(id), "{id}");
+    }
+    assert!(!firefox.owns_bundle_id("org.mozilla.thunderbird"));
+    assert!(!firefox.owns_bundle_id("org.mozilla.firefox2"));
+    assert!(!BrowserKind::Chrome.owns_bundle_id("org.mozilla.nightly"));
+    // `pgrep -x` tells case: the process is `firefox`.
+    for name in [
+        "firefox",
+        "Firefox",
+        "Firefox Developer Edition",
+        "Firefox Nightly",
+    ] {
+        assert!(firefox.app_names().contains(&name), "{name}");
+    }
 }
 
 #[test]

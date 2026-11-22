@@ -31,6 +31,17 @@ const USER_STATE: &[&str] = &[
     "Network/Cookies",
 ];
 
+/// Service-worker state no browser category offers, whole or inside an
+/// offered folder (B33): the registrations (`Database`) and the scripts
+/// they run (`ScriptCache`), whose loss can drop a site's push
+/// subscription. Only `Service Worker/CacheStorage` is offered, by
+/// `browser-offline-data`.
+const SERVICE_WORKER_STATE: &[&str] = &[
+    "Service Worker/ScriptCache/a",
+    "Service Worker/ScriptCache/index",
+    "Service Worker/Database/CURRENT",
+];
+
 /// Lowercase names no browser-caches folder may contain.
 const FORBIDDEN: &[&str] = &[
     "cookies",
@@ -42,6 +53,8 @@ const FORBIDDEN: &[&str] = &[
     "local storage",
     "indexeddb",
     "cachestorage",
+    "service worker",
+    "scriptcache",
     "passwords",
     "bookmarks",
     "web data",
@@ -57,15 +70,13 @@ fn chromium_profile(home: &Path, data: &str, caches: &str, profile: &str) {
     for state in USER_STATE {
         file(&data.join(state));
     }
-    for cache in [
-        "GPUCache/data_0",
-        "Code Cache/js/index",
-        "Service Worker/ScriptCache/a",
-    ] {
+    for cache in ["GPUCache/data_0", "Code Cache/js/index"] {
         file(&data.join(cache));
     }
+    for state in SERVICE_WORKER_STATE {
+        file(&data.join(state));
+    }
     file(&data.join("Service Worker/CacheStorage/0a1b/index"));
-    file(&data.join("Service Worker/Database/CURRENT"));
     let caches = home.join(caches).join(profile);
     for cache in [
         "Cache/Cache_Data/f_000001",
@@ -207,7 +218,7 @@ fn every_profile_of_every_browser_is_covered_and_user_state_never_offered() {
         for folder in CHROMIUM_CACHE_FOLDERS {
             expected.push(format!("{caches}/{folder}"));
         }
-        for folder in ["Code Cache", "GPUCache", "Service Worker/ScriptCache"] {
+        for folder in ["Code Cache", "GPUCache"] {
             expected.push(format!("{data}/{folder}"));
         }
     }
@@ -265,10 +276,45 @@ fn offline_site_data_is_each_chromium_profiles_cache_storage_only() {
     cleanup(&home);
 }
 
+/// B33: neither browser category offers a service worker's scripts or
+/// registrations, whole or inside a folder it offers.
+#[test]
+fn no_category_offers_service_worker_scripts_or_registrations() {
+    let home = fixture_home("sw");
+    let m = MockChecker::none();
+    let ctx = ScanContext::new(None, &m);
+    let mut items = BrowserCaches::new().discover_in(&ctx, &home);
+    items.extend(BrowserOfflineData.discover_in(&ctx, &home));
+    let mut kept = Vec::new();
+    for browser in discover(&home) {
+        for profile in &browser.profiles {
+            kept.extend(
+                SERVICE_WORKER_STATE
+                    .iter()
+                    .map(|s| profile.data_dir.join(s)),
+            );
+        }
+    }
+    kept.retain(|p| p.is_file());
+    assert_eq!(kept.len(), SERVICE_WORKER_STATE.len() * 3, "{kept:?}");
+    for item in &items {
+        for path in &kept {
+            assert!(
+                !path.starts_with(&item.path),
+                "{} offers {}",
+                item.path.display(),
+                path.display()
+            );
+        }
+    }
+    cleanup(&home);
+}
+
 #[test]
 fn a_running_browser_keeps_its_folders_and_not_the_others() {
     let home = fixture_home("running");
-    let m = MockChecker::with_running(["Google Chrome", "Firefox"]);
+    // Firefox's process is `firefox`, and `pgrep -x` tells case.
+    let m = MockChecker::with_running(["Google Chrome", "firefox"]);
     let ctx = ScanContext::new(None, &m);
     let mut items = BrowserCaches::new().discover_in(&ctx, &home);
     items.extend(BrowserOfflineData.discover_in(&ctx, &home));
@@ -315,7 +361,9 @@ fn each_folder_is_gated_on_its_own_browser() {
         "the vendor folder is no browser's own"
     );
     let every = gate_apps(Path::new("/elsewhere"));
-    assert_eq!(every.len(), BrowserKind::ALL.len());
+    let names: usize = BrowserKind::ALL.iter().map(|k| k.app_names().len()).sum();
+    assert_eq!(every.len(), names);
+    assert!(every.iter().any(|a| a == "firefox"), "{every:?}");
 }
 
 /// R3: one byte is offered by one category only. `user-caches` lists the

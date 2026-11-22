@@ -273,6 +273,35 @@ fn a_running_browser_is_refused_and_the_consent_stays_usable() {
     assert_eq!(report.removed_cookies, 2);
 }
 
+/// A database the browser holds fails the edit before its commit: a
+/// refusal with nothing changed, so the consent is not spent.
+#[test]
+fn a_database_held_during_the_edit_is_refused_and_the_consent_stays_usable() {
+    let home = Home::new();
+    let default = chrome_with_privacy(home.path());
+    let session = TinySession::new();
+    let generation = scan(&session, home.path()).generation;
+    let before = listing(&default);
+
+    let holder = Connection::open(default.join("Cookies")).unwrap();
+    holder.execute_batch("BEGIN").unwrap();
+    let _: i64 = holder
+        .query_row("SELECT count(*) FROM cookies", [], |r| r.get(0))
+        .unwrap();
+    let refused = refusal(clean(&session, &home, generation, &QUIT));
+    assert!(
+        matches!(&refused, FfiBrowserPrivacyRefusal::Changed { detail } if detail.contains("locked")),
+        "{refused:?}"
+    );
+    assert_eq!(listing(&default), before);
+    holder.execute_batch("COMMIT").unwrap();
+    drop(holder);
+
+    let report = clean(&session, &home, generation, &QUIT).unwrap();
+    assert_eq!(report.removed_cookies, 2);
+    assert!(report.undo_id.is_some());
+}
+
 #[test]
 fn undo_puts_every_byte_back_and_runs_once() {
     let home = Home::new();

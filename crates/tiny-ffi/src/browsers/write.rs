@@ -228,6 +228,8 @@ impl TinySession {
             store: &store,
         };
         let outcome = remove_privacy(kind, &profile, &consent, &env, now);
+        // Spent only when something may have changed: a refusal (also an
+        // edit that failed before its commit) leaves the consent usable.
         if matches!(outcome, Ok(_) | Err(PrivacyWriteError::Write { .. })) {
             self.browsers_state().spend(generation, kind, profile_id);
         }

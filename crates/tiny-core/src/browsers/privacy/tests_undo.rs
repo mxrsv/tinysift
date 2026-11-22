@@ -4,6 +4,7 @@
 
 use rusqlite::Connection;
 
+use super::files::test_hooks::{self, Step};
 use super::running::RunningCheck;
 use super::tests::now;
 use super::tests_write_fixture::*;
@@ -230,4 +231,35 @@ fn a_browser_started_during_the_clean_refuses_and_keeps_the_earlier_undo() {
 
     undo(&home, BrowserKind::Chrome, &first, &quit()).unwrap();
     assert_eq!(home.listing(), before);
+}
+
+/// A restore that fails on the second file (a full disk) must not leave a
+/// profile Undo can never finish: the next Undo completes it.
+fn an_undo_that_failed_on_the_second_file_finishes_next_time(step: Step) {
+    let home = Home::new();
+    chrome_profile(&home);
+    let before = home.listing();
+    let id = clean_all(&home, BrowserKind::Chrome);
+
+    test_hooks::fail_at(step, 2);
+    let error = undo(&home, BrowserKind::Chrome, &id, &quit()).unwrap_err();
+    test_hooks::clear();
+    assert!(matches!(error, PrivacyUndoError::Failed(_)), "{error:?}");
+
+    undo(&home, BrowserKind::Chrome, &id, &quit()).unwrap();
+    assert_eq!(home.listing(), before);
+    assert_eq!(
+        undo(&home, BrowserKind::Chrome, &id, &quit()).unwrap_err(),
+        PrivacyUndoError::NoRecord
+    );
+}
+
+#[test]
+fn an_undo_whose_second_copy_failed_finishes_on_the_next_undo() {
+    an_undo_that_failed_on_the_second_file_finishes_next_time(Step::Stage);
+}
+
+#[test]
+fn an_undo_whose_second_rename_failed_finishes_on_the_next_undo() {
+    an_undo_that_failed_on_the_second_file_finishes_next_time(Step::Rename);
 }

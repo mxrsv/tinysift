@@ -110,9 +110,10 @@ along. Those overlapping selections are retained and explained in the final repo
   just the folders of apps that are running, without a message. Quit the app and run again
   to see them.
 - `browser-caches` lists every profile of Safari, Chrome, Arc, Brave, Edge, Vivaldi, Opera and Firefox: a
-  Chromium profile's `Cache`, `Code Cache` and `Storage` under `~/Library/Caches`, and its `Cache`, `Code Cache`,
-  `GPUCache` and `Service Worker/ScriptCache`; Safari's `com.apple.Safari` cache; Firefox's `cache2`. Never cookies,
-  logins, preferences, history, extensions or site storage. `user-caches` then leaves out an installed browser's
+  Chromium profile's `Cache`, `Code Cache` and `Storage` under `~/Library/Caches`, and its `Cache`, `Code Cache`
+  and `GPUCache`; Safari's `com.apple.Safari` cache; Firefox's `cache2`. Never cookies, logins, preferences,
+  history, extensions, site storage or a service worker's scripts and registrations (`Service Worker/ScriptCache`,
+  `Service Worker/Database`), which no category offers. `user-caches` then leaves out an installed browser's
   vendor folder in `~/Library/Caches` (`Google`, `BraveSoftware`, ...), so nothing is counted twice
   ([`browser_caches.rs`](../../crates/tiny-core/src/clean/providers/browser_caches.rs)).
 - `browser-offline-data` (Offline site data) lists each Chromium profile's `Service Worker/CacheStorage`: copies

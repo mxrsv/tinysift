@@ -147,6 +147,28 @@ mod tests {
         assert!(check(&none, &FakeBundles(Err("no list".into()))).is_err());
     }
 
+    /// Firefox's `firefox` process, or any edition's bundle, holds it.
+    #[test]
+    fn every_firefox_edition_and_its_process_name_count() {
+        let firefox = |names: &dyn AppProbe, bundles: &FakeBundles| {
+            RunningCheck { names, bundles }.running(BrowserKind::Firefox)
+        };
+        let none = MockChecker::none();
+        let quiet = FakeBundles(Ok(Vec::new()));
+        assert_eq!(firefox(&none, &quiet), Ok(false));
+        assert_eq!(
+            firefox(&MockChecker::with_running(["firefox"]), &quiet),
+            Ok(true)
+        );
+        for id in ["org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly"] {
+            assert_eq!(
+                firefox(&none, &FakeBundles(Ok(vec![id.into()]))),
+                Ok(true),
+                "{id}"
+            );
+        }
+    }
+
     #[test]
     fn the_outermost_app_holds_the_helpers() {
         let exe = Path::new(

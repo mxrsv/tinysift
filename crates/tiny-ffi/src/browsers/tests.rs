@@ -458,6 +458,25 @@ fn running_is_clean_s_name_check_and_unknown_is_none() {
     assert_eq!(browser(&report, FfiBrowserKind::Chrome).profiles.len(), 2);
 }
 
+/// Every Firefox edition's process is `firefox`, and `pgrep -x` tells case.
+#[test]
+fn firefox_runs_by_its_lowercase_process_name() {
+    let home = Home::new();
+    let firefox = home.path().join("Library/Application Support/Firefox");
+    write(
+        &firefox.join("profiles.ini"),
+        "[Profile0]\nName=default-release\nIsRelative=1\nPath=Profiles/ab.default-release\n",
+    );
+    write(&firefox.join("Profiles/ab.default-release/prefs.js"), "");
+    let probe = Probe(HashMap::from([("firefox", Ok(true))]));
+    let session = TinySession::new();
+    let report = scan_with(&session, home.path(), &probe).unwrap();
+    assert_eq!(
+        browser(&report, FfiBrowserKind::Firefox).running,
+        Some(true)
+    );
+}
+
 #[test]
 fn a_cancelled_scan_stores_nothing_and_releases_the_gate() {
     let home = Home::new();

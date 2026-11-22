@@ -1,5 +1,6 @@
 //! The files a privacy write may change, read as SHA-256 digests; the
-//! backup copy of them; and putting a backed-up file back in place.
+//! backup copy of them; and putting a backed-up file back in place, in
+//! two steps: a checked copy beside it, then a rename.
 //!
 //! A file's content is `Some(digest)`, or `None` when nothing is at its
 //! path. Anything at a path that is not a plain file (a symlink, a folder)
@@ -123,10 +124,23 @@ fn check(path: &Path, expected: &str, what: &str, original: &Path) -> Result<(),
     }
 }
 
-/// Puts the bytes of `backup` at `target`: copies them to a new file of
-/// our own beside `target`, checks the copy hashes as `expected`, then
-/// renames it over `target`. A failure leaves `target` as it was.
-pub(super) fn restore(backup: &Path, target: &Path, expected: &str) -> Result<(), String> {
+/// A checked copy of a backup beside the file it is to replace, not yet
+/// in place. Dropping it without [`StagedRestore::commit`] removes the copy.
+pub(super) struct StagedRestore {
+    temp: Option<PathBuf>,
+    target: PathBuf,
+}
+
+/// Copies the bytes of `backup` to a new file of our own beside `target`
+/// and checks the copy hashes as `expected`. `target` is not touched; a
+/// failure leaves no copy behind.
+pub(super) fn stage_restore(
+    backup: &Path,
+    target: &Path,
+    expected: &str,
+) -> Result<StagedRestore, String> {
+    #[cfg(test)]
+    test_hooks::maybe_fail(test_hooks::Step::Stage)?;
     let (Some(dir), Some(name)) = (target.parent(), target.file_name()) else {
         return Err(format!("{} has no folder", target.display()));
     };
@@ -140,19 +154,45 @@ pub(super) fn restore(backup: &Path, target: &Path, expected: &str) -> Result<()
         std::process::id(),
         NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
     ));
-    let written = write_copy(backup, &temp).and_then(|()| {
-        check(&temp, expected, "the restored copy of", target)?;
-        fs::rename(&temp, target)
-            .map_err(|e| format!("could not restore {}: {e}", target.display()))
-    });
-    if written.is_err() {
-        // Created by `write_copy` with `create_new`: ours alone.
-        let _ = fs::remove_file(&temp);
-    }
+    let written = write_copy(backup, &temp);
+    // From here the copy (made with `create_new`, ours alone) is removed
+    // on drop unless it is committed.
+    let staged = StagedRestore {
+        temp: Some(temp),
+        target: target.to_path_buf(),
+    };
     written?;
-    File::open(dir)
-        .and_then(|d| d.sync_all())
-        .map_err(|e| format!("could not sync {}: {e}", dir.display()))
+    check(staged.temp(), expected, "the restored copy of", target)?;
+    Ok(staged)
+}
+
+impl StagedRestore {
+    fn temp(&self) -> &Path {
+        self.temp.as_deref().expect("a staged copy until committed")
+    }
+
+    /// Renames the copy over the target. A failure leaves the target as
+    /// it was.
+    pub(super) fn commit(mut self) -> Result<(), String> {
+        #[cfg(test)]
+        test_hooks::maybe_fail(test_hooks::Step::Rename)?;
+        fs::rename(self.temp(), &self.target)
+            .map_err(|e| format!("could not restore {}: {e}", self.target.display()))?;
+        self.temp = None;
+        let dir = self.target.parent().unwrap_or(Path::new("/"));
+        File::open(dir)
+            .and_then(|d| d.sync_all())
+            .map_err(|e| format!("could not sync {}: {e}", dir.display()))
+    }
+}
+
+impl Drop for StagedRestore {
+    fn drop(&mut self) {
+        if let Some(temp) = self.temp.take() {
+            // Made by `write_copy` with `create_new`: ours alone.
+            let _ = fs::remove_file(temp);
+        }
+    }
 }
 
 /// Copies the plain file `from` to the new file `to`, with `from`'s mode.
@@ -211,6 +251,47 @@ pub(super) fn folder_name(text: &str) -> String {
     }
 }
 
+/// Fails the n-th restore step on this thread, as a full disk would.
+#[cfg(test)]
+pub(super) mod test_hooks {
+    use std::cell::Cell;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    pub enum Step {
+        /// Writing and checking the temporary copy.
+        Stage,
+        /// Renaming the checked copy over the file.
+        Rename,
+    }
+
+    thread_local! {
+        static FAIL: Cell<Option<(Step, usize)>> = const { Cell::new(None) };
+    }
+
+    /// The `nth` (1-based) `step` on this thread fails from now on.
+    pub fn fail_at(step: Step, nth: usize) {
+        FAIL.with(|f| f.set(Some((step, nth))));
+    }
+
+    pub fn clear() {
+        FAIL.with(|f| f.set(None));
+    }
+
+    pub(in super::super) fn maybe_fail(step: Step) -> Result<(), String> {
+        FAIL.with(|f| match f.get() {
+            Some((s, 1)) if s == step => {
+                f.set(None);
+                Err("no space left on device (injected)".into())
+            }
+            Some((s, n)) if s == step => {
+                f.set(Some((s, n - 1)));
+                Ok(())
+            }
+            _ => Ok(()),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -236,12 +317,19 @@ mod tests {
         let target = dir.path().join("History");
         fs::write(&target, b"edited").unwrap();
         let expected = content_of(&backup).unwrap().unwrap();
-        restore(&backup, &target, &expected).unwrap();
+        let staged = stage_restore(&backup, &target, &expected).unwrap();
+        // Staged, not yet in place.
+        assert_eq!(fs::read(&target).unwrap(), b"edited");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 3);
+        staged.commit().unwrap();
         assert_eq!(fs::read(&target).unwrap(), b"original");
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
         // A digest that does not match leaves the target alone.
-        assert!(restore(&backup, &target, "0").is_err());
+        assert!(stage_restore(&backup, &target, "0").is_err());
         assert_eq!(fs::read(&target).unwrap(), b"original");
+        assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
+        // A staged copy dropped uncommitted leaves nothing behind.
+        drop(stage_restore(&backup, &target, &expected).unwrap());
         assert_eq!(fs::read_dir(dir.path()).unwrap().count(), 2);
     }
 

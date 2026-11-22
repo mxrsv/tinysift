@@ -5,10 +5,13 @@
 //! only while every recorded file is still exactly what the write left: a
 //! browser that ran since and changed a database is not rolled back over.
 //! It refuses while any process of the browser runs. Every check runs
-//! before the first file is touched. A file the write created where none
-//! was moves to the Trash; every other one is replaced through a checked
-//! copy and a rename. The backup stays in the Trash, and the record is
-//! consumed only when every file hashes as its original again.
+//! before the first file is touched. Every file to put back is first
+//! copied beside itself and checked; only then does a file the write
+//! created where none was move to the Trash, and each copy is renamed into
+//! place. The backup stays in the Trash, and the record is consumed only
+//! when every file hashes as its original again. An Undo that stopped
+//! partway (a full disk, a failed rename) can be run again: a file that
+//! already hashes as its original counts as put back.
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -100,10 +103,12 @@ pub fn undo_privacy(
         return Err(PrivacyUndoError::Unfinished);
     }
     quit(env, kind)?;
+    // Each file is what the write left, or already its original again
+    // after an earlier Undo that stopped partway.
     let check_all = || -> Result<(), PrivacyUndoError> {
         for file in &record.files {
             let now = files::content_of(&file.path).map_err(PrivacyUndoError::Backup)?;
-            if now != file.written {
+            if now != file.written && now != file.original {
                 return Err(PrivacyUndoError::Changed(file.path.clone()));
             }
         }
@@ -133,26 +138,41 @@ pub fn undo_privacy(
         profile_id: profile.id.clone(),
         ..PrivacyUndoReport::default()
     };
-    // Files the write created go first, so no stale journal sits beside a
+    // Every copy is written and checked before anything is put back, so a
+    // full disk stops the Undo with nothing changed.
+    let mut staged = Vec::new();
+    for file in &record.files {
+        let Some(original) = &file.original else {
+            continue;
+        };
+        let now = files::content_of(&file.path).map_err(PrivacyUndoError::Failed)?;
+        if now.as_ref() == Some(original) {
+            continue;
+        }
+        let copy =
+            files::stage_restore(&record.backup.join(&file.backup_name), &file.path, original)
+                .map_err(|e| partway(&report, &file.path, &e))?;
+        staged.push((file.path.clone(), copy));
+    }
+    // Files the write created go next, so no stale journal sits beside a
     // restored database.
     for file in &record.files {
         if file.original.is_none() && file.written.is_some() {
+            if files::content_of(&file.path)
+                .map_err(PrivacyUndoError::Failed)?
+                .is_none()
+            {
+                continue;
+            }
             env.trash
                 .move_to_trash(&file.path)
                 .map_err(|e| partway(&report, &file.path, &e.to_string()))?;
             report.trashed.push(file.path.clone());
         }
     }
-    for file in &record.files {
-        let Some(original) = &file.original else {
-            continue;
-        };
-        if file.written.as_ref() == Some(original) {
-            continue;
-        }
-        files::restore(&record.backup.join(&file.backup_name), &file.path, original)
-            .map_err(|e| partway(&report, &file.path, &e))?;
-        report.restored.push(file.path.clone());
+    for (path, copy) in staged {
+        copy.commit().map_err(|e| partway(&report, &path, &e))?;
+        report.restored.push(path);
     }
     for file in &record.files {
         let now = files::content_of(&file.path).map_err(PrivacyUndoError::Failed)?;

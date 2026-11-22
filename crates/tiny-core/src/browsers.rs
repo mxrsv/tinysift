@@ -111,13 +111,25 @@ impl BrowserKind {
         }
     }
 
+    /// Bundle ids of the browser's other editions, which share its profile
+    /// folders: Firefox Developer Edition and Nightly use Firefox's
+    /// `profiles.ini` and `Profiles`.
+    pub fn edition_bundle_ids(self) -> &'static [&'static str] {
+        match self {
+            BrowserKind::Firefox => &["org.mozilla.firefoxdeveloperedition", "org.mozilla.nightly"],
+            _ => &[],
+        }
+    }
+
     /// Bundle id prefixes of the browser's helper processes. A Chromium
     /// browser's helpers are `<id>.helper`, `<id>.helper.renderer` and
     /// `<id>.framework.*` (seen in Chrome and Brave), so the prefix is the
     /// main id and a dot. Firefox's content processes run from
-    /// `plugin-container.app`. Safari's WebKit helpers are shared with
-    /// every WebKit app and some `com.apple.Safari.*` services outlive
-    /// Safari, so none is listed for it.
+    /// `plugin-container.app` inside `Firefox.app`, so the running check,
+    /// which reads the outermost `.app`, sees them as Firefox itself and
+    /// none is listed. Safari's WebKit helpers are shared with every WebKit
+    /// app and some `com.apple.Safari.*` services outlive Safari, so none
+    /// is listed for it either.
     pub fn helper_bundle_prefixes(self) -> &'static [&'static str] {
         match self {
             BrowserKind::Chrome => &["com.google.Chrome."],
@@ -126,25 +138,29 @@ impl BrowserKind {
             BrowserKind::Edge => &["com.microsoft.edgemac."],
             BrowserKind::Vivaldi => &["com.vivaldi.Vivaldi."],
             BrowserKind::Opera => &["com.operasoftware.Opera."],
-            BrowserKind::Safari => &[],
-            BrowserKind::Firefox => &["org.mozilla.plugincontainer"],
+            BrowserKind::Safari | BrowserKind::Firefox => &[],
         }
     }
 
     /// Whether a process with this bundle id belongs to the browser: the
-    /// main app or one of its helpers. Bundle ids compare without case, as
-    /// Launch Services does.
+    /// main app, another edition of it or one of its helpers. Bundle ids
+    /// compare without case, as Launch Services does.
     pub fn owns_bundle_id(self, id: &str) -> bool {
         let id = id.to_ascii_lowercase();
-        id == self.bundle_id().to_ascii_lowercase()
+        std::iter::once(self.bundle_id())
+            .chain(self.edition_bundle_ids().iter().copied())
+            .any(|own| id == own.to_ascii_lowercase())
             || self
                 .helper_bundle_prefixes()
                 .iter()
                 .any(|prefix| id.starts_with(&prefix.to_ascii_lowercase()))
     }
 
-    /// Process names Clean's running check (`pgrep -x`) gates on, the same
-    /// names the `browser-caches` and `user-caches` categories use.
+    /// Process names Clean's running check (`pgrep -x`, which tells case)
+    /// gates on, the same names the `browser-caches` and
+    /// `browser-offline-data` categories use. Every Firefox edition's
+    /// process is `firefox`, its executable; `Firefox` and the editions'
+    /// app names are kept as well.
     pub fn app_names(self) -> &'static [&'static str] {
         match self {
             BrowserKind::Chrome => &["Google Chrome"],
@@ -154,7 +170,12 @@ impl BrowserKind {
             BrowserKind::Vivaldi => &["Vivaldi"],
             BrowserKind::Opera => &["Opera"],
             BrowserKind::Safari => &["Safari"],
-            BrowserKind::Firefox => &["Firefox"],
+            BrowserKind::Firefox => &[
+                "firefox",
+                "Firefox",
+                "Firefox Developer Edition",
+                "Firefox Nightly",
+            ],
         }
     }
 

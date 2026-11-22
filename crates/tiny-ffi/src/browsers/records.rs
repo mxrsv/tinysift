@@ -86,7 +86,7 @@ pub struct FfiProfileSpace {
     pub cache_bytes: u64,
     /// `Code Cache`.
     pub code_cache_bytes: u64,
-    /// `Storage`, `GPUCache`, `Service Worker/ScriptCache`.
+    /// `Storage`, `GPUCache`.
     pub other_bytes: u64,
     /// Offline site data: `Service Worker/CacheStorage`.
     pub offline_bytes: u64,

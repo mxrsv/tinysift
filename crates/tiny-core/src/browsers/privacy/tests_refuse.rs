@@ -1,5 +1,6 @@
 //! What the Privacy write refuses, changing nothing: a running browser or
-//! helper, an unknown schema, Safari, and an empty consent.
+//! helper, an unknown schema, a database another connection holds, Safari,
+//! and an empty consent.
 
 use std::fs;
 
@@ -145,4 +146,41 @@ fn nothing_consented_writes_nothing() {
     assert_eq!((report.backup, report.undo_id), (None, None));
     assert_eq!(home.listing(), before);
     assert!(home.trashed().is_empty());
+}
+
+/// A database the browser holds (it started after the last running check)
+/// fails the edit before its commit: nothing of ours changed, so the write
+/// is a refusal, keeps no Undo record and the same consent works later.
+#[test]
+fn a_database_held_by_another_connection_refuses_and_keeps_no_record() {
+    let home = Home::new();
+    chrome_profile(&home);
+    let before = home.listing();
+    let consent = consent_all(&scan_of(&home, BrowserKind::Chrome));
+
+    let holder = Connection::open(home.dir().join("Cookies")).unwrap();
+    holder.execute_batch("BEGIN").unwrap();
+    let _: i64 = holder
+        .query_row("SELECT count(*) FROM cookies", [], |r| r.get(0))
+        .unwrap();
+    let error = write(&home, BrowserKind::Chrome, &consent, &quit(), &home.trash()).unwrap_err();
+    assert!(
+        matches!(&error, PrivacyWriteError::Changed(detail) if detail.contains("locked")),
+        "{error:?}"
+    );
+    assert_eq!(home.listing(), before);
+    let store = home.store();
+    let document = store.lock().unwrap().load().unwrap();
+    assert!(
+        document
+            .entry(BrowserKind::Chrome, &home.profile())
+            .is_none_or(|e| e.record.is_none()),
+        "{document:?}"
+    );
+    holder.execute_batch("COMMIT").unwrap();
+    drop(holder);
+
+    let report = write(&home, BrowserKind::Chrome, &consent, &quit(), &home.trash()).unwrap();
+    assert!(report.removed_cookies > 0);
+    assert!(report.undo_id.is_some());
 }
