@@ -9,6 +9,8 @@
 //! names a caller needs to tell whether it runs.
 
 mod discovery;
+pub mod extensions;
+pub mod privacy;
 
 #[cfg(test)]
 mod tests;
