@@ -77,6 +77,14 @@ pub enum Evidence {
     },
     /// The Trash's other top-level items, after the listed `TrashEntry`s.
     TrashRest { count: u64, bytes: u64 },
+    /// The browser and profile a browser category's folder belongs to: the
+    /// browser's name, the profile's key (`Default`, `Profile 1`, Firefox's
+    /// `Path`; empty for Safari) and its name as the browser shows it.
+    BrowserProfile {
+        browser: String,
+        profile_id: String,
+        profile_name: String,
+    },
 }
 
 /// How a category's items come back after they are moved to the Trash.

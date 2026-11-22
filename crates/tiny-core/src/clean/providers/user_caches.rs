@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use super::browser_caches::covered_caches_children;
 use super::never_cache::holds_user_data;
 use super::purged_caches::{real_pip, PIP_FOLDER};
 use super::{execute_per_item, run_tool, CleanProvider};
@@ -13,6 +14,7 @@ use crate::runner::CommandRunner;
 
 const ID: &str = "user-caches";
 const LABEL: &str = "User caches";
+const CACHES: &str = "Library/Caches";
 
 /// Absolute paths: a Finder-launched app has a minimal `PATH`.
 const MDFIND: &str = "/usr/bin/mdfind";
@@ -28,7 +30,9 @@ const APPLE_FOLDERS: &[&str] = &[
     "GeoServices",
     "PassKit",
 ];
-/// Folders named after a vendor, not a bundle id, and the app that owns them.
+/// Folders named after a vendor, not a bundle id, and the app that owns
+/// them. Offered whole only while their browser is not installed: otherwise
+/// `browser-caches` lists the caches inside (`covered_caches_children`).
 const VENDOR_APPS: &[(&str, &str)] = &[
     ("Google", "Google Chrome"),
     ("BraveSoftware", "Brave Browser"),
@@ -211,7 +215,30 @@ impl UserCaches {
         }
     }
 
+    /// Every offered child of `root`, with no browser folder left out.
+    #[cfg(test)]
     pub(super) fn list_caches(&self, ctx: &ScanContext<'_>, root: &Path) -> Result<Vec<CleanItem>> {
+        self.list_caches_except(ctx, root, &[])
+    }
+
+    /// The caches of `home`, leaving out the folders that hold an installed
+    /// browser's caches: `browser-caches` offers those, per profile, so one
+    /// byte is never offered by two categories.
+    pub(super) fn list_home_caches(
+        &self,
+        ctx: &ScanContext<'_>,
+        home: &Path,
+    ) -> Result<Vec<CleanItem>> {
+        let browsers = covered_caches_children(home);
+        self.list_caches_except(ctx, &home.join(CACHES), &browsers)
+    }
+
+    fn list_caches_except(
+        &self,
+        ctx: &ScanContext<'_>,
+        root: &Path,
+        skipped: &[PathBuf],
+    ) -> Result<Vec<CleanItem>> {
         // pip's folder is `pip-cache`'s when a real pip3 can empty it, so
         // one path never belongs to a tool and to a plain move at once.
         let pip_owned = real_pip(self.runner.as_ref()).is_some();
@@ -222,6 +249,7 @@ impl UserCaches {
                 let name = path.file_name()?.to_str()?.to_string();
                 let offered = !is_apple_cache(&name)
                     && !owned(&name)
+                    && !skipped.contains(&path)
                     && !holds_ide_history(&path)
                     && holds_user_data(&path).is_none()
                     && !holds_tool_state(&path, &name);
@@ -286,7 +314,7 @@ impl CleanProvider for UserCaches {
             Some(h) => h,
             None => return Ok(Vec::new()),
         };
-        self.list_caches(ctx, &h.join("Library/Caches"))
+        self.list_home_caches(ctx, &h)
     }
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
         execute_per_item(items, action, ID)

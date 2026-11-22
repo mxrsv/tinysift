@@ -79,6 +79,7 @@ const DESKTOP_TRASH: &[(&str, Option<ReportOnly>)] = &[
     ("streaming-caches", None),
     ("chat-caches", None),
     ("browser-caches", None),
+    ("browser-offline-data", None),
     ("quarantine", None),
     ("crash-reports", None),
     // Folder names are matched against bundle IDs, so live data such as
@@ -311,6 +312,8 @@ const SECTIONS: &[(&str, Section)] = &[
     ("streaming-caches", Section::Rebuilt),
     ("chat-caches", Section::Rebuilt),
     ("browser-caches", Section::Rebuilt),
+    // Can hold files saved for offline reading, which nothing recreates.
+    ("browser-offline-data", Section::YourFiles),
     ("quarantine", Section::Rebuilt),
     ("crash-reports", Section::Rebuilt),
     ("app-orphans", Section::YourFiles),

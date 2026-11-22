@@ -67,7 +67,7 @@ home folder, its ancestors and tool-printed paths outside home
 
 App gating has two mechanisms, both `pgrep -a -x` on a process name (`pnpm` adds a third check, below). `-a` counts
 `pgrep`'s own ancestors, so `sift clean` sees the terminal, editor, agent or package script it runs inside. `quit_apps()` (default
-`requires_app_quit()`) skips the whole category while its app runs. `browser-caches`,
+`requires_app_quit()`) skips the whole category while its app runs. `browser-caches`, `browser-offline-data`,
 `chat-caches`, `streaming-caches` and `user-caches` instead drop only a running app's paths
 inside `discover()` (`ScanContext::known_running`). Right before each move the app re-checks
 `item_apps(path)` and `check_item(path)`. The [CLI executor](../../crates/tiny-core/src/clean/execute.rs)
@@ -321,6 +321,16 @@ skipped instead of emptying files the user never saw.
 Playwright, Camoufox, Buzz, llama.cpp, Kitty, Poetry virtualenvs, renv, pnpm `dlx`, `npx`, Yarn Berry), and a folder that holds
 one is not offered whole (`npm` offers its other children). A category that names a place on purpose
 (`puppeteer`, `huggingface`) is not a broad sweep and does not use the list.
+
+**Browser folders (SF1).** `browser-caches` and `browser-offline-data` take their folders from
+[`browsers::discover`](../../crates/tiny-core/src/browsers/discovery.rs), one item per folder per profile, tagged
+`Evidence::BrowserProfile`, and gate each on its own browser. Their name lists hold cache folders only; a test pins
+that no cookie, login, preference, history, extension or site-storage file lies at or under an offered path.
+`Service Worker/CacheStorage` is its own category, Review and `TrashOnly`, because it can hold what a user saved
+for offline reading; the app leaves it out of its ticked-ahead set. `user-caches` skips the `~/Library/Caches` child
+that holds an installed browser's caches (`covered_caches_children`), so no path is offered by both; with the browser
+gone, its vendor folder is an ordinary cache again
+([`browser_caches.rs`](../../crates/tiny-core/src/clean/providers/browser_caches.rs)).
 
 **Re-check before a move (SF2).** `validate` skips an item whose owning app runs (`AppRunning`, cause
 `InUse`) and one whose fingerprint differs (`Changed`, cause `ChangedSinceScan`): a file's size or

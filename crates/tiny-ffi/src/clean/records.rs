@@ -196,6 +196,14 @@ pub enum FfiEvidence {
         count: u64,
         bytes: u64,
     },
+    /// The browser and profile a browser category's folder belongs to:
+    /// the browser's name, the profile's key (empty for Safari) and its
+    /// name as the browser shows it.
+    BrowserProfile {
+        browser: String,
+        profile_id: String,
+        profile_name: String,
+    },
 }
 
 /// How a category's items come back after a move to Trash.
@@ -505,6 +513,15 @@ impl From<Evidence> for FfiEvidence {
                 added_at,
             },
             Evidence::TrashRest { count, bytes } => Self::TrashRest { count, bytes },
+            Evidence::BrowserProfile {
+                browser,
+                profile_id,
+                profile_name,
+            } => Self::BrowserProfile {
+                browser,
+                profile_id,
+                profile_name,
+            },
         }
     }
 }

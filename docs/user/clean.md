@@ -19,7 +19,7 @@ Run `--dry-run` first on a new machine.
 
 ## Categories
 
-46 categories in three families. Each has a risk level that decides whether you see it by
+47 categories in three families. Each has a risk level that decides whether you see it by
 default.
 
 **Dev caches** — `cargo`, `npm`, `pnpm`, `yarn`, `uv`, `bun-cache`, `pip-cache`, `puppeteer`,
@@ -30,7 +30,7 @@ default.
 `xcode-derived`, `xcode-archives`, `xcode-devicesupport`, `xcode-previews`.
 
 **User storage** — `downloads-old`, `screenshots-old`, `mail-attachments`,
-`streaming-caches`, `chat-caches`, `browser-caches`.
+`streaming-caches`, `chat-caches`, `browser-caches`, `browser-offline-data`.
 
 **System leftovers** — `user-logs`, `user-caches`, `trash`, `quarantine`, `crash-reports`,
 `app-orphans`, `time-machine-local`, `font-quicklook-caches`.
@@ -106,9 +106,18 @@ along. Those overlapping selections are retained and explained in the final repo
   ([`user_logs.rs`](../../crates/tiny-core/src/clean/providers/user_logs.rs)).
 - `puppeteer` leaves out just the builds of a browser that is running (Chrome for Testing or
   `chrome-headless-shell`), without a message.
-- `browser-caches`, `chat-caches`, `streaming-caches` and `user-caches` instead leave out
+- `browser-caches`, `browser-offline-data`, `chat-caches`, `streaming-caches` and `user-caches` instead leave out
   just the folders of apps that are running, without a message. Quit the app and run again
   to see them.
+- `browser-caches` lists every profile of Safari, Chrome, Arc, Brave, Edge, Vivaldi, Opera and Firefox: a
+  Chromium profile's `Cache`, `Code Cache` and `Storage` under `~/Library/Caches`, and its `Cache`, `Code Cache`,
+  `GPUCache` and `Service Worker/ScriptCache`; Safari's `com.apple.Safari` cache; Firefox's `cache2`. Never cookies,
+  logins, preferences, history, extensions or site storage. `user-caches` then leaves out an installed browser's
+  vendor folder in `~/Library/Caches` (`Google`, `BraveSoftware`, ...), so nothing is counted twice
+  ([`browser_caches.rs`](../../crates/tiny-core/src/clean/providers/browser_caches.rs)).
+- `browser-offline-data` (Offline site data) lists each Chromium profile's `Service Worker/CacheStorage`: copies
+  sites keep for offline use. Sites download them again, but a page or file saved for offline reading goes with
+  them, so it only moves to the Trash.
 
 ## Scanning in the desktop app
 
@@ -119,7 +128,7 @@ afresh. How the app presents this is in the [desktop guide](https://tinysift.app
 
 ## Your own files
 
-`downloads-old`, `screenshots-old` and `mail-attachments` hold files nothing recreates; once
+`downloads-old`, `screenshots-old`, `mail-attachments` and `browser-offline-data` hold files nothing recreates; once
 removed, only the Trash brings them back. Selecting one of these categories selects every
 file it lists, including ones that look private such as keys or recovery codes. Read the
 plan, and untick what you want to keep with `--review-paths`. The desktop app flags

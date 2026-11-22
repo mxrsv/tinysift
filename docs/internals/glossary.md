@@ -38,7 +38,8 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   ([`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs)). Not: `du`, Storage's
   Space Lens total, or the logical file length.
 - **Evidence** (`Evidence`) — A checkable fact shown beside an item: modified or last-opened
-  time, manifest and last commit, owning app, `Sensitive`. Empty means the category rule alone
+  time, manifest and last commit, owning app, `Sensitive`, a browser folder's browser and profile
+  (`BrowserProfile`). Empty means the category rule alone
   selected it. Not: reason (the category's `inclusion_reason`).
 - **Group** (`CategoryGroup`) — All items one provider discovered, with their total size, as the
   CLI picker lists them. Not: family, trust section.
