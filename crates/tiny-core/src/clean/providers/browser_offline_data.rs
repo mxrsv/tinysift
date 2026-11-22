@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 use crate::browsers::{discover, BrowserFamily};
 use crate::error::Result;
 
-use super::browser_caches::{gate_apps, offer, real_folder, ProfileFolder};
+use super::browser_caches::{gate_apps, offer, profile_space_folders, ProfileFolder, SpacePart};
 use super::{execute_per_item, CleanProvider};
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
@@ -18,7 +18,7 @@ use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 const ID: &str = "browser-offline-data";
 const LABEL: &str = "Offline site data";
 /// Inside a Chromium profile's data folder.
-const CACHE_STORAGE: &str = "Service Worker/CacheStorage";
+pub(super) const CACHE_STORAGE: &str = "Service Worker/CacheStorage";
 
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
@@ -31,13 +31,17 @@ pub(super) fn offline_folders(home: &Path) -> Vec<ProfileFolder> {
         .filter(|browser| browser.family == BrowserFamily::Chromium)
         .flat_map(|browser| {
             let kind = browser.kind;
-            browser.profiles.into_iter().filter_map(move |profile| {
-                Some(ProfileFolder {
-                    path: real_folder(&profile.data_dir, CACHE_STORAGE)?,
-                    kind,
-                    profile_id: profile.id,
-                    profile_name: profile.name,
-                })
+            browser.profiles.into_iter().flat_map(move |profile| {
+                profile_space_folders(home, kind, &profile)
+                    .into_iter()
+                    .filter(|f| f.part == SpacePart::Offline)
+                    .map(|f| ProfileFolder {
+                        path: f.path,
+                        kind,
+                        profile_id: profile.id.clone(),
+                        profile_name: profile.name.clone(),
+                    })
+                    .collect::<Vec<_>>()
             })
         })
         .collect()

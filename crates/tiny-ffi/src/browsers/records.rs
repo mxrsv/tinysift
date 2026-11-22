@@ -55,6 +55,8 @@ pub struct FfiBrowserProfile {
     pub avatar: FfiProfileAvatar,
     /// Chromium's `profile_highlight_color`, as ARGB.
     pub highlight_color: Option<u32>,
+    /// What the profile's cache folders hold, a running browser's too.
+    pub space: FfiProfileSpace,
     pub privacy: FfiProfilePrivacy,
     /// User-installed extensions, by name then id; empty outside Chromium.
     pub extensions: Vec<FfiBrowserExtension>,
@@ -71,6 +73,23 @@ pub struct FfiProfileAvatar {
     pub uses_account_picture: bool,
     /// The account photo's absolute path, only when the file exists.
     pub account_picture: Option<String>,
+}
+
+/// The bytes in a profile's cache folders, measured the way Clean sizes
+/// its `browser-caches` and `browser-offline-data` items. For display: the
+/// page shows these when Clean offered no items for the profile (its
+/// browser runs); what a Clean button takes is always Clean's items. The
+/// Space part is `cache_bytes + code_cache_bytes + other_bytes`.
+#[derive(Debug, Clone, Default, PartialEq, Eq, uniffi::Record)]
+pub struct FfiProfileSpace {
+    /// `Cache` (Chromium), Safari's cache, `cache2` (Firefox).
+    pub cache_bytes: u64,
+    /// `Code Cache`.
+    pub code_cache_bytes: u64,
+    /// `Storage`, `GPUCache`, `Service Worker/ScriptCache`.
+    pub other_bytes: u64,
+    /// Offline site data: `Service Worker/CacheStorage`.
+    pub offline_bytes: u64,
 }
 
 /// The counts of a profile's Privacy part. The cookies and history rows

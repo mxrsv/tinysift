@@ -659,16 +659,54 @@ sort by what they free, or share. Tests use fixture libraries, `clonefile` pairs
 [`tiny-core/src/browsers.rs`](../../crates/tiny-core/src/browsers.rs). `browsers_scan(token, progress)` takes the Browsers
 scan slot and returns `FfiBrowsersReport`: a `generation` and each installed browser (`kind`, `name`, `bundle_id`,
 `running` from Clean's `pgrep` check, `None` when it cannot answer) with its profiles (`id`, `name`, `user_name`,
-`avatar`, `highlight_color`), each profile's privacy counts (`FfiProfilePrivacy`) and its extensions. A refused or
+`avatar`, `highlight_color`), each profile's `space`, privacy counts (`FfiProfilePrivacy`) and extensions. A refused or
 broken file never fails the call: it is an `FfiBrowserIssue` on the browser, the profile's privacy or its extensions,
-and `PermissionDenied` is the app's cue for its Full Disk Access guide. Cache sizes are not in the report: they are the
-`browser-caches` and `browser-offline-data` items of `clean_discover`, whose `FfiEvidence::BrowserProfile` carries the
-same `kind` and `profile_id`.
+and `PermissionDenied` is the app's cue for its Full Disk Access guide.
+
+**Space (B12).** `FfiProfileSpace` holds the bytes of the profile's folders that `browser-caches` and
+`browser-offline-data` offer, listed by the same
+[`profile_space_folders`](../../crates/tiny-core/src/clean/providers/browser_caches.rs) the two providers use and sized
+with Clean's `dir_size_checked`: `cache_bytes`, `code_cache_bytes`, `other_bytes` (`Storage`, `GPUCache`,
+`Service Worker/ScriptCache`) and `offline_bytes`. It is measured for a running browser too, whose folders Clean
+leaves out at discovery, so the page can show what an open browser holds. It is for display only: a Clean button
+takes Clean's items, whose `FfiEvidence::BrowserProfile` carries the same `kind` and `profile_id`.
 
 **Privacy consent.** The cookie keys and history rows a privacy write would delete never cross to Swift. Each scan keeps
 every profile's full `ProfilePrivacy` in the session under its `generation`, replacing the previous scan; a cancelled
-scan keeps the old one. A write names the generation, a kind with a profile id and the parts, and takes exactly the
-stored lists (`BrowsersState::consented`); a replaced generation is `PreviewInvalid`.
+scan keeps the old one. `browsers_clean_privacy(generation, kind, profile_id)` consents to exactly that profile's
+stored `cookies_to_remove` and `history_to_remove` (`BrowsersState::consented`); core then takes only what a fresh scan
+of the same folder still lists, and reports the rest as skipped (`now_kept`, `not_found`). A replaced generation, or a
+profile already cleaned under it, is `PreviewInvalid`. A refusal before anything changed (the browser runs, a file
+changed, the backup or the Undo store failed) leaves the consent usable, so the user can quit the browser and press
+Clean again without a new scan.
+
+**Write ([`remove_privacy`](../../crates/tiny-core/src/browsers/privacy/write.rs)).** Holds the write gate, so it never
+overlaps a Browsers scan. Refuses Safari (B18, B20) and a running browser: Clean's `pgrep` names, or any live process
+whose outermost `.app` has a bundle id the browser owns, which catches helpers
+([`running.rs`](../../crates/tiny-core/src/browsers/privacy/running.rs)); an unknown answer refuses too. Every file it
+may touch (each database with its `-journal`, `-wal`, `-shm`, and Chromium's `Visited Links`) is copied into a backup
+folder that moves to the Trash through `NativeTrash` and is checked there before one transaction edits the databases.
+Chromium loses the listed `cookies` rows, the `urls` rows with their `visits`, and their `icon_mapping`, `top_sites`
+and `omni_box_shortcuts` rows (only when no kept row has the URL); `Visited Links` moves to the Trash and Chrome rebuilds
+it. Firefox loses `moz_cookies` rows (per container) and `moz_places` rows with their `moz_historyvisits`, never a row a
+bookmark or keyword points at (`foreign_count > 0`). Refusals map to `FfiError::BrowserPrivacyRefused` with an
+`FfiBrowserPrivacyRefusal` (`Running` is the app's cue for the quit line); a failed edit is `BrowserPrivacyFailed`,
+carrying an `undo_id` when a file did change.
+
+**Undo (B10, B25, [`undo.rs`](../../crates/tiny-core/src/browsers/privacy/undo.rs)).**
+`browsers_undo_privacy(kind, profile_id, undo_id)` holds the write gate, refuses a running browser, and puts the
+recorded files back byte for byte from the backup in the Trash, which stays there. It applies only to the profile's
+latest clean, only until its next scan (every `browsers_scan` runs `scan_profile_recorded`, which raises the profile's
+generation first, so a later Undo is `Expired`), and only while every file is still exactly what the clean left
+(`ChangedSinceClean` otherwise). The app must not rescan while it offers Undo. The store is one owner-only file,
+`~/Library/Application Support/Tiny/browser-privacy/undo.json`, with an exclusive `flock` for each write, Undo and scan
+raise ([`undo_store.rs`](../../crates/tiny-core/src/browsers/privacy/undo_store.rs)); a store that cannot record a scan
+makes that profile's privacy an `Unreadable` issue rather than leave an old Undo valid over a newer scan.
+
+**Not cleaned.** Privacy leaves these in place, so a removed site can still show there: Chromium `keyword_search_terms`,
+`segments` and `visit_source` in `History`, history annotations, and favicons no mapping points at any longer;
+Firefox `moz_origins`, `favicons.sqlite` and `moz_annos`. Safari history is never edited (it syncs through iCloud),
+and Safari cookies are not scanned in this build. Edits stay on this Mac: a browser's sync account keeps its copy.
 
 ## Desktop persistent protection
 

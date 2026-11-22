@@ -158,9 +158,14 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 ## Browsers
 
 - **Browsers scan generation** (`FfiBrowsersReport.generation`) — The number of the last
-  `browsers_scan`, under which the session keeps each profile's privacy removal lists. A privacy
-  write passes it back as consent; a newer scan makes it stale. Rules:
-  [Browsers](clean.md#browsers). Not: a Clean scan or preview ID.
+  `browsers_scan`, under which the session keeps each profile's privacy removal lists.
+  `browsers_clean_privacy` passes it back as consent; a newer scan makes it stale. Rules:
+  [Browsers](clean.md#browsers). Not: a Clean scan or preview ID, nor the Undo store's per-profile
+  generation, which every scan raises to end an earlier clean's Undo.
+- **Privacy clean** (`remove_privacy`, `browsers_clean_privacy`) — Removing a profile's old and
+  tracker cookies and its history older than 90 days, after a backup of every touched file goes
+  to the Trash. Undo (`undo_id`) lasts until the profile's next scan. Not: Clean's
+  `browser-caches` items, which are folders moved to the Trash.
 
 ## Processes
 

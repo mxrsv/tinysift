@@ -19,17 +19,17 @@ use crate::clean::FfiEvidence;
 use crate::FfiProgress;
 
 /// 2027-01-15, the "now" every fixture counts back from.
-const NOW_SECS: u64 = 1_800_000_000;
+pub(super) const NOW_SECS: u64 = 1_800_000_000;
 const DAY_SECS: i64 = 86_400;
 /// Seconds from 1601-01-01 (Chromium's epoch) to 1970-01-01.
 const CHROMIUM_EPOCH_OFFSET_SECS: i64 = 11_644_473_600;
 const EXTENSION: &str = "aaaabbbbccccddddeeeeffffgggghhhh";
-const CHROME: &str = "Library/Application Support/Google/Chrome";
+pub(super) const CHROME: &str = "Library/Application Support/Google/Chrome";
 const BRAVE: &str = "Library/Application Support/BraveSoftware/Brave-Browser";
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
-fn now() -> SystemTime {
+pub(super) fn now() -> SystemTime {
     UNIX_EPOCH + Duration::from_secs(NOW_SECS)
 }
 
@@ -39,10 +39,10 @@ fn chromium_days_ago(days: i64) -> i64 {
 }
 
 /// A temporary home, removed on drop.
-struct Home(PathBuf);
+pub(super) struct Home(PathBuf);
 
 impl Home {
-    fn new() -> Self {
+    pub(super) fn new() -> Self {
         let dir = fs::canonicalize(std::env::temp_dir())
             .unwrap()
             .join(format!(
@@ -55,7 +55,7 @@ impl Home {
         Home(dir)
     }
 
-    fn path(&self) -> &Path {
+    pub(super) fn path(&self) -> &Path {
         &self.0
     }
 }
@@ -66,7 +66,7 @@ impl Drop for Home {
     }
 }
 
-fn write(path: &Path, contents: &str) {
+pub(super) fn write(path: &Path, contents: &str) {
     fs::create_dir_all(path.parent().unwrap()).unwrap();
     fs::write(path, contents).unwrap();
 }
@@ -77,7 +77,7 @@ fn chmod(path: &Path, mode: u32) {
 
 /// Chrome with `Default` (signed in, account photo) and `Profile 2`
 /// (signed out, built-in avatar). Returns the `Default` folder.
-fn chrome(home: &Path) -> PathBuf {
+pub(super) fn chrome(home: &Path) -> PathBuf {
     let root = home.join(CHROME);
     for folder in ["Default", "Profile 2"] {
         write(&root.join(folder).join("Preferences"), "{}");
@@ -97,12 +97,14 @@ fn chrome(home: &Path) -> PathBuf {
     default
 }
 
-/// `urls` rows as `(url, days since the last visit)`.
-fn history(dir: &Path, rows: &[(&str, i64)]) {
+/// `urls` rows as `(url, days since the last visit)`, each with one visit.
+pub(super) fn history(dir: &Path, rows: &[(&str, i64)]) {
     let conn = Connection::open(dir.join("History")).unwrap();
     conn.execute_batch(
         "CREATE TABLE urls(id INTEGER PRIMARY KEY AUTOINCREMENT, url LONGVARCHAR,
-            last_visit_time INTEGER NOT NULL);",
+            last_visit_time INTEGER NOT NULL);
+         CREATE TABLE visits(id INTEGER PRIMARY KEY, url INTEGER NOT NULL,
+            visit_time INTEGER NOT NULL);",
     )
     .unwrap();
     for (url, days) in rows {
@@ -111,11 +113,16 @@ fn history(dir: &Path, rows: &[(&str, i64)]) {
             params![url, chromium_days_ago(*days)],
         )
         .unwrap();
+        conn.execute(
+            "INSERT INTO visits(url, visit_time) VALUES (last_insert_rowid(), ?1)",
+            params![chromium_days_ago(*days)],
+        )
+        .unwrap();
     }
 }
 
 /// `cookies` rows as `(host_key, name, days since the last access)`.
-fn cookies(dir: &Path, rows: &[(&str, &str, i64)]) {
+pub(super) fn cookies(dir: &Path, rows: &[(&str, &str, i64)]) {
     let conn = Connection::open(dir.join("Cookies")).unwrap();
     conn.execute_batch(
         "CREATE TABLE cookies(host_key TEXT NOT NULL, name TEXT NOT NULL, path TEXT NOT NULL,
@@ -154,7 +161,7 @@ fn extension(dir: &Path) {
 
 /// The `Default` profile with a kept, an old and a tracker cookie, and one
 /// old history entry.
-fn chrome_with_privacy(home: &Path) -> PathBuf {
+pub(super) fn chrome_with_privacy(home: &Path) -> PathBuf {
     let default = chrome(home);
     history(
         &default,
@@ -177,7 +184,7 @@ fn chrome_with_privacy(home: &Path) -> PathBuf {
 
 /// Answers each process name from a table; a missing name is not running.
 #[derive(Default)]
-struct Probe(HashMap<&'static str, Result<bool, String>>);
+pub(super) struct Probe(HashMap<&'static str, Result<bool, String>>);
 
 impl AppProbe for Probe {
     fn probe(&self, name: &str) -> Result<bool, String> {
@@ -186,7 +193,7 @@ impl AppProbe for Probe {
 }
 
 #[derive(Default)]
-struct Listener(Mutex<Vec<FfiProgress>>);
+pub(super) struct Listener(Mutex<Vec<FfiProgress>>);
 
 impl ProgressListener for Listener {
     fn on_progress(&self, progress: FfiProgress) {
@@ -194,7 +201,7 @@ impl ProgressListener for Listener {
     }
 }
 
-fn scan_with(
+pub(super) fn scan_with(
     session: &TinySession,
     home: &Path,
     probe: &Probe,
@@ -208,11 +215,11 @@ fn scan_with(
     )
 }
 
-fn scan(session: &TinySession, home: &Path) -> FfiBrowsersReport {
+pub(super) fn scan(session: &TinySession, home: &Path) -> FfiBrowsersReport {
     scan_with(session, home, &Probe::default()).unwrap()
 }
 
-fn browser(report: &FfiBrowsersReport, kind: FfiBrowserKind) -> &FfiBrowser {
+pub(super) fn browser(report: &FfiBrowsersReport, kind: FfiBrowserKind) -> &FfiBrowser {
     report.browsers.iter().find(|b| b.kind == kind).unwrap()
 }
 
@@ -527,4 +534,66 @@ fn cache_evidence_names_the_scanned_kind_and_profile() {
     for kind in BrowserKind::ALL {
         assert_eq!(BrowserKind::from(FfiBrowserKind::from(kind)), kind);
     }
+}
+
+/// B12: Clean leaves a running browser's folders out, so the page measures
+/// them itself, split by part, by the folders Clean would offer.
+#[test]
+fn a_running_browser_s_space_is_measured_by_part() {
+    let home = Home::new();
+    let default = chrome(home.path());
+    let caches = home.path().join("Library/Caches/Google/Chrome/Default");
+    for (path, bytes) in [
+        (caches.join("Cache/Cache_Data/f_000001"), 10_000),
+        (caches.join("Code Cache/js/index"), 6_000),
+        (caches.join("Storage/ext/x"), 3_000),
+        (default.join("GPUCache/data_0"), 2_000),
+        (
+            default.join("Service Worker/CacheStorage/0a1b/index"),
+            9_000,
+        ),
+        // Never measured: not a cache folder.
+        (default.join("Local Storage/leveldb/000003.log"), 50_000),
+    ] {
+        write(&path, &"x".repeat(bytes));
+    }
+    let probe = Probe(HashMap::from([("Google Chrome", Ok(true))]));
+    let session = TinySession::new();
+    let report = scan_with(&session, home.path(), &probe).unwrap();
+    let chrome = browser(&report, FfiBrowserKind::Chrome);
+    assert_eq!(chrome.running, Some(true));
+    let space = &chrome.profiles[0].space;
+    // Allocated blocks, as Clean sizes its items: at least the bytes written.
+    assert!(space.cache_bytes >= 10_000, "{space:?}");
+    assert!(space.code_cache_bytes >= 6_000, "{space:?}");
+    assert!(space.other_bytes >= 5_000, "{space:?}");
+    assert!(space.offline_bytes >= 9_000, "{space:?}");
+    assert!(space.other_bytes < 50_000, "{space:?}");
+    assert_eq!(chrome.profiles[1].space, FfiProfileSpace::default());
+}
+
+/// An Undo store that cannot record the scan makes the profile's privacy
+/// an issue; the call still lists everything else.
+#[test]
+fn an_unusable_undo_store_is_a_privacy_issue_not_a_failed_call() {
+    let home = Home::new();
+    chrome_with_privacy(home.path());
+    let store = home
+        .path()
+        .join("Library/Application Support/Tiny/browser-privacy");
+    write(&store, "not a folder");
+    let session = TinySession::new();
+    let report = scan(&session, home.path());
+    let work = &browser(&report, FfiBrowserKind::Chrome).profiles[0];
+    assert!(!work.privacy.supported);
+    let issue = work.privacy.issue.as_ref().unwrap();
+    assert_eq!(issue.kind, FfiBrowserIssueKind::Unreadable);
+    assert_eq!(issue.path, Some(store.display().to_string()));
+    assert_eq!(work.privacy.trackers, 0);
+    assert_eq!(work.extensions.len(), 1);
+    let state = session.browsers_state();
+    let stored = state
+        .consented(report.generation, BrowserKind::Chrome, "Default")
+        .unwrap();
+    assert!(stored.privacy.cookies_to_remove.is_empty());
 }

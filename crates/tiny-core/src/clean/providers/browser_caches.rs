@@ -1,9 +1,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
-use crate::browsers::{discover, Browser, BrowserFamily, BrowserKind};
+use crate::browsers::{discover, Browser, BrowserFamily, BrowserKind, BrowserProfile};
 use crate::error::Result;
 
+use super::browser_offline_data::CACHE_STORAGE;
 use super::{execute_per_item, root_as_item, CleanProvider};
 use crate::clean::fs_safe::{is_dir_safe, list_children};
 use crate::clean::scan_context::ScanContext;
@@ -149,6 +150,89 @@ pub(super) fn real_folder(base: &Path, relative: &str) -> Option<PathBuf> {
     Some(path)
 }
 
+/// Which part of a profile's space a folder is, as the Browsers page
+/// splits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SpacePart {
+    /// Chromium's `Cache`, Safari's cache, Firefox's `cache2`.
+    Cache,
+    /// Chromium's `Code Cache`.
+    CodeCache,
+    /// Chromium's `Storage`, `GPUCache` and `Service Worker/ScriptCache`.
+    Other,
+    /// `Service Worker/CacheStorage`, the `browser-offline-data` category.
+    Offline,
+}
+
+/// One folder of a profile that `browser-caches` or `browser-offline-data`
+/// offers (when its browser is not running).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpaceFolder {
+    pub part: SpacePart,
+    pub path: PathBuf,
+}
+
+fn chromium_part(folder: &str) -> SpacePart {
+    match folder {
+        "Cache" => SpacePart::Cache,
+        "Code Cache" => SpacePart::CodeCache,
+        _ => SpacePart::Other,
+    }
+}
+
+/// The folders of `profile`, a profile [`discover`] found under `home`,
+/// that the two browser categories offer, by the same path rules, each
+/// once: the cache folder's names, then the data folder's, then the
+/// offline data. A running browser's folders are listed too; the
+/// categories leave those out at discovery, the Browsers page measures
+/// them for display.
+pub fn profile_space_folders(
+    home: &Path,
+    kind: BrowserKind,
+    profile: &BrowserProfile,
+) -> Vec<SpaceFolder> {
+    let mut out: Vec<SpaceFolder> = Vec::new();
+    let mut push = |part, path: Option<PathBuf>| {
+        if let Some(path) = path.filter(|p| out.iter().all(|f| &f.path != p)) {
+            out.push(SpaceFolder { part, path });
+        }
+    };
+    match kind.family() {
+        BrowserFamily::Chromium => {
+            if let Some(dir) = &profile.cache_dir {
+                for folder in CHROMIUM_CACHE_FOLDERS {
+                    push(chromium_part(folder), real_folder(dir, folder));
+                }
+            }
+            for folder in CHROMIUM_DATA_FOLDERS {
+                push(
+                    chromium_part(folder),
+                    real_folder(&profile.data_dir, folder),
+                );
+            }
+            push(
+                SpacePart::Offline,
+                real_folder(&profile.data_dir, CACHE_STORAGE),
+            );
+        }
+        BrowserFamily::WebKit => push(SpacePart::Cache, real_folder(home, SAFARI_CACHE)),
+        BrowserFamily::Gecko => {
+            // `firefox_cache_dirs`' rule: `cache2` in a profile folder
+            // that sits directly in one of the two roots.
+            let roots: Vec<PathBuf> = FIREFOX_PROFILES_ROOTS
+                .iter()
+                .map(|root| home.join(root))
+                .collect();
+            for dir in std::iter::once(&profile.data_dir).chain(&profile.cache_dir) {
+                if dir.parent().is_some_and(|p| roots.iter().any(|r| r == p)) && is_dir_safe(dir) {
+                    push(SpacePart::Cache, real_folder(dir, FIREFOX_CACHE));
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Every cache folder of every installed browser and profile under `home`.
 pub(super) fn cache_folders(ctx: &ScanContext<'_>, home: &Path) -> Vec<ProfileFolder> {
     let browsers = discover(home);
@@ -170,16 +254,11 @@ pub(super) fn cache_folders(ctx: &ScanContext<'_>, home: &Path) -> Vec<ProfileFo
         .filter(|b| b.family == BrowserFamily::Chromium)
     {
         for profile in &browser.profiles {
-            let cached = profile.cache_dir.iter().flat_map(|dir| {
-                CHROMIUM_CACHE_FOLDERS
-                    .iter()
-                    .map(move |folder| real_folder(dir, folder))
-            });
-            let data = CHROMIUM_DATA_FOLDERS
-                .iter()
-                .map(|folder| real_folder(&profile.data_dir, folder));
-            for path in cached.chain(data) {
-                push(path, browser.kind, &profile.id, &profile.name);
+            for folder in profile_space_folders(home, browser.kind, profile)
+                .into_iter()
+                .filter(|f| f.part != SpacePart::Offline)
+            {
+                push(Some(folder.path), browser.kind, &profile.id, &profile.name);
             }
         }
     }

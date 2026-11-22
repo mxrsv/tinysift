@@ -376,3 +376,74 @@ fn firefox_cache_dirs_resolves_profiles_glob() {
     assert!(found[0].ends_with("abcd1234.default/cache2"));
     cleanup(root.parent().unwrap());
 }
+
+/// The Browsers page measures a profile by `profile_space_folders`, so it
+/// must list exactly what the two categories offer for that profile, each
+/// folder in the part the page shows it under.
+#[test]
+fn profile_space_folders_are_what_the_categories_offer() {
+    let home = fixture_home("space");
+    let m = MockChecker::none();
+    let ctx = ScanContext::new(None, &m);
+    let mut offered = BrowserCaches::new().discover_in(&ctx, &home);
+    offered.extend(BrowserOfflineData.discover_in(&ctx, &home));
+    let mut offered: Vec<PathBuf> = offered.into_iter().map(|i| i.path).collect();
+    offered.sort();
+    let mut listed = Vec::new();
+    for browser in discover(&home) {
+        for profile in &browser.profiles {
+            listed.extend(profile_space_folders(&home, browser.kind, profile));
+        }
+    }
+    let mut paths: Vec<PathBuf> = listed.iter().map(|f| f.path.clone()).collect();
+    paths.sort();
+    assert_eq!(paths, offered);
+
+    let part = |rel: &str| {
+        listed
+            .iter()
+            .find(|f| f.path == home.join(rel))
+            .map(|f| f.part)
+    };
+    assert_eq!(
+        part(&format!("{CHROME_CACHES}/Default/Cache")),
+        Some(SpacePart::Cache)
+    );
+    assert_eq!(
+        part(&format!("{CHROME_CACHES}/Default/Code Cache")),
+        Some(SpacePart::CodeCache)
+    );
+    assert_eq!(
+        part(&format!("{CHROME}/Default/Code Cache")),
+        Some(SpacePart::CodeCache)
+    );
+    assert_eq!(
+        part(&format!("{CHROME_CACHES}/Default/Storage")),
+        Some(SpacePart::Other)
+    );
+    assert_eq!(
+        part(&format!("{CHROME}/Default/GPUCache")),
+        Some(SpacePart::Other)
+    );
+    assert_eq!(
+        part(&format!("{CHROME}/Default/Service Worker/CacheStorage")),
+        Some(SpacePart::Offline)
+    );
+    assert_eq!(
+        part(&format!("Library/Caches/Firefox/{FIREFOX_PROFILE}/cache2")),
+        Some(SpacePart::Cache)
+    );
+    assert_eq!(part(SAFARI_CACHE), Some(SpacePart::Cache));
+
+    // A running browser is still listed: the page shows what it holds.
+    let running = MockChecker::with_running(["Google Chrome"]);
+    let ctx = ScanContext::new(None, &running);
+    assert!(BrowserCaches::new()
+        .discover_in(&ctx, &home)
+        .iter()
+        .all(|i| !i.path.starts_with(home.join(CHROME_CACHES))));
+    assert!(listed
+        .iter()
+        .any(|f| f.path.starts_with(home.join(CHROME_CACHES))));
+    cleanup(&home);
+}

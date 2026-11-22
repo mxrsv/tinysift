@@ -119,6 +119,18 @@ along. Those overlapping selections are retained and explained in the final repo
   sites keep for offline use. Sites download them again, but a page or file saved for offline reading goes with
   them, so it only moves to the Trash.
 
+## Browser privacy in the desktop app
+
+The desktop app's Browsers page also cleans each Chrome, Arc, Brave, Edge, Vivaldi, Opera and Firefox profile's
+Privacy: cookies unused for 90 days whose site is not in the profile's history (trackers) or was not visited in
+90 days, and history entries older than 90 days, with their icons, top sites and shortcuts. Cookies of a site you
+visited in the last 90 days stay, so you stay signed in there. It runs only while the browser is quit;
+TinySift never quits it for you. The change is on this Mac only: a browser's sync account keeps its own copy.
+Safari history is never edited. Before anything changes, a backup of the browser's files goes to the Trash;
+Undo puts them back until the profile is scanned again, as long as the browser has not changed them since, and
+the backup stays in the Trash after that. The
+[internals](../internals/clean.md#browsers) list what Privacy leaves in place. `sift clean` has no Privacy step.
+
 ## Scanning in the desktop app
 
 The desktop app can scan some categories without the rest. A scan replaces the results of the
