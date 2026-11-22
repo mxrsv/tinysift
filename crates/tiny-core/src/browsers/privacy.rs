@@ -31,13 +31,40 @@
 
 mod classify;
 mod copy;
+mod edit;
+mod files;
+mod running;
+mod schema;
+mod sha256;
 mod site;
 mod stores;
+mod undo;
+mod undo_store;
+mod write;
+mod write_scan;
+mod write_types;
 
 #[cfg(test)]
 mod tests;
 #[cfg(test)]
+mod tests_refuse;
+#[cfg(test)]
 mod tests_store;
+#[cfg(test)]
+mod tests_undo;
+#[cfg(test)]
+mod tests_write;
+#[cfg(test)]
+mod tests_write_fixture;
+
+pub use running::{BrowserProcesses, LiveBundles, RunningBundles, RunningCheck};
+pub use undo::{scan_profile_recorded, undo_privacy, PrivacyUndoError, PrivacyUndoReport};
+pub use undo_store::{UndoStore, UndoStoreError};
+pub use write::remove_privacy;
+pub use write_types::{
+    PrivacyConsent, PrivacyEnv, PrivacyWriteError, PrivacyWriteReport, SkipReason, SkippedCookie,
+    SkippedHistory,
+};
 
 use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
