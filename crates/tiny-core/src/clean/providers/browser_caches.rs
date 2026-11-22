@@ -120,6 +120,7 @@ pub(super) fn offer(
         }
         let evidence = Evidence::BrowserProfile {
             browser: folder.kind.display_name().to_string(),
+            browser_kind: folder.kind,
             profile_id: folder.profile_id,
             profile_name: folder.profile_name,
         };

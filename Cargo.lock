@@ -1119,6 +1119,7 @@ dependencies = [
 name = "tiny-ffi"
 version = "0.1.0"
 dependencies = [
+ "rusqlite",
  "thiserror 2.0.21",
  "tiny-core",
  "uniffi",

@@ -24,3 +24,8 @@ test-hooks = []
 tiny-core = { path = "../tiny-core" }
 uniffi = "0.32"
 thiserror = "2"
+
+[dev-dependencies]
+# Made-up cookie and history databases for the Browsers scan tests; the
+# same version and features core links, so nothing new is compiled.
+rusqlite = { version = "0.43", default-features = false, features = ["bundled"] }

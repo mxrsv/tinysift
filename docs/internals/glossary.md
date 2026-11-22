@@ -155,6 +155,13 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 - **Unpacked copy** (`Extracted`) — The folder or file beside a `.zip` that holds every file it
   lists at the same size; it makes the archive a Copies row.
 
+## Browsers
+
+- **Browsers scan generation** (`FfiBrowsersReport.generation`) — The number of the last
+  `browsers_scan`, under which the session keeps each profile's privacy removal lists. A privacy
+  write passes it back as consent; a newer scan makes it stale. Rules:
+  [Browsers](clean.md#browsers). Not: a Clean scan or preview ID.
+
 ## Processes
 
 - **Identity** — PID plus start time, also name and executable when known; a mismatch returns

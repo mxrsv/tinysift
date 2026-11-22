@@ -237,6 +237,7 @@ fn every_profile_of_every_browser_is_covered_and_user_state_never_offered() {
         work.evidence,
         vec![Evidence::BrowserProfile {
             browser: "Google Chrome".into(),
+            browser_kind: BrowserKind::Chrome,
             profile_id: "Profile 1".into(),
             profile_name: "Work".into(),
         }]

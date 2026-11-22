@@ -653,6 +653,23 @@ elsewhere, `Frees nothing: another copy on this Mac uses the same space`; if it 
 sort by what they free, or share. Tests use fixture libraries, `clonefile` pairs and an injected probe
 (`ElsewhereRoots`, `AppProbe`).
 
+## Browsers
+
+[`tiny-ffi/src/browsers.rs`](../../crates/tiny-ffi/src/browsers.rs) is the read side of the app's Browsers page, built on
+[`tiny-core/src/browsers.rs`](../../crates/tiny-core/src/browsers.rs). `browsers_scan(token, progress)` takes the Browsers
+scan slot and returns `FfiBrowsersReport`: a `generation` and each installed browser (`kind`, `name`, `bundle_id`,
+`running` from Clean's `pgrep` check, `None` when it cannot answer) with its profiles (`id`, `name`, `user_name`,
+`avatar`, `highlight_color`), each profile's privacy counts (`FfiProfilePrivacy`) and its extensions. A refused or
+broken file never fails the call: it is an `FfiBrowserIssue` on the browser, the profile's privacy or its extensions,
+and `PermissionDenied` is the app's cue for its Full Disk Access guide. Cache sizes are not in the report: they are the
+`browser-caches` and `browser-offline-data` items of `clean_discover`, whose `FfiEvidence::BrowserProfile` carries the
+same `kind` and `profile_id`.
+
+**Privacy consent.** The cookie keys and history rows a privacy write would delete never cross to Swift. Each scan keeps
+every profile's full `ProfilePrivacy` in the session under its `generation`, replacing the previous scan; a cancelled
+scan keeps the old one. A write names the generation, a kind with a profile id and the parts, and takes exactly the
+stored lists (`BrowsersState::consented`); a replaced generation is `PreviewInvalid`.
+
 ## Desktop persistent protection
 
 Always keep is a policy owned by Rust; only the desktop app edits it. A
