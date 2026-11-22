@@ -366,20 +366,14 @@ fn each_folder_is_gated_on_its_own_browser() {
     assert!(every.iter().any(|a| a == "firefox"), "{every:?}");
 }
 
-/// R3: one byte is offered by one category only. `user-caches` lists the
-/// children of `~/Library/Caches`; an installed browser's vendor folder is
-/// left to `browser-caches`.
-#[test]
-fn no_path_is_offered_by_two_categories() {
-    let home = fixture_home("overlap");
-    let m = MockChecker::none();
-    let ctx = ScanContext::new(None, &m);
+/// What `user-caches` and `browser-caches` offer under `home`, after
+/// checking that no path is offered by two of the three categories.
+fn offered_once(home: &Path, ctx: &ScanContext<'_>) -> (Vec<String>, Vec<CleanItem>) {
     let user = UserCaches::with_runner(Arc::new(MockRunner::new()))
-        .list_home_caches(&ctx, &home)
+        .list_home_caches(ctx, home)
         .unwrap();
-    let browser = BrowserCaches::new().discover_in(&ctx, &home);
-    let offline = BrowserOfflineData.discover_in(&ctx, &home);
-    assert_eq!(relative(&home, &user), ["Library/Caches/Homebrew"]);
+    let browser = BrowserCaches::new().discover_in(ctx, home);
+    let offline = BrowserOfflineData.discover_in(ctx, home);
     let categories = [&user, &browser, &offline];
     for (i, a) in categories.iter().enumerate() {
         for b in categories.iter().skip(i + 1) {
@@ -397,19 +391,128 @@ fn no_path_is_offered_by_two_categories() {
             }
         }
     }
+    (relative(home, &user), browser)
+}
+
+fn offers_under(items: &[CleanItem], home: &Path, rel: &str) -> bool {
+    items.iter().any(|i| i.path.starts_with(home.join(rel)))
+}
+
+/// R3: one byte is offered by one category only. `user-caches` lists the
+/// children of `~/Library/Caches`, and inside a vendor folder only what
+/// `browser-caches` does not offer.
+#[test]
+fn no_path_is_offered_by_two_categories() {
+    let home = fixture_home("overlap");
+    let m = MockChecker::none();
+    let ctx = ScanContext::new(None, &m);
+    let (user, _) = offered_once(&home, &ctx);
+    assert_eq!(user, ["Library/Caches/Homebrew"]);
+
     // Without Chrome installed, its vendor folder is an ordinary cache again.
     fs::remove_dir_all(home.join("Library/Application Support/Google")).unwrap();
-    let user = UserCaches::with_runner(Arc::new(MockRunner::new()))
-        .list_home_caches(&ctx, &home)
-        .unwrap();
+    let (user, browser) = offered_once(&home, &ctx);
+    assert_eq!(user, ["Library/Caches/Google", "Library/Caches/Homebrew"]);
+    assert!(!offers_under(&browser, &home, "Library/Caches/Google"));
+
+    // Without `profiles.ini`, Firefox is not found: its leftover cache is
+    // `user-caches`' whole, and `browser-caches` offers none of it.
+    fs::remove_file(home.join(FIREFOX).join("profiles.ini")).unwrap();
+    let (user, browser) = offered_once(&home, &ctx);
     assert_eq!(
-        relative(&home, &user),
-        ["Library/Caches/Google", "Library/Caches/Homebrew"]
+        user,
+        [
+            "Library/Caches/Firefox",
+            "Library/Caches/Google",
+            "Library/Caches/Homebrew"
+        ]
     );
-    let browser = BrowserCaches::new().discover_in(&ctx, &home);
     assert!(browser
         .iter()
-        .all(|i| !i.path.starts_with(home.join("Library/Caches/Google"))));
+        .all(|i| !i.path.display().to_string().contains("/Firefox/")));
+    cleanup(&home);
+}
+
+/// A vendor folder's caches that no listed profile holds (a deleted
+/// profile's, another app's, a stray file) are `user-caches`', gated on
+/// the browser; an IDE's Local History beside them is offered by nobody.
+#[test]
+fn a_vendor_folders_other_caches_stay_user_caches() {
+    let home = fixture_home("vendor-rest");
+    let google = home.join("Library/Caches/Google");
+    file(&google.join("Chrome/Profile 3/Cache/Cache_Data/f_000001"));
+    file(&google.join("Chrome/Default/Stray/x"));
+    file(&google.join("Other/x"));
+    file(&google.join("AndroidStudio2025.1/LocalHistory/changes.storageData"));
+    file(&google.join("AndroidStudio2025.1/caches/x"));
+    let startup = format!("Library/Caches/Firefox/{FIREFOX_PROFILE}/startupCache");
+    file(&home.join(&startup).join("x"));
+    let m = MockChecker::none();
+    let ctx = ScanContext::new(None, &m);
+    let (user, browser) = offered_once(&home, &ctx);
+    assert_eq!(
+        user,
+        [
+            startup.clone(),
+            "Library/Caches/Google/Chrome/Default/Stray".to_string(),
+            "Library/Caches/Google/Chrome/Profile 3".to_string(),
+            "Library/Caches/Google/Other".to_string(),
+            "Library/Caches/Homebrew".to_string(),
+        ]
+    );
+    assert!(!offers_under(
+        &browser,
+        &home,
+        &format!("{CHROME_CACHES}/Profile 3")
+    ));
+    assert!(offers_under(
+        &browser,
+        &home,
+        &format!("{CHROME_CACHES}/Default/Cache")
+    ));
+
+    // A running browser keeps what is left of its folders too.
+    let running = MockChecker::with_running(["Google Chrome", "firefox"]);
+    let ctx = ScanContext::new(None, &running);
+    let (user, _) = offered_once(&home, &ctx);
+    assert_eq!(user, ["Library/Caches/Homebrew"]);
+    cleanup(&home);
+}
+
+/// A browser whose profile list cannot be read offers nothing, and its
+/// vendor folder stays `user-caches`' whole, unless an IDE's Local History
+/// is in it.
+#[test]
+fn a_browser_with_a_malformed_profile_list_leaves_its_vendor_folder_to_user_caches() {
+    let home = fixture_home("malformed");
+    fs::write(home.join(CHROME).join("Local State"), b"{not json").unwrap();
+    fs::write(home.join(FIREFOX).join("profiles.ini"), b"no ini here").unwrap();
+    assert!(discover(&home)
+        .iter()
+        .filter(|b| matches!(b.kind, BrowserKind::Chrome | BrowserKind::Firefox))
+        .all(|b| b.issue.is_some()));
+    let m = MockChecker::none();
+    let ctx = ScanContext::new(None, &m);
+    let (user, browser) = offered_once(&home, &ctx);
+    assert_eq!(
+        user,
+        [
+            "Library/Caches/Firefox",
+            "Library/Caches/Google",
+            "Library/Caches/Homebrew"
+        ]
+    );
+    assert!(!offers_under(&browser, &home, "Library/Caches/Google"));
+    assert!(!offers_under(&browser, &home, CHROME));
+    assert!(browser
+        .iter()
+        .all(|i| !i.path.display().to_string().contains("/Firefox/")));
+    assert!(offers_under(&browser, &home, BRAVE_CACHES));
+
+    let history = home.join("Library/Caches/Google/AndroidStudio2025.1/LocalHistory");
+    file(&history.join("changes.storageData"));
+    let (user, _) = offered_once(&home, &ctx);
+    assert_eq!(user, ["Library/Caches/Firefox", "Library/Caches/Homebrew"]);
     cleanup(&home);
 }
 

@@ -113,8 +113,11 @@ along. Those overlapping selections are retained and explained in the final repo
   Chromium profile's `Cache`, `Code Cache` and `Storage` under `~/Library/Caches`, and its `Cache`, `Code Cache`
   and `GPUCache`; Safari's `com.apple.Safari` cache; Firefox's `cache2`. Never cookies, logins, preferences,
   history, extensions, site storage or a service worker's scripts and registrations (`Service Worker/ScriptCache`,
-  `Service Worker/Database`), which no category offers. `user-caches` then leaves out an installed browser's
-  vendor folder in `~/Library/Caches` (`Google`, `BraveSoftware`, ...), so nothing is counted twice
+  `Service Worker/Database`), which no category offers. A browser counts only when its profile list (`Local State`,
+  Firefox's `profiles.ini`) can be read; otherwise `browser-caches` offers none of its folders. `user-caches`
+  offers the rest of `~/Library/Caches` around what `browser-caches` offers: a vendor folder (`Google`,
+  `BraveSoftware`, ...) whole when no folder in it is offered, else its other parts, such as a deleted profile's
+  folder, so nothing is counted twice
   ([`browser_caches.rs`](../../crates/tiny-core/src/clean/providers/browser_caches.rs)).
 - `browser-offline-data` (Offline site data) lists each Chromium profile's `Service Worker/CacheStorage`: copies
   sites keep for offline use. Sites download them again, but a page or file saved for offline reading goes with

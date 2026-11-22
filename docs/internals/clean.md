@@ -327,10 +327,14 @@ one is not offered whole (`npm` offers its other children). A category that name
 `Evidence::BrowserProfile`, and gate each on its own browser. Their name lists hold cache folders only; a test pins
 that no cookie, login, preference, history, extension or site-storage file lies at or under an offered path.
 `Service Worker/CacheStorage` is its own category, Review and `TrashOnly`, because it can hold what a user saved
-for offline reading; the app leaves it out of its ticked-ahead set. `user-caches` skips the `~/Library/Caches` child
-that holds an installed browser's caches (`covered_caches_children`), so no path is offered by both; with the browser
-gone, its vendor folder is an ordinary cache again
-([`browser_caches.rs`](../../crates/tiny-core/src/clean/providers/browser_caches.rs)).
+for offline reading; the app leaves it out of its ticked-ahead set. A Chromium browser or Firefox whose profile list
+`discover` cannot read (a `DiscoveryIssue`, or no `profiles.ini`) gets no folders. `user-caches` offers
+`~/Library/Caches` around `claimed_folders`, the same list `browser-caches` offers: a child with no claimed folder
+in it is offered whole, one with claimed folders inside is listed child by child (`unclaimed`), so a deleted
+profile's folder or another app's cache in a vendor folder is still offered and no path is offered by both. Those
+parts keep the vendor folder's gate plus their browser's process names, and the IDE Local History check applies to
+each part ([`browser_caches.rs`](../../crates/tiny-core/src/clean/providers/browser_caches.rs),
+[`user_caches.rs`](../../crates/tiny-core/src/clean/providers/user_caches.rs)).
 
 **Re-check before a move (SF2).** `validate` skips an item whose owning app runs (`AppRunning`, cause
 `InUse`) and one whose fingerprint differs (`Changed`, cause `ChangedSinceScan`): a file's size or

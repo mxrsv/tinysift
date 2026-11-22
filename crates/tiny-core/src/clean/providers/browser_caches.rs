@@ -84,25 +84,14 @@ pub(super) fn gate_apps(path: &Path) -> Vec<String> {
     names.into_iter().map(String::from).collect()
 }
 
-/// The `~/Library/Caches` children that hold an installed browser's cache
-/// root (`Google`, `BraveSoftware`, `Firefox`, ...). `browser-caches` lists
-/// what is inside them, so `user-caches` never offers them whole.
-pub(super) fn covered_caches_children(home: &Path) -> Vec<PathBuf> {
-    let caches = home.join(CACHES);
-    let mut out: Vec<PathBuf> = Vec::new();
-    for browser in discover(home) {
-        let root = home.join(cache_root(browser.kind));
-        let Ok(rest) = root.strip_prefix(&caches) else {
-            continue;
-        };
-        if let Some(first) = rest.components().next() {
-            let child = caches.join(first);
-            if !out.contains(&child) {
-                out.push(child);
-            }
-        }
-    }
-    out
+/// Every folder `browser-caches` offers under `home`, a running browser's
+/// too. `user-caches` offers what is left of `~/Library/Caches` around
+/// them, so one byte is never offered by both and none is left to neither.
+pub(super) fn claimed_folders(ctx: &ScanContext<'_>, home: &Path) -> Vec<PathBuf> {
+    cache_folders(ctx, home)
+        .into_iter()
+        .map(|folder| folder.path)
+        .collect()
 }
 
 /// Items for `folders`, leaving out the folders of a running browser.
@@ -232,8 +221,15 @@ pub fn profile_space_folders(
 }
 
 /// Every cache folder of every installed browser and profile under `home`.
+/// A Chromium browser or Firefox counts only when [`discover`] read its
+/// profile list: one it cannot read (`Local State` or `profiles.ini`
+/// missing, unreadable or malformed) offers nothing, and its folders stay
+/// `user-caches`' as ordinary caches.
 pub(super) fn cache_folders(ctx: &ScanContext<'_>, home: &Path) -> Vec<ProfileFolder> {
-    let browsers = discover(home);
+    let browsers: Vec<Browser> = discover(home)
+        .into_iter()
+        .filter(|b| b.issue.is_none())
+        .collect();
     let mut seen: HashSet<PathBuf> = HashSet::new();
     let mut out = Vec::new();
     let mut push = |path: Option<PathBuf>, kind, id: &str, name: &str| {
@@ -267,8 +263,10 @@ pub(super) fn cache_folders(ctx: &ScanContext<'_>, home: &Path) -> Vec<ProfileFo
         "",
         safari.display_name(),
     );
+    let firefox = browsers.iter().any(|b| b.kind == BrowserKind::Firefox);
     for cache2 in FIREFOX_PROFILES_ROOTS
         .iter()
+        .filter(|_| firefox)
         .flat_map(|root| firefox_cache_dirs(ctx, &home.join(root)))
     {
         let (id, name) = firefox_profile(&browsers, &cache2);
