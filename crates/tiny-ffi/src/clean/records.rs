@@ -7,6 +7,7 @@ use tiny_core::clean::types::{ComesBack, Evidence, RiskLevel};
 use tiny_core::options::CleanOptions;
 
 use super::FfiProtectionGuard;
+use crate::browsers::FfiBrowserKind;
 
 #[derive(Debug, Clone, PartialEq, uniffi::Record)]
 pub struct FfiCleanOptions {
@@ -195,6 +196,18 @@ pub enum FfiEvidence {
     TrashRest {
         count: u64,
         bytes: u64,
+    },
+    /// The browser and profile a browser category's folder belongs to:
+    /// the browser's name and kind, the profile's key (empty for Safari)
+    /// and its name as the browser shows it. `kind` plus `profile_id`
+    /// match an `FfiBrowser.kind` and `FfiBrowserProfile.id` of
+    /// `browsers_scan`, so the Browsers page files the item under its
+    /// profile.
+    BrowserProfile {
+        browser: String,
+        kind: FfiBrowserKind,
+        profile_id: String,
+        profile_name: String,
     },
 }
 
@@ -505,6 +518,17 @@ impl From<Evidence> for FfiEvidence {
                 added_at,
             },
             Evidence::TrashRest { count, bytes } => Self::TrashRest { count, bytes },
+            Evidence::BrowserProfile {
+                browser,
+                browser_kind,
+                profile_id,
+                profile_name,
+            } => Self::BrowserProfile {
+                browser,
+                kind: browser_kind.into(),
+                profile_id,
+                profile_name,
+            },
         }
     }
 }

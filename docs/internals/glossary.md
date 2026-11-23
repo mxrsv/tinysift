@@ -38,7 +38,8 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   ([`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs)). Not: `du`, Storage's
   Space Lens total, or the logical file length.
 - **Evidence** (`Evidence`) — A checkable fact shown beside an item: modified or last-opened
-  time, manifest and last commit, owning app, `Sensitive`. Empty means the category rule alone
+  time, manifest and last commit, owning app, `Sensitive`, a browser folder's browser and profile
+  (`BrowserProfile`). Empty means the category rule alone
   selected it. Not: reason (the category's `inclusion_reason`).
 - **Group** (`CategoryGroup`) — All items one provider discovered, with their total size, as the
   CLI picker lists them. Not: family, trust section.
@@ -135,6 +136,36 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 - **Checked execute** — The app's removal, revalidating each path right before it changes
   ([`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)). Not: execute
   (the CLI's provider path).
+
+## Large Files
+
+- **Large Files group** (`Group`) — One of the five lists of the app's Large Files page, by how
+  sure a removal is: `copies`, `installers`, `only_copy`, `other_large`, `elsewhere` (group 5,
+  listed and never movable). Not: Clean's `CategoryGroup` or section. Rules:
+  [Large Files](clean.md#large-files).
+- **Scan floor** (`SCAN_FLOOR_BYTES`) — 100 MB: nothing smaller is listed by any group.
+- **Size filter** (`SIZE_FILTER_BYTES`, `groups_3_4_min_bytes`) — The minimum, 100 MB, 500 MB
+  (the default) or 1 GB, that groups 3 and 4 list from; no other group follows it.
+- **Lens** (`Lens`, `FfiLargeFile.lens`) — What a row is for the page's chips: `video`,
+  `installer` (an installer or a disk image), `archive`, `virtual_machine`, `audio`, `other`.
+  It comes from the file or its owner, never from the group. Not: kind (group 5's own words).
+- **Known location** (`KNOWN_LOCATIONS`) — A place the walk skips (`~/Library`, a dot-folder)
+  that group 5 still reads to measure an item and name the app that owns it: Docker's disk,
+  Colima, device backups, `CloudStorage`.
+- **Unpacked copy** (`Extracted`) — The folder or file beside a `.zip` that holds every file it
+  lists at the same size; it makes the archive a Copies row.
+
+## Browsers
+
+- **Browsers scan generation** (`FfiBrowsersReport.generation`) — The number of the last
+  `browsers_scan`, under which the session keeps each profile's privacy removal lists.
+  `browsers_clean_privacy` passes it back as consent; a newer scan makes it stale. Rules:
+  [Browsers](clean.md#browsers). Not: a Clean scan or preview ID, nor the Undo store's per-profile
+  generation, which every scan raises to end an earlier clean's Undo.
+- **Privacy clean** (`remove_privacy`, `browsers_clean_privacy`) — Removing a profile's old and
+  tracker cookies and its history older than 90 days, after a backup of every touched file goes
+  to the Trash. Undo (`undo_id`) lasts until the profile's next scan. Not: Clean's
+  `browser-caches` items, which are folders moved to the Trash.
 
 ## Processes
 

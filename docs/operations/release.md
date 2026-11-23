@@ -83,6 +83,15 @@ from the app.
 
 4. Notes follow [Release notes](#release-notes) with the archive's hash on the `SHA-256:` line, and
    say once that `sift` and `tinysift` are the same tool.
+5. Bump `Casks/tinysift-cli.rb` in [mxrsv/homebrew-tap](https://github.com/mxrsv/homebrew-tap): set
+   `version` and `sha256` to the uploaded archive, then commit and push. It is a cask, not a
+   formula: Homebrew treats a formula without a bottle as a source build and demands current
+   Command Line Tools from every user. The cask links `tinysift`, and links `sift` only when no
+   other `sift` is on the Mac. Check with `brew install --cask mxrsv/tap/tinysift-cli`.
+
+Users get the new version with `brew upgrade --cask mxrsv/tap/tinysift-cli` once step 5 is pushed;
+the CLI does not update itself. `brew livecheck --cask mxrsv/tap/tinysift-cli` reports when the tap
+is behind the newest `cli-v` tag.
 
 ## Release notes
 

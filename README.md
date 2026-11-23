@@ -10,7 +10,8 @@ A Mac app that shows which app or AI agent session is slowing your Mac and what 
 then cleans only what you pick. This repository is its open-source engine, where the rules that
 touch your files live, and the `sift` command-line tool.
 
-[![Latest release](https://img.shields.io/github/v/release/mxrsv/tinysift?label=release)](https://github.com/mxrsv/tinysift/releases)
+[![Latest app release](https://img.shields.io/github/v/release/mxrsv/tinysift?label=app&filter=app-v*)](https://github.com/mxrsv/tinysift/releases/latest)
+[![Latest CLI release](https://img.shields.io/github/v/release/mxrsv/tinysift?label=cli&filter=cli-v*)](https://github.com/mxrsv/tinysift/releases?q=cli-v)
 [![CI](https://img.shields.io/github/actions/workflow/status/mxrsv/tinysift/ci.yml?branch=main&label=CI)](https://github.com/mxrsv/tinysift/actions/workflows/ci.yml)
 [![License: GPL-3.0-only](https://img.shields.io/badge/license-GPL--3.0--only-blue)](LICENSE)
 [![macOS 14+ on Apple silicon](https://img.shields.io/badge/macOS_14+-Apple_silicon-black?logo=apple)](https://tinysift.app)
@@ -85,18 +86,19 @@ Found a way around one of these rules? Report it privately: see the [security po
 
 ## Command line
 
-The same engine ships as `sift`, a command-line tool for terminals and scripts. Build it from this
-checkout with Rust 1.91 or newer, then preview a cleanup without changing anything:
+The same engine ships as `sift`, a free command-line tool for terminals and scripts. Install it
+without the app, then preview a cleanup without changing anything:
 
 ```bash
-cargo install --path crates/tiny
-ln -s tinysift ~/.cargo/bin/sift
+brew install --cask mxrsv/tap/tinysift-cli
 sift clean --dry-run
 ```
 
-The build installs the executable as `tinysift`; the second line adds the short name `sift` used
-in every guide. If another `sift` is already on your Mac, skip that line and type `tinysift` instead:
-it is the same tool.
+`sift` and `tinysift` are the same tool: if another `sift` is already on your Mac, Homebrew leaves
+it alone and you type `tinysift` instead. Update with `brew upgrade --cask mxrsv/tap/tinysift-cli`.
+The archive on the [Releases page](https://github.com/mxrsv/tinysift/releases) (tags `cli-v…`) is
+the same signed, notarized build; [Getting started](docs/user/getting-started.md#install) also
+covers building from source.
 
 The dry run lists each category with its size and safety level, then the plan, path by path (up
 to 20 per category):

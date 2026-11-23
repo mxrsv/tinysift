@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use super::browser_caches::{browser_of, claimed_folders};
 use super::never_cache::holds_user_data;
 use super::purged_caches::{real_pip, PIP_FOLDER};
 use super::{execute_per_item, run_tool, CleanProvider};
@@ -13,6 +14,7 @@ use crate::runner::CommandRunner;
 
 const ID: &str = "user-caches";
 const LABEL: &str = "User caches";
+const CACHES: &str = "Library/Caches";
 
 /// Absolute paths: a Finder-launched app has a minimal `PATH`.
 const MDFIND: &str = "/usr/bin/mdfind";
@@ -28,7 +30,9 @@ const APPLE_FOLDERS: &[&str] = &[
     "GeoServices",
     "PassKit",
 ];
-/// Folders named after a vendor, not a bundle id, and the app that owns them.
+/// Folders named after a vendor, not a bundle id, and the app that owns
+/// them. While `browser-caches` offers folders inside one, only the rest
+/// of it is offered here (`unclaimed`).
 const VENDOR_APPS: &[(&str, &str)] = &[
     ("Google", "Google Chrome"),
     ("BraveSoftware", "Brave Browser"),
@@ -211,21 +215,69 @@ impl UserCaches {
         }
     }
 
+    /// Process names to check for `path`, which lies in the cache folder
+    /// `name`: that folder's app, plus the browser's whose cache root holds
+    /// `path` (`Caches/Firefox` is `firefox`'s; case counts).
+    fn path_gate_apps(&self, home: Option<&Path>, name: &str, path: &Path) -> Vec<String> {
+        let mut apps = self.gate_apps(name);
+        if let Some(kind) = home.and_then(|h| browser_of(h, path)) {
+            for app in kind.app_names() {
+                if !apps.iter().any(|a| a == app) {
+                    apps.push((*app).to_string());
+                }
+            }
+        }
+        apps
+    }
+
+    /// Every offered child of `root`, with no browser folder left out.
+    #[cfg(test)]
     pub(super) fn list_caches(&self, ctx: &ScanContext<'_>, root: &Path) -> Result<Vec<CleanItem>> {
+        self.list_caches_except(ctx, None, root, &[])
+    }
+
+    /// The caches of `home` around the folders `browser-caches` offers
+    /// ([`claimed_folders`]): one byte is never offered by two categories,
+    /// and a vendor folder's other caches (a deleted profile's, another
+    /// app's) are still offered here.
+    pub(super) fn list_home_caches(
+        &self,
+        ctx: &ScanContext<'_>,
+        home: &Path,
+    ) -> Result<Vec<CleanItem>> {
+        let claimed = claimed_folders(ctx, home);
+        self.list_caches_except(ctx, Some(home), &home.join(CACHES), &claimed)
+    }
+
+    fn list_caches_except(
+        &self,
+        ctx: &ScanContext<'_>,
+        home: Option<&Path>,
+        root: &Path,
+        claimed: &[PathBuf],
+    ) -> Result<Vec<CleanItem>> {
         // pip's folder is `pip-cache`'s when a real pip3 can empty it, so
         // one path never belongs to a tool and to a plain move at once.
         let pip_owned = real_pip(self.runner.as_ref()).is_some();
         let owned = |name: &str| pip_owned && name == PIP_FOLDER;
+        // Each offered path with the name of the `root` child it lies in,
+        // which names its app.
         let paths: Vec<(PathBuf, String)> = list_children(root, ctx)
             .into_iter()
             .filter_map(|path| {
                 let name = path.file_name()?.to_str()?.to_string();
-                let offered = !is_apple_cache(&name)
-                    && !owned(&name)
-                    && !holds_ide_history(&path)
-                    && holds_user_data(&path).is_none()
-                    && !holds_tool_state(&path, &name);
-                offered.then_some((path, name))
+                let kept = is_apple_cache(&name) || owned(&name) || holds_tool_state(&path, &name);
+                (!kept).then_some((path, name))
+            })
+            .flat_map(|(path, name)| {
+                unclaimed(ctx, &path, claimed)
+                    .into_iter()
+                    .map(move |part| (part, name.clone()))
+            })
+            .filter(|(path, _)| {
+                path.file_name().is_some_and(|n| n != LOCAL_HISTORY)
+                    && !holds_ide_history(path)
+                    && holds_user_data(path).is_none()
             })
             .collect();
         let ids: Vec<&str> = paths
@@ -236,7 +288,11 @@ impl UserCaches {
         self.resolve(&ids);
         let mut out = Vec::new();
         for (path, name) in paths {
-            if self.gate_apps(&name).iter().any(|a| ctx.known_running(a)) {
+            if self
+                .path_gate_apps(home, &name, &path)
+                .iter()
+                .any(|a| ctx.known_running(a))
+            {
                 continue;
             }
             let evidence = match self.owner(&name) {
@@ -276,8 +332,15 @@ impl CleanProvider for UserCaches {
         true
     }
     fn item_apps(&self, path: &Path) -> Vec<String> {
-        match path.file_name().and_then(|s| s.to_str()) {
-            Some(name) => self.gate_apps(name),
+        let home = home();
+        // A part of a vendor folder is gated by the vendor folder's name.
+        let top = home
+            .as_deref()
+            .and_then(|h| path.strip_prefix(h.join(CACHES)).ok())
+            .and_then(|rest| rest.components().next())
+            .map(|first| first.as_os_str());
+        match top.or(path.file_name()).and_then(|s| s.to_str()) {
+            Some(name) => self.path_gate_apps(home.as_deref(), name, path),
             None => Vec::new(),
         }
     }
@@ -286,7 +349,7 @@ impl CleanProvider for UserCaches {
             Some(h) => h,
             None => return Ok(Vec::new()),
         };
-        self.list_caches(ctx, &h.join("Library/Caches"))
+        self.list_home_caches(ctx, &h)
     }
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
         execute_per_item(items, action, ID)
@@ -303,7 +366,8 @@ fn home() -> Option<PathBuf> {
 /// any other (`Google/AndroidStudio*`) is found by the history folder itself.
 /// A folder that cannot be listed could hold one, so it is not offered.
 // ponytail: the vendor's other caches (`Google/Chrome`) go unoffered with
-// it; list such a folder's children one by one if that space is missed.
+// it unless `browser-caches` claims folders inside it (`unclaimed` then
+// lists it child by child); list it so always if that space is missed.
 fn holds_ide_history(vendor: &Path) -> bool {
     vendor.file_name().is_some_and(|name| name == JETBRAINS)
         || is_dir_safe(&vendor.join(LOCAL_HISTORY))
@@ -313,6 +377,26 @@ fn holds_ide_history(vendor: &Path) -> bool {
                     system.map_or(true, |s| is_dir_safe(&s.path().join(LOCAL_HISTORY)))
                 })
             }))
+}
+
+/// `folder` when no `claimed` path is at, in or under it; nothing when it
+/// is or lies in one; otherwise its children by the same rule, so only
+/// what `browser-caches` does not offer is left. A folder that holds a
+/// claimed path but is no real folder (a symlink) gives nothing.
+fn unclaimed(ctx: &ScanContext<'_>, folder: &Path, claimed: &[PathBuf]) -> Vec<PathBuf> {
+    if claimed.iter().any(|c| folder.starts_with(c)) {
+        return Vec::new();
+    }
+    if !claimed.iter().any(|c| c.starts_with(folder)) {
+        return vec![folder.to_path_buf()];
+    }
+    if !is_dir_safe(folder) {
+        return Vec::new();
+    }
+    list_children(folder, ctx)
+        .iter()
+        .flat_map(|child| unclaimed(ctx, child, claimed))
+        .collect()
 }
 
 /// A tool's cache folder holding its state (`TOOL_STATE`) is never offered
