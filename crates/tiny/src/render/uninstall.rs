@@ -108,7 +108,7 @@ fn decide_action(opts: &UninstallOpts) -> Result<Action> {
     let default_idx = if opts.hard { 2 } else { 0 };
     let idx = Select::with_theme(&ColorfulTheme::default())
         .with_prompt("What to do?")
-        .items(&items)
+        .items(items)
         .default(default_idx)
         .interact()
         .context("action menu failed")?;
