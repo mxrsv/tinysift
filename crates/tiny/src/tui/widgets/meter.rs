@@ -6,13 +6,6 @@ const CELL: &str = "━";
 
 /// A bar `width` cells wide filled to `fraction` (0 to 1) in `role`. Anything
 /// above zero fills at least one cell, so a small figure is never drawn as none.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by Clean, Processes and System rows, plan tasks 05 and 07"
-    )
-)]
 pub fn meter(fraction: f64, width: usize, role: Role) -> StyledLine {
     let fraction = if fraction.is_finite() {
         fraction.clamp(0.0, 1.0)

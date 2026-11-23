@@ -14,13 +14,6 @@ const QUESTION_WIDTH: usize = MAX_BOX_WIDTH - 8;
 
 /// The colour of the `●` before the question.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "opened by Clean, Uninstall and Processes, plan tasks 05, 07 and 09"
-    )
-)]
 pub enum Tone {
     /// Orange: Quit.
     Warning,
@@ -56,13 +49,6 @@ pub struct ConfirmBox {
     act_focused: bool,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "opened by Clean, Uninstall and Processes, plan tasks 05, 07 and 09"
-    )
-)]
 impl ConfirmBox {
     /// A box with the safe button (`Cancel`) focused.
     pub fn new(

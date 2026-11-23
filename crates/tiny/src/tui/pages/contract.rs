@@ -217,13 +217,6 @@ impl<'a, M: Send + 'static> PageCtx<'a, M> {
     /// Runs `job` off the UI thread; its `Worker::send` messages arrive in
     /// [`Page::on_message`]. Keep the handle to cancel it. Spawning fails
     /// only when the OS refuses a thread; show that as the page's error.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "used by every page that reads, plan tasks 05 to 09"
-        )
-    )]
     pub fn spawn<F>(&mut self, job: F) -> std::io::Result<TaskHandle>
     where
         F: FnOnce(Worker<M>) + Send + 'static,
@@ -232,13 +225,6 @@ impl<'a, M: Send + 'static> PageCtx<'a, M> {
     }
 
     /// Visible list rows in the last frame, for PgUp/PgDn.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "passed to ListCursor by every page, plan tasks 05 to 09"
-        )
-    )]
     pub fn list_rows(&self) -> usize {
         self.env.list_rows
     }

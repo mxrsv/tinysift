@@ -12,13 +12,6 @@ mod scan;
 mod system;
 mod uninstall;
 
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_imports,
-        reason = "Detail and PageCtx are used by pages, plan tasks 05 to 09"
-    )
-)]
 pub use contract::{
     Detail, FrameRequest, KeyHint, KeyReply, Page, PageCtx, PageEnv, PageId, PageView, ViewCtx,
 };

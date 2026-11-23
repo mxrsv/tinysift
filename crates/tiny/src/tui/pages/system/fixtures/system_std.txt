@@ -1,0 +1,24 @@
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ MEMORY
+ In use                      ━━━━━━━━━━━━━━━━━━━      19.2 of 24 GB        80%
+
+ DISKS
+ Macintosh HD                ━━━━━━━━━━━━━━━━━━━     431.6 of 460.4 GB     94%
+
+
+
+
+
+
+
+
+
+
+
+ ── This Mac ──────────────────────────────────────────────────────────────────
+ Host Macbook-Pro.local
+ Uptime 5d 9h 17m
+ Chip Apple M4 Pro   cores 12
+────────────────────────────────────────────────────────────────────────────────
+ r read again · tab page · q quit

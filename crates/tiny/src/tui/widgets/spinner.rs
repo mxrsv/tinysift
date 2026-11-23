@@ -5,13 +5,6 @@
 const FRAMES: [char; 10] = ['⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', '⠋', '⠙'];
 
 /// The spinner glyph for a frame-loop tick.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by measuring and running lines, plan tasks 06, 07 and 09"
-    )
-)]
 pub fn spinner_glyph(tick: u64) -> char {
     FRAMES[(tick % FRAMES.len() as u64) as usize]
 }

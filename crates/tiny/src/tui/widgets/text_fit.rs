@@ -16,13 +16,6 @@ pub fn cut(text: &str, width: usize) -> String {
 
 /// At most `width` cells, keeping both ends: a third before the `…`, the rest
 /// after it, so a path keeps its root and its file name.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by path rows in Clean and Scan, plan tasks 06 and 07"
-    )
-)]
 pub fn middle_ellipsis(text: &str, width: usize) -> String {
     if text_width(text) <= width {
         return text.into();
@@ -42,13 +35,6 @@ pub fn wrap(text: &str, width: usize) -> Vec<String> {
 
 /// Wraps a path after a slash, never inside a name. Measured as the mock
 /// measures it: each slash counts one extra cell, so lines break a little early.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "used by the path detail of Clean and Scan, plan tasks 06 and 07"
-    )
-)]
 pub fn wrap_path(path: &str, width: usize) -> Vec<String> {
     let spaced = path.replace('/', "/ ");
     wrap(spaced.trim(), width)

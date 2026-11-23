@@ -1,0 +1,34 @@
+  Clean   Uninstall   Scan   Processes   System                                                             0.3 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      PID  CPU                     MEMORY  NAME                            │ Highlighted
+ ❯  99999  ━━━━━━━━━━━━ 1187.4%  112.4 GB  com.apple.Virtualization.Virtu… │
+        4  ━━━━━━━━━━━━  100.0%   64.0 GB  x                               │ com.apple.Virtualization.VirtualMachine
+    88412  ━━━━━━━━━━━━   99.9%    8.2 GB  rust-analyzer-proc-macro-srv    │ (macOS 27 beta 4 clean install)
+        1  ━━━━━━━━━━━━    0.0%       n/a  launchd                         │ PID 99999 · yours
+      612  ━━━━━━━━━━━━    0.0%      0 MB  node (codex) /Users/someone/De… │
+                                                                           │ Parent      UTM (4411)
+                                                                           │ Children    12
+                                                                           │ Memory      112.4 GB
+                                                                           │ Listens on  :5900 :2222 :8080 :8443 :9000
+                                                                           │             :9001 :9002
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ CPU is per core, so one process can pass 100%.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · s sort · r read again · x quit · X force quit · tab page · q quit

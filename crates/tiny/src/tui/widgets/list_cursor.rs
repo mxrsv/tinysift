@@ -16,10 +16,6 @@ pub struct ListCursor {
     index: usize,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "used by every page list, plan tasks 05 to 09")
-)]
 impl ListCursor {
     pub fn index(&self) -> usize {
         self.index
