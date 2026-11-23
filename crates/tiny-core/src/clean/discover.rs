@@ -9,6 +9,7 @@
 
 use crate::error::Result;
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use super::freed_size::SharedBlocks;
@@ -150,15 +151,47 @@ pub struct CliDiscovery {
     pub report: DiscoveryReport,
     pub diagnostics: Vec<String>,
     pub failed: bool,
+    /// Each category that set `failed`, with its diagnostic after the id.
+    pub failed_categories: Vec<(String, String)>,
 }
 
 pub fn discover_for_cli(opts: &CleanOpts) -> Result<CliDiscovery> {
+    discover_for_cli_with(opts, None, None)
+}
+
+/// `discover_for_cli` with per-category progress and a cancel flag. A
+/// stopped discovery lists only the categories read before it stopped, so
+/// it counts as failed: nothing may be cleaned from it.
+pub fn discover_for_cli_with(
+    opts: &CleanOpts,
+    progress: crate::progress::ProgressCallback<'_>,
+    cancel: Option<&AtomicBool>,
+) -> Result<CliDiscovery> {
     validate_options(opts)?;
     let providers = select_providers(opts);
     let probe = super::process::RunnerProbe(&crate::runner::RealRunner);
-    let ctx = ScanContext::new(None, &probe);
-    let checked = discover_checked(&providers, &ctx, None);
-    Ok(cli_discovery(checked, opts, &providers))
+    Ok(cli_discovery_of(&providers, opts, &probe, progress, cancel))
+}
+
+/// The CLI's checked discovery of `providers`, so tests can pass fixtures.
+fn cli_discovery_of(
+    providers: &[Box<dyn CleanProvider>],
+    opts: &CleanOpts,
+    probe: &dyn AppProbe,
+    progress: crate::progress::ProgressCallback<'_>,
+    cancel: Option<&AtomicBool>,
+) -> CliDiscovery {
+    let ctx = ScanContext::new(cancel, probe);
+    let checked = discover_checked(providers, &ctx, progress);
+    let cancelled = checked.cancelled;
+    let mut found = cli_discovery(checked, opts, providers);
+    if cancelled {
+        found.failed = true;
+        found
+            .diagnostics
+            .push("discovery stopped before every category was read".into());
+    }
+    found
 }
 
 fn cli_discovery(
@@ -167,25 +200,29 @@ fn cli_discovery(
     providers: &[Box<dyn CleanProvider>],
 ) -> CliDiscovery {
     let mut diagnostics = Vec::new();
-    let mut failed = false;
+    let mut failed_categories = Vec::new();
     for category in &checked.categories {
-        match &category.outcome {
-            CategoryOutcome::Failed { error } => {
-                failed = true;
-                diagnostics.push(format!("{}: scan failed: {error}", category.id));
+        let mut note = |fails: bool, text: String| {
+            if fails {
+                failed_categories.push((category.id.clone(), text.clone()));
             }
+            diagnostics.push(format!("{}: {text}", category.id));
+        };
+        match &category.outcome {
+            CategoryOutcome::Failed { error } => note(true, format!("scan failed: {error}")),
             CategoryOutcome::Unavailable { reason } => {
                 let optional_tool_missing = providers
                     .iter()
                     .find(|provider| provider.id() == category.id)
                     .and_then(|provider| provider.required_tool())
                     .is_some_and(|tool| reason == &format!("{tool} was not found"));
-                failed |= !opts.category.is_empty() || !optional_tool_missing;
-                diagnostics.push(format!("{}: unavailable: {reason}", category.id));
+                note(
+                    !opts.category.is_empty() || !optional_tool_missing,
+                    format!("unavailable: {reason}"),
+                );
             }
             CategoryOutcome::AppRunning { app } if !opts.category.is_empty() => {
-                failed = true;
-                diagnostics.push(format!("{}: not scanned: {app} is running", category.id));
+                note(true, format!("not scanned: {app} is running"));
             }
             CategoryOutcome::Found {
                 unreadable,
@@ -199,18 +236,13 @@ fn cli_discovery(
                         .filter(|item| item.unreadable.is_some())
                         .count();
                 if partial > 0 {
-                    failed = true;
-                    diagnostics.push(format!(
-                        "{}: {partial} paths could not be fully read",
-                        category.id
-                    ));
+                    note(true, format!("{partial} paths could not be fully read"));
                 }
                 if !refused.is_empty() {
-                    diagnostics.push(format!(
-                        "{}: {} paths refused by safety checks",
-                        category.id,
-                        refused.len()
-                    ));
+                    note(
+                        false,
+                        format!("{} paths refused by safety checks", refused.len()),
+                    );
                 }
             }
             _ => {}
@@ -219,7 +251,8 @@ fn cli_discovery(
     CliDiscovery {
         report: legacy_report(checked),
         diagnostics,
-        failed,
+        failed: !failed_categories.is_empty(),
+        failed_categories,
     }
 }
 
@@ -469,5 +502,7 @@ fn found(
     }
 }
 
+#[cfg(test)]
+mod cli_with_tests;
 #[cfg(test)]
 mod tests;

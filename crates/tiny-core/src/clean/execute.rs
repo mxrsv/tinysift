@@ -9,6 +9,7 @@
 //!   provider, `ExecAction::HardDelete` for everyone else.
 
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 use std::path::PathBuf;
 
 use crate::engine_error;
@@ -26,6 +27,13 @@ use super::trash_plan::inside_system;
 use super::types::{CleanAction, CleanItem, ExecAction, ExecReport};
 use crate::runner::RealRunner;
 
+mod observed;
+
+use observed::execute_observed_in;
+#[cfg(test)]
+use observed::observed_with_policy;
+pub use observed::{GroupOutcome, ObservedRun};
+
 const TRASH_ID: &str = "trash";
 
 pub fn execute(
@@ -34,6 +42,23 @@ pub fn execute(
     excluded_paths: &HashSet<PathBuf>,
     opts: &CleanOpts,
 ) -> Result<ExecReport> {
+    execute_observed(groups, action, excluded_paths, opts, &mut |_| {
+        ControlFlow::Continue(())
+    })
+    .map(|run| run.report)
+}
+
+/// `execute`, reporting each group to `on_group` as soon as it ran. The run
+/// holds one kept-paths lease for every group; `Break` stops it before the
+/// next group, which is then reported in `ObservedRun::not_run`. A group in
+/// progress always finishes: nothing is stopped inside one.
+pub fn execute_observed(
+    groups: &[&CategoryGroup],
+    action: CleanAction,
+    excluded_paths: &HashSet<PathBuf>,
+    opts: &CleanOpts,
+    on_group: &mut dyn FnMut(&GroupOutcome) -> ControlFlow<()>,
+) -> Result<ObservedRun> {
     let has_trash = groups.iter().any(|g| g.id == TRASH_ID);
     if has_trash && matches!(action, CleanAction::Trash) {
         return Err(engine_error!(
@@ -44,24 +69,15 @@ pub fn execute(
     // Always keep rules are saved by the desktop app; unreadable rules stop the run.
     let store =
         ProtectionStore::for_account().map_err(|e| engine_error!("cannot open kept paths: {e}"))?;
-    let lease = store.lease().map_err(|e| {
-        engine_error!(
-            "cannot read the kept paths saved by the TinySift app, so nothing was cleaned: {e}"
-        )
-    })?;
     let providers = all_providers(opts);
-    execute_with_policy(
+    execute_observed_in(
+        &store,
         groups,
         action,
         excluded_paths,
-        lease.snapshot(),
         &providers,
         &RunnerProbe(&RealRunner),
-        &|| {
-            lease
-                .ensure_unchanged()
-                .map_err(|e| engine_error!("kept paths changed or unavailable: {e}"))
-        },
+        on_group,
     )
 }
 
@@ -88,6 +104,7 @@ pub(crate) fn execute_with_providers(
     )
 }
 
+#[cfg(test)]
 fn execute_with_policy(
     groups: &[&CategoryGroup],
     action: CleanAction,
@@ -97,49 +114,17 @@ fn execute_with_policy(
     probe: &dyn AppProbe,
     unchanged: &dyn Fn() -> Result<()>,
 ) -> Result<ExecReport> {
-    let mut report = ExecReport::default();
-    let stopped = std::cell::Cell::new(false);
-    let check_policy = || {
-        if stopped.get() {
-            return Err(engine_error!(
-                "kept paths changed or unavailable; run stopped"
-            ));
-        }
-        unchanged().inspect_err(|_| stopped.set(true))
-    };
-    let excluded_ancestors: HashSet<_> = excluded_paths
-        .iter()
-        .flat_map(|path| path.ancestors())
-        .collect();
-    for group in groups {
-        let provider = providers.iter().find(|p| p.id() == group.id);
-        if let Err(error) = check_policy() {
-            report.merge(policy_failure(&group.items, &error));
-            continue;
-        }
-        let filtered = reviewed_items(
-            &group.items,
-            excluded_paths,
-            &excluded_ancestors,
-            policy,
-            provider.map(|provider| provider.as_ref()),
-            &mut report,
-        );
-        if filtered.is_empty() {
-            continue;
-        }
-        let provider = provider.ok_or_else(|| engine_error!("no provider for {}", group.id))?;
-        let exec_action = map_action(action, group.id.as_str())?;
-        report.merge(execute_group(
-            provider.as_ref(),
-            &filtered,
-            exec_action,
-            probe,
-            policy,
-            &check_policy,
-        )?);
-    }
-    Ok(report)
+    observed_with_policy(
+        groups,
+        action,
+        excluded_paths,
+        policy,
+        providers,
+        probe,
+        unchanged,
+        &mut |_| ControlFlow::Continue(()),
+    )
+    .map(|run| run.report)
 }
 
 fn policy_failure(items: &[CleanItem], error: &crate::error::Error) -> ExecReport {
