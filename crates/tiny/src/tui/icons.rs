@@ -35,10 +35,6 @@ impl IconMode {
     }
 
     /// The glyph and a space before a category name, or nothing in Unicode mode.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by the Clean page rows, plan task 07")
-    )]
     pub fn category_prefix(self, category_id: &str) -> String {
         self.prefix(category_glyph(category_id))
     }

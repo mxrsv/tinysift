@@ -1,0 +1,124 @@
+
+##### {"size":"std","icons":"uni","data":"normal","state":"empty","screen":"review"}
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+
+ ✓ Nothing to clean
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ v safe only · r read again · tab page · q quit
+
+##### {"size":"wide","icons":"uni","data":"normal","state":"empty","screen":"review"}
+  Clean   Uninstall   Scan   Processes   System                                                            28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ ✓ Nothing to clean
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ v safe only · r read again · tab page · q quit
+
+##### {"size":"std","icons":"nerd","data":"normal","state":"empty","screen":"review"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System          28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+
+ ✓ Nothing to clean
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────
+ v safe only · r read again · tab page · q quit
+
+##### {"size":"wide","icons":"nerd","data":"normal","state":"empty","screen":"review"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                  28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+
+ ✓ Nothing to clean
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ v safe only · r read again · tab page · q quit

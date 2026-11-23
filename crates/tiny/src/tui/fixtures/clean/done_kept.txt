@@ -1,0 +1,124 @@
+
+##### {"size":"std","icons":"uni","data":"normal","state":"error","screen":"done"}
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ● Xcode DerivedData                         kept  Xcode is open
+ ✓ node_modules (idle)                     3.0 GB  1 path kept
+ ✓ pnpm store                              840 MB
+ ✓ Crash reports / DiagnosticReports        89 MB
+ ✓ User logs                                50 KB
+
+
+
+
+
+
+
+
+
+
+
+ ── Done in 9.4s ──────────────────────────────────────────────────────────────
+ Cleaned    3.9 GB   in Trash 3.1 GB   for good 840 MB   kept 7.0 GB
+ ● 1 path kept: changed after the scan
+ Space in the Trash returns when the Trash is emptied.
+────────────────────────────────────────────────────────────────────────────────
+ enter back to Clean, measured again · q quit
+
+##### {"size":"wide","icons":"uni","data":"normal","state":"error","screen":"done"}
+  Clean   Uninstall   Scan   Processes   System                                                            28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ● Xcode DerivedData                         kept  Xcode is open           │ Done in 9.4s
+ ✓ node_modules (idle)                     3.0 GB  1 path kept             │
+ ✓ pnpm store                              840 MB                          │ Cleaned    3.9 GB
+ ✓ Crash reports / DiagnosticReports        89 MB                          │ In Trash   3.1 GB  Finder › Put Back
+ ✓ User logs                                50 KB                          │ For good   840 MB
+                                                                           │ Kept       7.0 GB
+                                                                           │
+                                                                           │ ~/Code/old-landing/node_modules
+                                                                           │ ● changed after the scan
+                                                                           │
+                                                                           │ Space in the Trash returns when the Trash
+                                                                           │ is emptied.
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ enter back to Clean, measured again · q quit
+
+##### {"size":"std","icons":"nerd","data":"normal","state":"error","screen":"done"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System          28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ● 󰀵 Xcode DerivedData                         kept  Xcode is open
+ ✓ 󰎙 node_modules (idle)                     3.0 GB  1 path kept
+ ✓ 󰏗 pnpm store                              840 MB
+ ✓ 󰨰 Crash reports / DiagnosticReports        89 MB
+ ✓ 󰧭 User logs                                50 KB
+
+
+
+
+
+
+
+
+
+
+
+ ── Done in 9.4s ──────────────────────────────────────────────────────────────
+ Cleaned    3.9 GB   in Trash 3.1 GB   for good 840 MB   kept 7.0 GB
+ ● 1 path kept: changed after the scan
+ Space in the Trash returns when the Trash is emptied.
+────────────────────────────────────────────────────────────────────────────────
+ enter back to Clean, measured again · q quit
+
+##### {"size":"wide","icons":"nerd","data":"normal","state":"error","screen":"done"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                  28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ● 󰀵 Xcode DerivedData                         kept  Xcode is open         │ Done in 9.4s
+ ✓ 󰎙 node_modules (idle)                     3.0 GB  1 path kept           │
+ ✓ 󰏗 pnpm store                              840 MB                        │ Cleaned    3.9 GB
+ ✓ 󰨰 Crash reports / DiagnosticReports        89 MB                        │ In Trash   3.1 GB  Finder › Put Back
+ ✓ 󰧭 User logs                                50 KB                        │ For good   840 MB
+                                                                           │ Kept       7.0 GB
+                                                                           │
+                                                                           │ ~/Code/old-landing/node_modules
+                                                                           │ ● changed after the scan
+                                                                           │
+                                                                           │ Space in the Trash returns when the Trash
+                                                                           │ is emptied.
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ enter back to Clean, measured again · q quit

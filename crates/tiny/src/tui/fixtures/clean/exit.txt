@@ -1,0 +1,34 @@
+
+##### {"size":"std","icons":"uni","data":"normal","state":"ok","screen":"exit"}
+you@mac ~ % sift
+
+╭─ TinySift ───────────────────────────────────────────────╮
+│ ✓ Cleaned 10.9 GB  in 9.4s                               │
+│                                                          │
+│   Xcode DerivedData                         6.2 GB       │
+│   node_modules (idle)                       3.8 GB       │
+│   pnpm store                                840 MB       │
+│   Crash reports / DiagnosticReports          89 MB       │
+│   User logs                                  50 KB       │
+│                                                          │
+│   In Trash 10.1 GB · returns when the Trash is emptied   │
+│   For good 840 MB                                        │
+╰──────────────────────────────────────────────────────────╯
+you@mac ~ % ▌
+
+##### {"size":"std","icons":"uni","data":"normal","state":"error","screen":"exit"}
+you@mac ~ % sift
+
+╭─ TinySift ───────────────────────────────────────────────╮
+│ ✓ Cleaned 3.9 GB  in 9.4s                                │
+│                                                          │
+│   node_modules (idle)                       3.0 GB       │
+│   pnpm store                                840 MB       │
+│   Crash reports / DiagnosticReports          89 MB       │
+│   User logs                                  50 KB       │
+│                                                          │
+│   In Trash 3.1 GB · returns when the Trash is emptied    │
+│   For good 840 MB                                        │
+│ ● Kept 7.0 GB · run sift to see why                      │
+╰──────────────────────────────────────────────────────────╯
+you@mac ~ % ▌

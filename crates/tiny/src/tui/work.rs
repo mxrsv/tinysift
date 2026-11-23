@@ -138,10 +138,6 @@ pub struct Worker<M> {
     _message: PhantomData<fn(M)>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "handed to page tasks, plan tasks 05 to 09")
-)]
 impl<M: Send + 'static> Worker<M> {
     /// Hands `message` to the page. `false` means the TUI has closed: stop.
     pub fn send(&self, message: M) -> bool {

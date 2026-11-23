@@ -1,0 +1,124 @@
+
+##### {"size":"std","icons":"uni","data":"normal","state":"ok","screen":"paths"}
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ node_modules (idle) · 12 paths · 3.8 GB
+
+ ❯ ◉ ~/Code/old-landing/node_modules                                     820 MB
+   ◉ ~/Code/client-portal-2025/node_modules                              610 MB
+   ◉ ~/Code/rn-starter/node_modules                                      480 MB
+   ◉ ~/Code/docs-site/node_modules                                       410 MB
+   ◉ ~/Code/invoice-tool/node_modules                                    330 MB
+   ◉ ~/Code/playground/vite-ssr/node_modules                             290 MB
+   ◉ ~/Code/storybook-kit/node_modules                                   240 MB
+   ◉ ~/Code/chrome-ext-notes/node_modules                                200 MB
+   ◉ ~/Code/api-mock/node_modules                                        160 MB
+   ◉ ~/Code/slides/node_modules                                          120 MB
+   ◉ ~/Code/eslint-config/node_modules                                    90 MB
+   ◉ ~/Code/tiny-demo/node_modules                                        50 MB
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ ~/Code/old-landing/node_modules  820 MB
+ Last commit 214 days ago · package.json edited 231 days ago · Work tree clean
+ Unticking keeps this path and any picked folder above it.
+
+ 12 of 12 paths ticked    3.8 GB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space untick · esc back to categories
+
+##### {"size":"wide","icons":"uni","data":"normal","state":"ok","screen":"paths"}
+  Clean   Uninstall   Scan   Processes   System                                                            28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ node_modules (idle) · 12 paths · 3.8 GB                                   │ Highlighted
+                                                                           │
+ ❯ ◉ ~/Code/old-landing/node_modules                                820 MB │ ~/Code/old-landing/node_modules
+   ◉ ~/Code/client-portal-2025/node_modules                         610 MB │ 820 MB
+   ◉ ~/Code/rn-starter/node_modules                                 480 MB │
+   ◉ ~/Code/docs-site/node_modules                                  410 MB │ Last commit   214 days ago
+   ◉ ~/Code/invoice-tool/node_modules                               330 MB │ package.json  edited 231 days ago
+   ◉ ~/Code/playground/vite-ssr/node_modules                        290 MB │ Work tree     clean
+   ◉ ~/Code/storybook-kit/node_modules                              240 MB │
+   ◉ ~/Code/chrome-ext-notes/node_modules                           200 MB │ Unticking keeps this path and any picked
+   ◉ ~/Code/api-mock/node_modules                                   160 MB │ folder above it.
+   ◉ ~/Code/slides/node_modules                                     120 MB │
+   ◉ ~/Code/eslint-config/node_modules                               90 MB │
+   ◉ ~/Code/tiny-demo/node_modules                                   50 MB │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ 12 of 12 paths ticked    3.8 GB
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space untick · esc back to categories
+
+##### {"size":"std","icons":"nerd","data":"normal","state":"ok","screen":"paths"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System          28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ node_modules (idle) · 12 paths · 3.8 GB
+
+ ❯ ◉ ~/Code/old-landing/node_modules                                     820 MB
+   ◉ ~/Code/client-portal-2025/node_modules                              610 MB
+   ◉ ~/Code/rn-starter/node_modules                                      480 MB
+   ◉ ~/Code/docs-site/node_modules                                       410 MB
+   ◉ ~/Code/invoice-tool/node_modules                                    330 MB
+   ◉ ~/Code/playground/vite-ssr/node_modules                             290 MB
+   ◉ ~/Code/storybook-kit/node_modules                                   240 MB
+   ◉ ~/Code/chrome-ext-notes/node_modules                                200 MB
+   ◉ ~/Code/api-mock/node_modules                                        160 MB
+   ◉ ~/Code/slides/node_modules                                          120 MB
+   ◉ ~/Code/eslint-config/node_modules                                    90 MB
+   ◉ ~/Code/tiny-demo/node_modules                                        50 MB
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ ~/Code/old-landing/node_modules  820 MB
+ Last commit 214 days ago · package.json edited 231 days ago · Work tree clean
+ Unticking keeps this path and any picked folder above it.
+
+ 12 of 12 paths ticked    3.8 GB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space untick · esc back to categories
+
+##### {"size":"wide","icons":"nerd","data":"normal","state":"ok","screen":"paths"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                  28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ node_modules (idle) · 12 paths · 3.8 GB                                   │ Highlighted
+                                                                           │
+ ❯ ◉ ~/Code/old-landing/node_modules                                820 MB │ ~/Code/old-landing/node_modules
+   ◉ ~/Code/client-portal-2025/node_modules                         610 MB │ 820 MB
+   ◉ ~/Code/rn-starter/node_modules                                 480 MB │
+   ◉ ~/Code/docs-site/node_modules                                  410 MB │ Last commit   214 days ago
+   ◉ ~/Code/invoice-tool/node_modules                               330 MB │ package.json  edited 231 days ago
+   ◉ ~/Code/playground/vite-ssr/node_modules                        290 MB │ Work tree     clean
+   ◉ ~/Code/storybook-kit/node_modules                              240 MB │
+   ◉ ~/Code/chrome-ext-notes/node_modules                           200 MB │ Unticking keeps this path and any picked
+   ◉ ~/Code/api-mock/node_modules                                   160 MB │ folder above it.
+   ◉ ~/Code/slides/node_modules                                     120 MB │
+   ◉ ~/Code/eslint-config/node_modules                               90 MB │
+   ◉ ~/Code/tiny-demo/node_modules                                   50 MB │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ 12 of 12 paths ticked    3.8 GB
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space untick · esc back to categories

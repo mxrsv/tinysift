@@ -1,0 +1,124 @@
+
+##### {"size":"std","icons":"uni","data":"normal","state":"ok","screen":"run"}
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ✓ Xcode DerivedData                       6.2 GB
+ ✓ node_modules (idle)                     3.8 GB
+ ⠹ pnpm store                            pnpm store prune…
+ · Crash reports / DiagnosticReports
+ · User logs
+
+
+
+
+
+
+
+
+
+
+
+ ── Cleaning ──────────────────────────────────────────────────────────────────
+ Done so far  10.0 GB
+ Elapsed      4.1s
+
+────────────────────────────────────────────────────────────────────────────────
+ esc stop after this category
+
+##### {"size":"wide","icons":"uni","data":"normal","state":"ok","screen":"run"}
+  Clean   Uninstall   Scan   Processes   System                                                            28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ Xcode DerivedData                       6.2 GB                          │ Cleaning
+ ✓ node_modules (idle)                     3.8 GB                          │
+ ⠹ pnpm store                            pnpm store prune…                 │ Done so far  10.0 GB
+ · Crash reports / DiagnosticReports                                       │ Elapsed      4.1s
+ · User logs                                                               │
+                                                                           │ Each category is checked again right before
+                                                                           │ it moves.
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ esc stop after this category
+
+##### {"size":"std","icons":"nerd","data":"normal","state":"ok","screen":"run"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System          28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ✓ 󰀵 Xcode DerivedData                       6.2 GB
+ ✓ 󰎙 node_modules (idle)                     3.8 GB
+ ⠹ 󰏗 pnpm store                            pnpm store prune…
+ · 󰨰 Crash reports / DiagnosticReports
+ · 󰧭 User logs
+
+
+
+
+
+
+
+
+
+
+
+ ── Cleaning ──────────────────────────────────────────────────────────────────
+ Done so far  10.0 GB
+ Elapsed      4.1s
+
+────────────────────────────────────────────────────────────────────────────────
+ esc stop after this category
+
+##### {"size":"wide","icons":"nerd","data":"normal","state":"ok","screen":"run"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                  28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ 󰀵 Xcode DerivedData                       6.2 GB                        │ Cleaning
+ ✓ 󰎙 node_modules (idle)                     3.8 GB                        │
+ ⠹ 󰏗 pnpm store                            pnpm store prune…               │ Done so far  10.0 GB
+ · 󰨰 Crash reports / DiagnosticReports                                     │ Elapsed      4.1s
+ · 󰧭 User logs                                                             │
+                                                                           │ Each category is checked again right before
+                                                                           │ it moves.
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ esc stop after this category

@@ -251,13 +251,6 @@ impl<'a, M: Send + 'static> PageCtx<'a, M> {
 
     /// Switch to `page` and ask it to read again: Done's enter returns to a
     /// fresh Clean (I15), a quit re-reads Processes (I18).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "used by Clean's Done screen and Processes, plan tasks 05 and 07"
-        )
-    )]
     pub fn reload(&mut self, page: PageId) {
         self.env.requests.push(FrameRequest::Show(page));
         self.env.requests.push(FrameRequest::Reload(page));
