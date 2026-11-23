@@ -29,6 +29,6 @@ you@mac ~ % sift
 │                                                          │
 │   In Trash 3.1 GB · returns when the Trash is emptied    │
 │   For good 840 MB                                        │
-│ ● Kept 7.0 GB · run sift to see why                      │
+│ ● Kept 7.0 GB                                            │
 ╰──────────────────────────────────────────────────────────╯
 you@mac ~ % ▌

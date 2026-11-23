@@ -6,12 +6,13 @@ use crate::tui::pages::{KeyHint, PageView, ViewCtx};
 use crate::tui::styled_line::StyledLine;
 use crate::tui::widgets::action_menu::{ActionMenu, MenuChoice};
 use crate::tui::widgets::confirm_box::{ConfirmBox, Tone};
+use crate::tui::widgets::phrases::{plural, some_names};
 use crate::tui::widgets::size_format::format_size;
-use crate::tui::widgets::text_fit::{middle_ellipsis, wrap};
+use crate::tui::widgets::text_fit::{fill, middle_ellipsis, wrap};
 
 use super::engine::Route;
 use super::listing::Listing;
-use super::wording::{plural, shown_path, some_names};
+use super::wording::shown_path;
 
 /// The four choices, in the order the menu shows them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -110,11 +111,7 @@ pub fn dry_run(listing: &Listing, cursor: usize, ctx: &ViewCtx) -> PageView {
         .groups
         .iter()
         .flat_map(|group| {
-            let handed: Vec<_> = group
-                .items
-                .iter()
-                .filter(|item| !plan.excluded.contains(&item.path))
-                .collect();
+            let handed: Vec<_> = plan.handed_in(group).collect();
             let bytes = handed.iter().fold(0u64, |s, i| s.saturating_add(i.size));
             std::iter::once(StyledLine::new().hi(format!(
                 "{} · {} · {}",
@@ -125,7 +122,7 @@ pub fn dry_run(listing: &Listing, cursor: usize, ctx: &ViewCtx) -> PageView {
             .chain(handed.into_iter().map(move |item| {
                 let path = middle_ellipsis(&shown_path(&item.path, home), width);
                 StyledLine::new()
-                    .plain(format!("  {path:<width$}"))
+                    .plain(format!("  {}", fill(&path, width)))
                     .dim(format!("  {:>10}", format_size(item.size)))
             }))
         })

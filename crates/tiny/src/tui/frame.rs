@@ -273,7 +273,11 @@ fn list_area(view: &PageView, height: usize, width: usize, offset: usize) -> Bod
         .map(|line| line.clone().fit(width))
         .collect();
     let list_rows = height - header.len();
-    let shown = window(view.list.len(), list_rows, view.cursor, offset);
+    // The highlighted row, else the pinned one, stays in view; a list with
+    // neither shows from its top, whatever the last view scrolled to.
+    let kept = view.cursor.or(view.pin);
+    let offset = if kept.is_some() { offset } else { 0 };
+    let shown = window(view.list.len(), list_rows, kept, offset);
     let visible = view.list[shown.start..shown.start + shown.shown]
         .iter()
         .enumerate()

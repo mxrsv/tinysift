@@ -1,8 +1,11 @@
 //! One read's categories as the page lists them: sorted, ticked and with
 //! the paths unticked in the path list. Ticks start where `sift clean`'s
-//! picker starts them: Safe ticked, Review not.
+//! picker starts them: Safe ticked, Review not. A read again keeps the
+//! user's choices (S2): a category keeps its tick by id, an unticked path
+//! stays unticked; only a category seen for the first time takes the
+//! default, and what disappeared is dropped.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use tiny_core::clean::discover::CategoryGroup;
@@ -40,6 +43,13 @@ impl Entry {
     }
 }
 
+/// The user's choices in one listing, carried into the next read.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Choices {
+    ticked: HashMap<String, bool>,
+    excluded: HashSet<PathBuf>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Listing {
     pub entries: Vec<Entry>,
@@ -52,7 +62,8 @@ pub struct Listing {
 impl Listing {
     /// Largest first (I22); categories without a size after those with one,
     /// failed reads last. Destructive categories never reach the TUI (TU10).
-    pub fn new(discovery: Discovery) -> Self {
+    /// `carried` are the choices of the listing this read replaces.
+    pub fn new(discovery: Discovery, carried: Option<&Choices>) -> Self {
         let mut entries: Vec<Entry> = discovery
             .categories
             .into_iter()
@@ -63,8 +74,20 @@ impl Listing {
             })
             .collect();
         for entry in &mut entries {
-            entry.ticked = entry.tickable() && entry.category.risk == RiskLevel::Safe;
+            let default = entry.category.risk == RiskLevel::Safe;
+            let kept = carried.and_then(|c| c.ticked.get(&entry.category.id).copied());
+            entry.ticked = entry.tickable() && kept.unwrap_or(default);
         }
+        // An unticked path stays unticked while its category still lists it.
+        let excluded = carried.map_or_else(HashSet::new, |carried| {
+            entries
+                .iter()
+                .filter_map(Entry::group)
+                .flat_map(|group| &group.items)
+                .filter(|item| carried.excluded.contains(&item.path))
+                .map(|item| item.path.clone())
+                .collect()
+        });
         entries.sort_by_key(|entry| {
             let rank = match entry.category.finding {
                 Finding::Found(_) => 0,
@@ -75,10 +98,35 @@ impl Listing {
         });
         Self {
             entries,
-            excluded: HashSet::new(),
+            excluded,
             failure: discovery.failure,
             read_at: discovery.read_at,
             home: discovery.home,
+        }
+    }
+
+    /// What the user chose here, for the next read. A category listed but
+    /// not measured this time (its app runs, its read failed) keeps the tick
+    /// it carried in; one no longer listed is dropped.
+    pub fn choices(&self, before: Option<&Choices>) -> Choices {
+        let carried = self
+            .entries
+            .iter()
+            .filter(|e| !e.tickable())
+            .filter_map(|e| {
+                let id = &e.category.id;
+                before
+                    .and_then(|b| b.ticked.get(id))
+                    .map(|&ticked| (id.clone(), ticked))
+            });
+        let chosen = self
+            .entries
+            .iter()
+            .filter(|e| e.tickable())
+            .map(|e| (e.category.id.clone(), e.ticked));
+        Choices {
+            ticked: carried.chain(chosen).collect(),
+            excluded: self.excluded.clone(),
         }
     }
 

@@ -25,14 +25,17 @@ struct FakeScan {
     gate: Option<Mutex<Receiver<()>>>,
     scans: Arc<AtomicUsize>,
     revealed: Arc<Mutex<Vec<PathBuf>>>,
+    /// The first scan panics once let through.
+    first_panics: bool,
 }
 
 impl ScanEngine for FakeScan {
     fn scan(&self, _progress: &(dyn Fn(String) + Send + Sync)) -> Result<ScanData, String> {
-        self.scans.fetch_add(1, Ordering::SeqCst);
+        let scan = self.scans.fetch_add(1, Ordering::SeqCst);
         if let Some(gate) = &self.gate {
             let _ = gate.lock().unwrap().recv();
         }
+        assert!(!(self.first_panics && scan == 0), "the walker broke");
         self.result.clone()
     }
 
@@ -129,6 +132,16 @@ fn open_with(
     size: (u16, u16),
     icons: IconMode,
 ) -> (PageHarness, Probe) {
+    open_fake(result, gated, false, size, icons)
+}
+
+fn open_fake(
+    result: Result<ScanData, String>,
+    gated: bool,
+    first_panics: bool,
+    size: (u16, u16),
+    icons: IconMode,
+) -> (PageHarness, Probe) {
     let (release, gate) = mpsc::channel();
     let probe = Probe {
         scans: Arc::default(),
@@ -140,6 +153,7 @@ fn open_with(
         gate: gated.then(|| Mutex::new(gate)),
         scans: Arc::clone(&probe.scans),
         revealed: Arc::clone(&probe.revealed),
+        first_panics,
     });
     (PageHarness::new(page, size, icons), probe)
 }
@@ -321,4 +335,47 @@ fn o_shows_the_highlighted_file_in_finder_through_the_engine() {
             "/Users/someone/Downloads/Xcode_27_beta_4.xip"
         )]
     );
+}
+
+/// C5: `r` after `esc` waits for the stopped walk to end, then scans.
+#[test]
+fn a_new_scan_waits_for_the_stopped_walk() {
+    let (mut screen, mut probe) = open_with(Ok(normal()), true, STANDARD, IconMode::Unicode);
+    screen
+        .press(KeyCode::Enter)
+        .press(KeyCode::Esc)
+        .press(KeyCode::Char('r'));
+    let text = screen.text();
+    assert!(
+        text.contains("The previous scan is still stopping; this one starts when it ends"),
+        "{text}"
+    );
+    assert!(text.ends_with(" esc stop · tab page · q quit"), "{text}");
+    let release = probe.release.take().unwrap();
+    release.send(()).unwrap();
+    release.send(()).unwrap();
+    screen.settle();
+    assert_eq!(
+        probe.scans.load(Ordering::SeqCst),
+        2,
+        "one walk after the other"
+    );
+    assert!(screen.text().contains("Windows11"));
+}
+
+/// C4: the stopped walk's panic never fails the scan that waited for it.
+#[test]
+fn a_stopped_walk_that_panics_does_not_fail_the_next_scan() {
+    let (mut screen, mut probe) = open_fake(Ok(normal()), true, true, STANDARD, IconMode::Unicode);
+    screen
+        .press(KeyCode::Enter)
+        .press(KeyCode::Esc)
+        .press(KeyCode::Char('r'));
+    let release = probe.release.take().unwrap();
+    release.send(()).unwrap();
+    release.send(()).unwrap();
+    screen.settle();
+    let text = screen.text();
+    assert!(text.contains("Windows11"), "{text}");
+    assert!(!text.contains("the walker broke"), "{text}");
 }

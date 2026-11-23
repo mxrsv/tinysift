@@ -15,10 +15,11 @@ use tiny_core::processes::{
 };
 
 use super::{KeyHint, KeyReply, Page, PageCtx, PageId, PageView, ViewCtx};
-use crate::tui::styled_line::{Role, StyledLine};
+use crate::tui::styled_line::StyledLine;
 use crate::tui::widgets::confirm_box::{ConfirmBox, ConfirmReply};
 use crate::tui::widgets::list_cursor::ListCursor;
-use crate::tui::widgets::spinner::spinner_glyph;
+use crate::tui::widgets::spinner::spinner_line;
+use crate::tui::work::TaskId;
 use engine::{ProcessEngine, ProcessRow, RealProcesses};
 
 pub enum ProcessesMsg {
@@ -42,12 +43,13 @@ pub struct ProcessesPage<E> {
     rows: Option<Vec<ProcessRow>>,
     sort: ProcessSort,
     cursor: ListCursor,
-    reading: bool,
+    /// The read in flight.
+    reading: Option<TaskId>,
     /// Set when the first read fails: there is nothing else to show.
     failed: Option<String>,
     pending: Option<Pending>,
-    /// The process a quit is running for.
-    quitting: Option<String>,
+    /// The process a quit is running for, and its task.
+    quitting: Option<(String, TaskId)>,
     /// The engine refused the highlighted process; shown in its detail.
     refused: Option<(ProcessKey, Refusal)>,
     /// The engine's answer to the last quit, shown on the foot until the next action.
@@ -72,7 +74,7 @@ impl<E: ProcessEngine> ProcessesPage<E> {
             rows: None,
             sort: ProcessSort::Cpu,
             cursor: ListCursor::default(),
-            reading: false,
+            reading: None,
             failed: None,
             pending: None,
             quitting: None,
@@ -86,14 +88,14 @@ impl<E: ProcessEngine> ProcessesPage<E> {
     }
 
     fn start_read(&mut self, ctx: &mut PageCtx<'_, ProcessesMsg>) {
-        if self.reading {
+        if self.reading.is_some() {
             return;
         }
         let engine = Arc::clone(&self.engine);
         match ctx.spawn(move |worker| {
             worker.send(ProcessesMsg::Read(engine.read()));
         }) {
-            Ok(_) => self.reading = true,
+            Ok(task) => self.reading = Some(task.id()),
             Err(error) => self.failed = Some(error.to_string()),
         }
     }
@@ -145,7 +147,7 @@ impl<E: ProcessEngine> ProcessesPage<E> {
             });
         });
         match spawned {
-            Ok(_) => self.quitting = Some(name),
+            Ok(task) => self.quitting = Some((name, task.id())),
             Err(error) => {
                 self.notice = Some(
                     StyledLine::new()
@@ -172,15 +174,14 @@ impl<E: ProcessEngine> ProcessesPage<E> {
     }
 
     fn foot(&self, tick: u64) -> StyledLine {
-        let spinner = || StyledLine::new().push(Role::Storage, format!("{} ", spinner_glyph(tick)));
-        if let Some(name) = &self.quitting {
-            return spinner().dim(format!("quitting {name}…"));
+        if let Some((name, _)) = &self.quitting {
+            return spinner_line(tick, format!("quitting {name}…"));
         }
         if let Some(notice) = &self.notice {
             return notice.clone();
         }
-        if self.reading {
-            return spinner().dim("reading again…");
+        if self.reading.is_some() {
+            return spinner_line(tick, "reading again…");
         }
         StyledLine::new().dim(view::CPU_NOTE)
     }
@@ -231,9 +232,7 @@ impl<E: ProcessEngine> Page for ProcessesPage<E> {
                         .hi("Processes could not be read"),
                     StyledLine::new().dim(format!("  {reason}. r reads again.")),
                 ],
-                None => vec![StyledLine::new()
-                    .push(Role::Storage, format!("{} ", spinner_glyph(ctx.tick)))
-                    .dim("reading processes…")],
+                None => vec![spinner_line(ctx.tick, "reading processes…")],
             };
             return PageView {
                 list,
@@ -266,6 +265,7 @@ impl<E: ProcessEngine> Page for ProcessesPage<E> {
             foot: Some(self.foot(ctx.tick)),
             keys,
             overlay: self.pending.as_ref().map(|p| p.confirm.overlay()),
+            ..PageView::default()
         }
     }
 
@@ -316,7 +316,7 @@ impl<E: ProcessEngine> Page for ProcessesPage<E> {
     fn on_message(&mut self, message: ProcessesMsg, ctx: &mut PageCtx<'_, ProcessesMsg>) {
         match message {
             ProcessesMsg::Read(rows) => {
-                self.reading = false;
+                self.reading = None;
                 self.failed = None;
                 let kept = self.highlighted().map(key_of);
                 self.place(rows, kept);
@@ -334,9 +334,12 @@ impl<E: ProcessEngine> Page for ProcessesPage<E> {
         }
     }
 
-    fn on_task_failed(&mut self, reason: &str, _ctx: &mut PageCtx<'_, ProcessesMsg>) {
-        let quitting = self.quitting.take();
-        self.reading = false;
+    fn on_task_failed(&mut self, task: TaskId, reason: &str, _ctx: &mut PageCtx<'_, ProcessesMsg>) {
+        let quitting = self.quitting.take_if(|(_, id)| *id == task);
+        let reading = self.reading.take_if(|id| *id == task);
+        if quitting.is_none() && reading.is_none() {
+            return;
+        }
         if self.rows.is_none() {
             self.failed = Some(reason.to_string());
             return;
@@ -354,7 +357,7 @@ impl<E: ProcessEngine> Page for ProcessesPage<E> {
     }
 
     fn is_busy(&self) -> bool {
-        self.reading || self.quitting.is_some()
+        self.reading.is_some() || self.quitting.is_some()
     }
 
     fn on_quit_request(&mut self, _ctx: &mut PageCtx<'_, ProcessesMsg>) {

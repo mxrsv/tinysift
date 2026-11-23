@@ -13,15 +13,17 @@ use crate::tui::page_harness::{PageHarness, STANDARD, WIDE};
 const GIB: u64 = 1 << 30;
 const GB: u64 = 1_000_000_000;
 
-/// Returns one reading and counts the reads.
+/// Returns one reading and counts the reads; the first `panics` reads panic.
 struct FakeSystem {
     reading: SystemReading,
     reads: Arc<AtomicUsize>,
+    panics: usize,
 }
 
 impl SystemEngine for FakeSystem {
     fn read(&self) -> SystemReading {
-        self.reads.fetch_add(1, Ordering::SeqCst);
+        let read = self.reads.fetch_add(1, Ordering::SeqCst);
+        assert!(read >= self.panics, "sampler broke");
         self.reading.clone()
     }
 }
@@ -80,10 +82,20 @@ fn open(
     size: (u16, u16),
     icons: IconMode,
 ) -> (PageHarness, Arc<AtomicUsize>) {
+    open_failing(reading, size, icons, 0)
+}
+
+fn open_failing(
+    reading: SystemReading,
+    size: (u16, u16),
+    icons: IconMode,
+    panics: usize,
+) -> (PageHarness, Arc<AtomicUsize>) {
     let reads = Arc::new(AtomicUsize::new(0));
     let page = SystemPage::new(FakeSystem {
         reading,
         reads: Arc::clone(&reads),
+        panics,
     });
     (PageHarness::new(page, size, icons), reads)
 }
@@ -167,8 +179,7 @@ fn a_disk_above_92_percent_is_drawn_in_the_bad_role() {
 
 #[test]
 fn a_failed_read_says_so_and_r_reads_again() {
-    let (mut screen, reads) = open(normal(), STANDARD, IconMode::Unicode);
-    screen.fail(crate::tui::pages::PageId::System, "sampler broke");
+    let (mut screen, reads) = open_failing(normal(), STANDARD, IconMode::Unicode, 1);
     let text = screen.text();
     assert!(text.contains("● The system could not be read"), "{text}");
     assert!(text.contains("sampler broke"));

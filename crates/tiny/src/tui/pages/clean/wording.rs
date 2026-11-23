@@ -6,15 +6,8 @@ use std::time::Duration;
 use tiny_core::clean::types::{ComesBack, Evidence};
 
 use crate::tui::widgets::size_format::format_count;
-use crate::tui::widgets::text_fit::cut;
 
 const DAY: i64 = 86_400;
-
-/// `1 category`, `5 categories`, `1,284 paths`.
-pub fn plural(count: usize, one: &str, many: &str) -> String {
-    let word = if count == 1 { one } else { many };
-    format!("{} {word}", format_count(count as u64))
-}
 
 /// When a category's items come back after a clean.
 pub fn comes_back(back: Option<ComesBack>) -> &'static str {
@@ -52,22 +45,6 @@ pub fn seconds(elapsed: Duration) -> String {
     } else {
         let whole = elapsed.as_secs();
         format!("{}m {:02}s", whole / 60, whole % 60)
-    }
-}
-
-/// Up to `shown` names, each cut to `width`, then `and N more`.
-pub fn some_names(names: &[&str], shown: usize, width: usize) -> String {
-    let total = names.len();
-    let listed = names
-        .iter()
-        .take(shown)
-        .map(|name| cut(name, width))
-        .collect::<Vec<_>>()
-        .join(", ");
-    if total > shown {
-        format!("{listed} and {} more", total - shown)
-    } else {
-        listed
     }
 }
 
@@ -114,24 +91,11 @@ mod tests {
 
     #[test]
     fn words_match_the_mock() {
-        assert_eq!(plural(1, "category", "categories"), "1 category");
-        assert_eq!(plural(1284, "path", "paths"), "1,284 paths");
         assert_eq!(age(300 * DAY, 86 * DAY), "214 days ago");
         assert_eq!(age(10, 5), "today");
         assert_eq!(age(DAY, 0), "1 day ago");
         assert_eq!(seconds(Duration::from_millis(9_400)), "9.4s");
         assert_eq!(seconds(Duration::from_secs(125)), "2m 05s");
-        let names = [
-            "Xcode DerivedData",
-            "node_modules (idle)",
-            "pnpm store",
-            "a",
-            "b",
-        ];
-        assert_eq!(
-            some_names(&names, 3, 28),
-            "Xcode DerivedData, node_modules (idle), pnpm store and 2 more"
-        );
         assert_eq!(kept_reason("kept: Xcode is running"), "Xcode is running");
     }
 

@@ -41,14 +41,23 @@ impl<E: UninstallEngine> UninstallPage<E> {
         self.read_next_plan(ctx);
     }
 
-    /// Orders the rows as `sift uninstall --sort` does, keeping the cursor on its app.
+    /// Orders the rows as `sift uninstall --sort` does, keeping the cursor on
+    /// its app. Ties keep a fixed order, name then path (C6): the engine's
+    /// sort is stable, so it is fed in that order.
     pub(super) fn resort(&mut self) {
         let current = self.highlighted().map(|row| row.app.path.clone());
         let mut rows: HashMap<PathBuf, AppRow> = std::mem::take(&mut self.apps)
             .into_iter()
             .map(|row| (row.app.path.clone(), row))
             .collect();
-        let entries = rows.values().map(|row| row.app.clone()).collect();
+        let mut entries: Vec<AppEntry> = rows.values().map(|row| row.app.clone()).collect();
+        entries.sort_by(|a, b| {
+            (a.name.to_lowercase(), &a.name, &a.path).cmp(&(
+                b.name.to_lowercase(),
+                &b.name,
+                &b.path,
+            ))
+        });
         self.apps = sort_apps(entries, &self.sort)
             .into_iter()
             .filter_map(|app| rows.remove(&app.path))
@@ -79,7 +88,7 @@ impl<E: UninstallEngine> UninstallPage<E> {
         let path = app.path.clone();
         let job = tasks::plan(self.engine.clone(), self.list_ticket, app, self.installed());
         match ctx.spawn(job) {
-            Ok(_) => self.plan_task = Some(path),
+            Ok(task) => self.plan_task = Some((path, task.id())),
             Err(error) => {
                 self.plans.insert(path, PlanRead::Failed(error.to_string()));
             }
@@ -156,7 +165,7 @@ impl<E: UninstallEngine> UninstallPage<E> {
                 .collect(),
             hard,
         );
-        self.phase = match ctx.spawn(tasks::run(self.engine.clone(), batch, hard)) {
+        self.phase = match ctx.spawn_write(tasks::run(self.engine.clone(), batch, hard)) {
             Ok(task) => Phase::Running { run, task },
             Err(error) => Phase::Done(Run::refused(
                 run.lines

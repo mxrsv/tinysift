@@ -98,7 +98,7 @@ fn the_figure_is_the_handed_sum_for_every_selection() {
         ..Default::default()
     };
     for picks in 0u32..128 {
-        let mut listing = Listing::new(discovery());
+        let mut listing = Listing::new(discovery(), None);
         for (index, entry) in listing.entries.iter_mut().enumerate() {
             entry.ticked = picks & (1 << index) != 0;
         }

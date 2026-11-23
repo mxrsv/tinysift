@@ -1658,6 +1658,7 @@ dependencies = [
  "signal-hook",
  "tempfile",
  "tiny-core",
+ "unicode-segmentation",
  "unicode-width",
 ]
 

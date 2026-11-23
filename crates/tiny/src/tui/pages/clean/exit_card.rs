@@ -4,7 +4,7 @@
 use crate::tui::styled_line::StyledLine;
 use crate::tui::widgets::overlay_box::Overlay;
 use crate::tui::widgets::size_format::format_size;
-use crate::tui::widgets::text_fit::cut;
+use crate::tui::widgets::text_fit::{fill, fill_left};
 
 use super::run::Session;
 use super::wording::seconds;
@@ -22,8 +22,8 @@ pub fn exit_card(session: &Session) -> Option<Vec<StyledLine>> {
     let totals = session.totals;
     let rows = session.rows.iter().take(SHOWN).map(|(_, label, bytes)| {
         StyledLine::new()
-            .plain(format!("  {:<NAME_WIDTH$}", cut(label, NAME_WIDTH)))
-            .dim(format!("{:>SIZE_WIDTH$}", format_size(*bytes)))
+            .plain(format!("  {}", fill(label, NAME_WIDTH)))
+            .dim(fill_left(&format_size(*bytes), SIZE_WIDTH))
     });
     let more = session.rows.len().saturating_sub(SHOWN);
     let lines = [
@@ -47,11 +47,17 @@ pub fn exit_card(session: &Session) -> Option<Vec<StyledLine>> {
         (totals.for_good > 0)
             .then(|| StyledLine::new().dim(format!("  For good {}", format_size(totals.for_good)))),
     )
-    .chain((totals.kept > 0).then(|| {
-        StyledLine::new().warn("● ").dim(format!(
-            "Kept {} · run sift to see why",
-            format_size(totals.kept)
+    .chain((totals.requested > 0).then(|| {
+        StyledLine::new().dim(format!(
+            "  Requested {} · a tool finishes it",
+            format_size(totals.requested)
         ))
+    }))
+    // What was kept and its size only: a new session cannot say why (C8).
+    .chain((totals.kept > 0).then(|| {
+        StyledLine::new()
+            .warn("● ")
+            .dim(format!("Kept {}", format_size(totals.kept)))
     }))
     .collect();
     let card = Overlay {

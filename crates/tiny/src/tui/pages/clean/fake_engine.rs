@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Condvar, Mutex};
 
-use tiny_core::clean::execute::{GroupOutcome, ObservedRun};
+use tiny_core::clean::execute::{GroupOutcome, ObservedRun, ReviewExclusion};
 use tiny_core::clean::types::{ExecReport, RiskLevel};
 
 use super::engine::{Category, CleanEngine, Discovery, Finding, GroupObserver, Plan, Progressed};
@@ -24,6 +24,13 @@ pub struct FakeEngine {
     pub keep: Mutex<HashMap<PathBuf, String>>,
     /// The error `execute` returns before any group, as a busy kept-paths store does.
     pub refuse: Mutex<Option<String>>,
+    /// `(category, error)`: the engine stops inside that category, as a
+    /// failing tool does, and the run returns the error.
+    pub stop_in: Mutex<Option<(String, String)>>,
+    /// Paths a tool is asked to remove: reported as requested, not removed.
+    pub request: Mutex<Vec<PathBuf>>,
+    /// The categories `execute` ran, in order.
+    pub ran: Mutex<Vec<String>>,
     pub plans: Mutex<Vec<Plan>>,
     pub reads: Mutex<Vec<bool>>,
     /// While true, `execute` waits before its first group.
@@ -95,22 +102,34 @@ impl CleanEngine for FakeEngine {
             return Err(error);
         }
         let keep = self.keep.lock().unwrap().clone();
+        let request = self.request.lock().unwrap().clone();
+        let stop_in = self.stop_in.lock().unwrap().clone();
+        let rule = ReviewExclusion::new(&plan.excluded);
         let mut run = ObservedRun::default();
         for (index, group) in plan.groups.iter().enumerate() {
+            self.ran.lock().unwrap().push(group.id.clone());
             let mut report = ExecReport::default();
-            for item in group
-                .items
-                .iter()
-                .filter(|i| !plan.excluded.contains(&i.path))
-            {
+            for item in group.items.iter().filter(|i| !rule.keeps(&i.path)) {
                 match keep.get(&item.path) {
                     Some(reason) => report.failed.push((item.path.clone(), reason.clone())),
+                    None if request.contains(&item.path) => {
+                        report.removal_requested.push(item.path.clone())
+                    }
                     None => report.removed_paths.push(item.path.clone()),
                 }
+            }
+            if let Some((_, error)) = stop_in.as_ref().filter(|(id, _)| *id == group.id) {
+                let _ = on_group(&GroupOutcome {
+                    category_id: group.id.clone(),
+                    report: ExecReport::default(),
+                    stopped: Some(error.clone()),
+                });
+                return Err(error.clone());
             }
             let outcome = GroupOutcome {
                 category_id: group.id.clone(),
                 report,
+                stopped: None,
             };
             let flow = on_group(&outcome);
             run.report.merge(outcome.report);

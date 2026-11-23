@@ -8,7 +8,7 @@ use tiny_core::scan::types::FileEntry;
 use crate::tui::pages::Detail;
 use crate::tui::styled_line::{Role, StyledLine};
 use crate::tui::widgets::size_format::{format_count, format_size};
-use crate::tui::widgets::spinner::spinner_glyph;
+use crate::tui::widgets::spinner::spinner_line;
 use crate::tui::widgets::text_fit::{middle_ellipsis, wrap, wrap_path};
 
 /// Cells before the path: lead (2), size (10), age (7), gap (2).
@@ -58,9 +58,15 @@ pub fn idle() -> StyledLine {
 }
 
 pub fn scanning(text: Option<&str>, tick: u64) -> StyledLine {
-    StyledLine::new()
-        .push(Role::Storage, format!("{} ", spinner_glyph(tick)))
-        .dim(format!("{}…", text.unwrap_or("Starting")))
+    spinner_line(tick, format!("{}…", text.unwrap_or("Starting")))
+}
+
+/// A scan was asked for while the stopped one still walks.
+pub fn waiting_for_stop(tick: u64) -> StyledLine {
+    spinner_line(
+        tick,
+        "The previous scan is still stopping; this one starts when it ends…",
+    )
 }
 
 pub fn nothing_found() -> Vec<StyledLine> {

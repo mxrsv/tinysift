@@ -13,7 +13,7 @@ use crossterm::terminal::{
     disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen,
 };
 
-use super::work::LoopEvent;
+use super::work::{LoopEvent, SignalKind};
 
 /// True between entering and restoring the real terminal.
 static ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -105,15 +105,21 @@ pub fn install_panic_hook() {
     }));
 }
 
-/// SIGTERM, SIGHUP and SIGINT become [`LoopEvent::Signal`], handled as `q`.
+/// SIGTERM, SIGHUP and SIGINT become [`LoopEvent::Signal`], handled as `q`;
+/// a second SIGTERM or SIGINT during a run quits at once (S6), a SIGHUP never does.
 pub fn forward_signals(tx: Sender<LoopEvent>) -> io::Result<()> {
     use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
     let mut signals = signal_hook::iterator::Signals::new([SIGTERM, SIGHUP, SIGINT])?;
     std::thread::Builder::new()
         .name("sift-signals".into())
         .spawn(move || {
-            for _ in signals.forever() {
-                if tx.send(LoopEvent::Signal).is_err() {
+            for signal in signals.forever() {
+                let kind = if signal == SIGHUP {
+                    SignalKind::Hangup
+                } else {
+                    SignalKind::Terminate
+                };
+                if tx.send(LoopEvent::Signal(kind)).is_err() {
                     break;
                 }
             }

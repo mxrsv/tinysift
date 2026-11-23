@@ -3,20 +3,15 @@
 //! Pages describe what they draw with roles, never with colours: the frame
 //! resolves each [`Role`] through the [`Theme`](super::theme::Theme) when it
 //! paints, so `NO_COLOR` and the selected row are handled in one place.
-//! Widths are display cells (`unicode-width`), so a wide character never
-//! pushes a row past the terminal's edge.
+//! Widths are display cells measured per grapheme, exactly as ratatui
+//! measures what it draws, so a wide character, an emoji with a variation
+//! selector or a joined emoji never pushes a row past the terminal's edge.
 
-use unicode_width::UnicodeWidthChar;
+use ratatui::buffer::CellWidth;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// What a piece of text means; the theme decides how it looks.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "state and data roles are drawn by pages, plan tasks 05 to 08"
-    )
-)]
 pub enum Role {
     /// Ordinary text in the terminal's own foreground.
     #[default]
@@ -55,14 +50,22 @@ pub struct StyledLine {
     segs: Vec<Seg>,
 }
 
-/// Display width of one character; control characters count as zero.
-pub fn char_width(ch: char) -> usize {
-    ch.width().unwrap_or(0)
+/// The graphemes of `text` with the cells each takes as ratatui draws it: a
+/// grapheme holding a control character draws nothing.
+pub fn graphemes(text: &str) -> impl Iterator<Item = (&str, usize)> {
+    text.graphemes(true).map(|grapheme| {
+        let cells = if grapheme.contains(char::is_control) {
+            0
+        } else {
+            usize::from(grapheme.cell_width())
+        };
+        (grapheme, cells)
+    })
 }
 
 /// Display width of a string in terminal cells.
 pub fn text_width(text: &str) -> usize {
-    text.chars().map(char_width).sum()
+    graphemes(text).map(|(_, cells)| cells).sum()
 }
 
 macro_rules! role_builders {
@@ -129,7 +132,7 @@ impl StyledLine {
     }
 
     /// The text without roles.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by tests of every page"))]
+    #[cfg(test)]
     pub fn text(&self) -> String {
         self.segs.iter().map(|seg| seg.text.as_str()).collect()
     }
@@ -189,14 +192,13 @@ impl StyledLine {
                 break;
             }
             let mut text = String::new();
-            for ch in seg.text.chars() {
-                let w = char_width(ch);
+            for (grapheme, w) in graphemes(&seg.text) {
                 if w > left {
                     left = 0;
                     break;
                 }
                 left -= w;
-                text.push(ch);
+                text.push_str(grapheme);
             }
             if !text.is_empty() {
                 segs.push(Seg { text, ..seg });
@@ -207,15 +209,8 @@ impl StyledLine {
 }
 
 /// The state and data roles, which only pages draw.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "drawn by Clean, Processes and System, plan tasks 05 to 08"
-    )
-)]
 impl StyledLine {
-    role_builders!(ok => Ok, warn => Warn, storage => Storage, cpu => Cpu, memory => Memory);
+    role_builders!(ok => Ok, warn => Warn, storage => Storage);
 }
 
 impl From<&str> for StyledLine {
@@ -267,18 +262,22 @@ mod tests {
     }
 
     #[test]
+    fn width_is_counted_per_grapheme_as_ratatui_draws_it() {
+        // A heart with the emoji selector, a joined family, CJK.
+        assert_eq!(text_width("\u{2764}\u{FE0F}"), 2);
+        assert_eq!(text_width("\u{1F469}\u{200D}\u{1F4BB}"), 2);
+        assert_eq!(text_width("漢字"), 4);
+        assert_eq!(text_width("e\u{301}"), 1);
+        let line = StyledLine::from("ab\u{1F469}\u{200D}\u{1F4BB}cd").fit(4);
+        assert_eq!(line.width(), 4);
+        assert_eq!(line.text(), "ab… ");
+    }
+
+    #[test]
     fn data_and_state_roles_have_builders() {
-        let line = StyledLine::new()
-            .ok("✓")
-            .warn("review")
-            .storage("━")
-            .cpu("━")
-            .memory("━");
+        let line = StyledLine::new().ok("✓").warn("review").storage("━");
         let roles: Vec<_> = line.segs().iter().map(|s| s.role).collect();
-        assert_eq!(
-            roles,
-            [Role::Ok, Role::Warn, Role::Storage, Role::Cpu, Role::Memory]
-        );
+        assert_eq!(roles, [Role::Ok, Role::Warn, Role::Storage]);
     }
 
     #[test]

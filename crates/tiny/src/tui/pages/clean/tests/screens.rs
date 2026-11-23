@@ -115,6 +115,7 @@ fn removed(category: &str, paths: Vec<std::path::PathBuf>) -> Msg {
             removed_paths: paths,
             ..ExecReport::default()
         },
+        stopped: None,
     })
 }
 

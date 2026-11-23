@@ -8,9 +8,12 @@
 use std::ffi::OsString;
 use std::io::IsTerminal;
 
+use std::io::Write;
+
 use anyhow::Result;
 use clap::Parser;
 
+use super::app::SessionEnd;
 use super::event_loop;
 use super::exit_print::print_lines;
 use super::icons::IconMode;
@@ -20,6 +23,8 @@ use super::theme::Theme;
 
 /// Exit status when the terminal is too small, as for a usage error.
 const TOO_SMALL_STATUS: i32 = 2;
+/// Exit status after a second Ctrl-C cut a run short, as a shell reports SIGINT.
+const ABANDONED_STATUS: i32 = 130;
 
 /// What `main` does next.
 #[derive(Debug, PartialEq, Eq)]
@@ -56,9 +61,39 @@ pub fn launch() -> Result<Launch> {
     }
     let theme = Theme::from_env();
     let end = event_loop::run(setting.mode, theme)?;
-    print_lines(&mut std::io::stdout().lock(), &end.exit_card, &theme)?;
-    print_notices(end.notices.iter().chain(setting.notice.iter()));
-    Ok(Launch::Done(0))
+    let status = report(
+        &end,
+        setting.notice.as_slice(),
+        &mut std::io::stdout().lock(),
+        &mut std::io::stderr().lock(),
+        &theme,
+    )?;
+    Ok(Launch::Done(status))
+}
+
+/// Prints what a closed session leaves (the exit card on `out`, notices on
+/// `err`) and returns the exit status. A session left at once prints only
+/// the line saying what may be partly done.
+pub fn report(
+    end: &SessionEnd,
+    settings_notice: &[String],
+    out: &mut impl Write,
+    err: &mut impl Write,
+    theme: &Theme,
+) -> std::io::Result<i32> {
+    if let Some(step) = end.abandoned {
+        writeln!(err, "{}", abandoned_line(step))?;
+        return Ok(ABANDONED_STATUS);
+    }
+    print_lines(out, &end.exit_card, theme)?;
+    for notice in end.notices.iter().chain(settings_notice) {
+        writeln!(err, "{notice}")?;
+    }
+    Ok(0)
+}
+
+fn abandoned_line(step: &str) -> String {
+    format!("Quit at once: a {step} was in progress and may be partly done.")
 }
 
 /// No arguments, or only `--icons <set>` / `--icons=<set>`.
@@ -133,6 +168,23 @@ mod tests {
         assert!(line.contains("80×24") && line.contains("70×20"));
         assert!(line.contains("sift <command>"));
         assert!(too_small_line("tinysift", 70, 20).contains("tinysift <command>"));
+    }
+
+    #[test]
+    fn a_session_left_at_once_prints_one_line_and_exits_130() {
+        let end = SessionEnd {
+            exit_card: vec![crate::tui::styled_line::StyledLine::from("card")],
+            notices: vec!["a notice".into()],
+            abandoned: Some("category"),
+        };
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let status = report(&end, &[], &mut out, &mut err, &Theme::monochrome()).unwrap();
+        assert_eq!(status, 130);
+        assert!(out.is_empty());
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            "Quit at once: a category was in progress and may be partly done.\n"
+        );
     }
 
     #[test]

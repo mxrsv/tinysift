@@ -25,7 +25,7 @@ use super::app::{App, Flow, SessionEnd};
 use super::icons::IconMode;
 use super::pages::{register, AnyPage, Page, PageId, PageView, ViewCtx};
 use super::theme::Theme;
-use super::work::{LoopEvent, Spawner};
+use super::work::{LoopEvent, SignalKind, Spawner, TaskId};
 
 /// Terminal.app's default size.
 pub const STANDARD: (u16, u16) = (80, 24);
@@ -59,7 +59,7 @@ blank_page!(BlankProcesses, PageId::Processes);
 blank_page!(BlankSystem, PageId::System);
 
 /// Five blank pages in tab order.
-fn blank_pages() -> Vec<Box<dyn AnyPage>> {
+pub fn blank_pages() -> Vec<Box<dyn AnyPage>> {
     vec![
         register(BlankClean),
         register(BlankUninstall),
@@ -75,7 +75,7 @@ pub struct PageHarness {
     spawner: Spawner,
     terminal: Terminal<TestBackend>,
     theme: Theme,
-    exited: bool,
+    flow: Flow,
 }
 
 impl PageHarness {
@@ -110,7 +110,7 @@ impl PageHarness {
             spawner,
             terminal: Terminal::new(TestBackend::new(width, height)).expect("test backend"),
             theme: Theme::coloured(),
-            exited: false,
+            flow: Flow::Continue,
         };
         harness.settle();
         harness
@@ -127,8 +127,7 @@ impl PageHarness {
     }
 
     pub fn press_key(&mut self, key: KeyEvent) -> &mut Self {
-        self.handle(LoopEvent::Terminal(Event::Key(key)));
-        self
+        self.handle(LoopEvent::Terminal(Event::Key(key)))
     }
 
     /// Delivers `message` to `page` as if one of its tasks had sent it.
@@ -136,23 +135,40 @@ impl PageHarness {
         self.handle(LoopEvent::Page {
             page,
             message: Box::new(message),
-        });
-        self
+        })
     }
 
-    /// A task of `page` panicked with `reason`, as its worker reports it.
-    pub fn fail(&mut self, page: PageId, reason: &str) -> &mut Self {
+    /// The id of a task of `page` that has nothing to do with what the page
+    /// shows now, as a read it already stopped or replaced.
+    pub fn stale_task(&mut self, page: PageId) -> TaskId {
+        self.spawner
+            .spawn(page, |_: crate::tui::work::Worker<()>| {})
+            .expect("spawn")
+            .id()
+    }
+
+    /// Task `task` of `page` panicked with `reason`, as its worker reports it.
+    pub fn fail_task(&mut self, page: PageId, task: TaskId, reason: &str) -> &mut Self {
         self.handle(LoopEvent::TaskFailed {
             page,
+            task,
             reason: reason.into(),
-        });
-        self
+        })
     }
 
-    /// SIGTERM, SIGHUP or SIGINT arrived.
+    /// SIGTERM or SIGINT arrived.
     pub fn signal(&mut self) -> &mut Self {
-        self.handle(LoopEvent::Signal);
-        self
+        self.handle(LoopEvent::Signal(SignalKind::Terminate))
+    }
+
+    /// Keys can no longer be read.
+    pub fn lose_input(&mut self, reason: &str) -> &mut Self {
+        self.handle(LoopEvent::InputLost(reason.into()))
+    }
+
+    /// SIGHUP arrived: the terminal went away.
+    pub fn hangup(&mut self) -> &mut Self {
+        self.handle(LoopEvent::Signal(SignalKind::Hangup))
     }
 
     /// Handles queued events until no task runs and nothing is queued.
@@ -209,19 +225,25 @@ impl PageHarness {
         self.app.active()
     }
 
-    /// True once `q`, Ctrl-C or a signal ended the session.
+    /// True once `q`, Ctrl-C or a signal ended the session, normally or at once.
     pub fn exited(&self) -> bool {
-        self.exited
+        self.flow != Flow::Continue
+    }
+
+    /// How the session ended, or `Continue` while it runs.
+    pub fn flow(&self) -> Flow {
+        self.flow
     }
 
     pub fn finish(self) -> SessionEnd {
         self.app.finish()
     }
 
-    fn handle(&mut self, event: LoopEvent) {
-        if self.app.handle(event) == Flow::Exit {
-            self.exited = true;
+    fn handle(&mut self, event: LoopEvent) -> &mut Self {
+        if self.flow == Flow::Continue {
+            self.flow = self.app.handle(event);
         }
+        self
     }
 }
 

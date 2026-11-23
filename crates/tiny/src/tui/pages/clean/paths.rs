@@ -7,11 +7,12 @@ use crossterm::event::{KeyCode, KeyEvent};
 use crate::tui::pages::{Detail, KeyHint, PageView, ViewCtx};
 use crate::tui::styled_line::StyledLine;
 use crate::tui::widgets::list_cursor::ListCursor;
+use crate::tui::widgets::phrases::plural;
 use crate::tui::widgets::size_format::format_size;
-use crate::tui::widgets::text_fit::{middle_ellipsis, wrap, wrap_path};
+use crate::tui::widgets::text_fit::{fill, middle_ellipsis, wrap, wrap_path};
 
 use super::listing::Listing;
-use super::wording::{facts, plural, shown_path};
+use super::wording::{facts, shown_path};
 
 const NOTE: &str = "Unticking keeps this path and any picked folder above it.";
 /// Cells a path row spends besides the path: lead, tick, gap and size.
@@ -97,7 +98,7 @@ impl PathList {
                 } else {
                     StyledLine::new().faint("◯ ")
                 };
-                let name = format!("{shown:<width$}");
+                let name = fill(&shown, width);
                 let name = match (here, on) {
                     (true, _) => StyledLine::new().hi(name),
                     (false, true) => StyledLine::from(name),
@@ -109,8 +110,13 @@ impl PathList {
                     .dim(format!("{:>10}", format_size(item.size)))
             })
             .collect();
-        let kept: Vec<_> = group.items.iter().filter(|i| ticked(&i.path)).collect();
-        let kept_bytes = kept.iter().fold(0u64, |s, i| s.saturating_add(i.size));
+        let kept = group.items.iter().filter(|i| ticked(&i.path)).count();
+        // What enter hands over from this category: an unticked path elsewhere
+        // also keeps an item that holds it (S7).
+        let plan = listing.plan(tiny_core::clean::types::CleanAction::Trash);
+        let kept_bytes = plan
+            .handed_in(group)
+            .fold(0u64, |s, i| s.saturating_add(i.size));
         let header = vec![
             StyledLine::new().dim(format!(
                 "{} · {} · {}",
@@ -133,7 +139,7 @@ impl PathList {
                 StyledLine::new()
                     .hi(format!(
                         "{} of {}",
-                        count(kept.len() as u64),
+                        count(kept as u64),
                         count(group.items.len() as u64)
                     ))
                     .dim(" paths ticked    ")
@@ -160,7 +166,7 @@ impl PathList {
             .chain([StyledLine::new().dim(size.as_str()), StyledLine::new()])
             .chain(facts.iter().map(|(label, value)| {
                 StyledLine::new()
-                    .dim(format!("{label:<FACT_LABEL$}"))
+                    .dim(fill(label, FACT_LABEL))
                     .plain(value.as_str())
             }))
             .chain((!facts.is_empty()).then(StyledLine::new))

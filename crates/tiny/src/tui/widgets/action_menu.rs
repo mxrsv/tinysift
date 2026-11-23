@@ -33,36 +33,30 @@ pub enum MenuReply {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "opened by Clean and Uninstall, plan tasks 07 and 09"
-    )
-)]
 pub struct ActionMenu {
     title: String,
     choices: Vec<MenuChoice>,
+    facts: Vec<StyledLine>,
     warning: Option<String>,
     selected: usize,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "opened by Clean and Uninstall, plan tasks 07 and 09"
-    )
-)]
 impl ActionMenu {
     /// A menu with the first choice highlighted.
     pub fn new(title: impl Into<String>, choices: Vec<MenuChoice>) -> Self {
         Self {
             title: title.into(),
             choices,
+            facts: Vec::new(),
             warning: None,
             selected: 0,
         }
+    }
+
+    /// Lines under the choices that say what the choices act on, e.g. how
+    /// much of the total is the app, its cache and its data.
+    pub fn with_facts(self, facts: Vec<StyledLine>) -> Self {
+        Self { facts, ..self }
     }
 
     /// A red `●` line under the choices, e.g. "pnpm store: no Trash, removed for good by any choice."
@@ -73,6 +67,7 @@ impl ActionMenu {
         }
     }
 
+    #[cfg(test)]
     pub fn selected(&self) -> usize {
         self.selected
     }
@@ -149,9 +144,16 @@ impl ActionMenu {
                 .chain(std::iter::once(StyledLine::new()))
                 .collect::<Vec<_>>()
         });
+        let facts = (!self.facts.is_empty()).then(|| {
+            self.facts
+                .iter()
+                .cloned()
+                .chain(std::iter::once(StyledLine::new()))
+        });
         let lines = std::iter::once(StyledLine::new())
             .chain(rows)
             .chain(std::iter::once(StyledLine::new()))
+            .chain(facts.into_iter().flatten())
             .chain(warning)
             .collect();
         Overlay {

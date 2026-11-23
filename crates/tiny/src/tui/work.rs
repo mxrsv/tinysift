@@ -7,23 +7,27 @@
 
 use std::any::Any;
 use std::marker::PhantomData;
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::Sender;
 use std::sync::Arc;
 
 use super::pages::PageId;
 
+/// Which signal asked the session to end.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignalKind {
+    /// SIGHUP: the terminal went away. It never cuts a run short.
+    Hangup,
+    /// SIGINT or SIGTERM: someone asked to quit; a second one quits at once.
+    Terminate,
+}
+
 /// Everything that wakes the event loop.
 pub enum LoopEvent {
     Terminal(crossterm::event::Event),
+    /// Keys can no longer be read (the terminal is gone); the reason.
+    InputLost(String),
     /// A message a page's task sent; the page downcasts it to its own type.
-    #[cfg_attr(
-        not(test),
-        allow(
-            dead_code,
-            reason = "sent once a page spawns work, plan tasks 05 to 09"
-        )
-    )]
     Page {
         page: PageId,
         message: Box<dyn Any + Send>,
@@ -31,19 +35,27 @@ pub enum LoopEvent {
     /// A page's task panicked; the reason is shown to the page and after exit.
     TaskFailed {
         page: PageId,
+        task: TaskId,
         reason: String,
     },
     /// The free-disk figure for the tab bar.
     FreeSpace(Option<u64>),
-    /// SIGTERM, SIGHUP or SIGINT: quit as `q` does.
-    Signal,
+    Signal(SignalKind),
 }
 
-/// The sending side shared by every task, and a count of tasks still running.
+/// Which task a handle or a failure belongs to, so a page can tell its
+/// current task from one it stopped or replaced.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TaskId(u64);
+
+/// The sending side shared by every task, a count of tasks still running,
+/// and a count of those that change files.
 #[derive(Clone)]
 pub struct Spawner {
     tx: Sender<LoopEvent>,
     live: Arc<AtomicUsize>,
+    writes: Arc<AtomicUsize>,
+    next_id: Arc<AtomicU64>,
 }
 
 impl Spawner {
@@ -51,13 +63,20 @@ impl Spawner {
         Self {
             tx,
             live: Arc::new(AtomicUsize::new(0)),
+            writes: Arc::new(AtomicUsize::new(0)),
+            next_id: Arc::new(AtomicU64::new(0)),
         }
     }
 
     /// Tasks spawned and not yet finished.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by the page test harness"))]
+    #[cfg(test)]
     pub fn live_tasks(&self) -> usize {
         self.live.load(Ordering::SeqCst)
+    }
+
+    /// Tasks spawned with [`spawn_write`](Self::spawn_write) and not yet finished.
+    pub fn writes_in_progress(&self) -> usize {
+        self.writes.load(Ordering::SeqCst)
     }
 
     /// Runs `job` on its own thread. A panic inside it is caught and reported
@@ -67,6 +86,30 @@ impl Spawner {
         M: Send + 'static,
         F: FnOnce(Worker<M>) + Send + 'static,
     {
+        self.spawn_counted(page, job, None)
+    }
+
+    /// [`spawn`](Self::spawn) for a task that changes files: the process does
+    /// not end while one runs, even when the UI thread fails (I14).
+    pub fn spawn_write<M, F>(&self, page: PageId, job: F) -> std::io::Result<TaskHandle>
+    where
+        M: Send + 'static,
+        F: FnOnce(Worker<M>) + Send + 'static,
+    {
+        self.spawn_counted(page, job, Some(LiveTask::start(self.writes.clone())))
+    }
+
+    fn spawn_counted<M, F>(
+        &self,
+        page: PageId,
+        job: F,
+        write: Option<LiveTask>,
+    ) -> std::io::Result<TaskHandle>
+    where
+        M: Send + 'static,
+        F: FnOnce(Worker<M>) + Send + 'static,
+    {
+        let id = TaskId(self.next_id.fetch_add(1, Ordering::SeqCst));
         let cancel = Arc::new(AtomicBool::new(false));
         let worker = Worker {
             tx: self.tx.clone(),
@@ -76,18 +119,20 @@ impl Spawner {
         };
         let name = format!("sift-{}", page.title().to_lowercase());
         self.run_counted(name, move |tx| {
+            let _write = write;
             let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| job(worker)));
             if let Err(payload) = outcome {
                 let _ = tx.send(LoopEvent::TaskFailed {
                     page,
+                    task: id,
                     reason: panic_reason(payload.as_ref()),
                 });
             }
         })?;
-        Ok(TaskHandle { cancel })
+        Ok(TaskHandle { cancel, id })
     }
 
-    /// Runs `job` on a named thread counted in [`live_tasks`](Self::live_tasks).
+    /// Runs `job` on a named thread counted in `live_tasks`.
     pub fn run_counted<F>(&self, name: String, job: F) -> std::io::Result<()>
     where
         F: FnOnce(&Sender<LoopEvent>) + Send + 'static,
@@ -127,10 +172,6 @@ fn panic_reason(payload: &(dyn Any + Send)) -> String {
 }
 
 /// The task's side: send results, and check whether the page asked it to stop.
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "handed to page tasks, plan tasks 05 to 09")
-)]
 pub struct Worker<M> {
     tx: Sender<LoopEvent>,
     page: PageId,
@@ -165,22 +206,21 @@ impl<M: Send + 'static> Worker<M> {
 #[derive(Clone, Debug)]
 pub struct TaskHandle {
     cancel: Arc<AtomicBool>,
+    id: TaskId,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "kept by pages that can stop work, plan tasks 06 and 07"
-    )
-)]
 impl TaskHandle {
     pub fn cancel(&self) {
         self.cancel.store(true, Ordering::SeqCst);
     }
 
+    #[cfg(test)]
     pub fn is_cancelled(&self) -> bool {
         self.cancel.load(Ordering::SeqCst)
+    }
+
+    pub fn id(&self) -> TaskId {
+        self.id
     }
 }
 
@@ -238,7 +278,7 @@ mod tests {
             })
             .unwrap();
         match rx.recv_timeout(Duration::from_secs(5)).unwrap() {
-            LoopEvent::TaskFailed { page, reason } => {
+            LoopEvent::TaskFailed { page, reason, .. } => {
                 assert_eq!(page, PageId::System);
                 assert_eq!(reason, "sampler broke");
             }
@@ -251,6 +291,48 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("the task is still counted");
+    }
+
+    #[test]
+    fn a_failure_names_the_task_that_failed() {
+        let (tx, rx) = mpsc::channel();
+        let spawner = Spawner::new(tx);
+        let first = spawner.spawn(PageId::Scan, |_: Worker<()>| {}).unwrap();
+        let second = spawner
+            .spawn(PageId::Scan, |_: Worker<()>| panic!("late walk"))
+            .unwrap();
+        assert_ne!(first.id(), second.id());
+        let failed = rx
+            .iter()
+            .find_map(|event| match event {
+                LoopEvent::TaskFailed { task, .. } => Some(task),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(failed, second.id());
+    }
+
+    #[test]
+    fn a_write_is_counted_until_its_thread_ends() {
+        let (tx, _rx) = mpsc::channel();
+        let spawner = Spawner::new(tx);
+        let (go, wait) = mpsc::channel::<()>();
+        spawner
+            .spawn_write(PageId::Clean, move |_: Worker<()>| {
+                wait.recv().unwrap();
+                panic!("the step failed");
+            })
+            .unwrap();
+        spawner.spawn(PageId::Scan, |_: Worker<()>| {}).unwrap();
+        assert_eq!(spawner.writes_in_progress(), 1);
+        go.send(()).unwrap();
+        for _ in 0..500 {
+            if spawner.writes_in_progress() == 0 {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("the write is still counted");
     }
 
     #[test]

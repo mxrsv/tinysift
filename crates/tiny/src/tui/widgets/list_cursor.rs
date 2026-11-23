@@ -8,10 +8,6 @@
 use crossterm::event::{KeyCode, KeyEvent};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    allow(dead_code, reason = "used by every page list, plan tasks 05 to 09")
-)]
 pub struct ListCursor {
     index: usize,
 }

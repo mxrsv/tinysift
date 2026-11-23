@@ -12,7 +12,7 @@ use super::pages::{AnyPage, FrameRequest, KeyHint, KeyReply, PageEnv, PageId, Vi
 use super::styled_line::{text_width, StyledLine};
 use super::theme::Theme;
 use super::widgets::overlay_box::Overlay;
-use super::work::{LoopEvent, Spawner};
+use super::work::{LoopEvent, SignalKind, Spawner};
 
 /// Reads the free space of the startup volume; runs on a worker thread.
 pub type FreeSpaceReader = fn() -> Option<u64>;
@@ -20,7 +20,10 @@ pub type FreeSpaceReader = fn() -> Option<u64>;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flow {
     Continue,
+    /// Every page let go: leave normally.
     Exit,
+    /// A second Ctrl-C or SIGTERM while a write was finishing: leave at once.
+    Abandon,
 }
 
 /// What the session leaves behind once the alternate screen is gone.
@@ -30,6 +33,9 @@ pub struct SessionEnd {
     pub exit_card: Vec<StyledLine>,
     /// Printed to stderr, one line each.
     pub notices: Vec<String>,
+    /// The session was left at once while this step (`category`, `app`) was
+    /// in progress: nothing else is printed and the status is 130 (S6).
+    pub abandoned: Option<&'static str>,
 }
 
 pub struct App {
@@ -42,6 +48,7 @@ pub struct App {
     free_space: FreeSpaceReader,
     icons: IconMode,
     quitting: bool,
+    abandoned: Option<&'static str>,
     too_small: bool,
     tick: u64,
     spawner: Spawner,
@@ -67,6 +74,7 @@ impl App {
             free_space,
             icons,
             quitting: false,
+            abandoned: None,
             too_small: false,
             tick: 0,
             spawner,
@@ -86,7 +94,7 @@ impl App {
         self.call(page, |p, env| p.on_show(env));
     }
 
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by the page test harness"))]
+    #[cfg(test)]
     pub fn active(&self) -> PageId {
         self.active
     }
@@ -102,26 +110,57 @@ impl App {
     }
 
     pub fn handle(&mut self, event: LoopEvent) -> Flow {
+        self.apply(event);
+        self.flow()
+    }
+
+    fn apply(&mut self, event: LoopEvent) {
         match event {
             LoopEvent::Terminal(Event::Key(key)) if key.kind != KeyEventKind::Release => {
                 self.on_key(key);
             }
             LoopEvent::Terminal(_) => {}
+            LoopEvent::InputLost(reason) => {
+                self.terminal_lost(&reason);
+            }
             LoopEvent::Page { page, message } => {
                 self.call(page, |p, env| p.on_message(message, env));
             }
-            LoopEvent::TaskFailed { page, reason } => {
+            LoopEvent::TaskFailed { page, task, reason } => {
                 self.notices.push(format!("{}: {reason}", page.title()));
-                self.call(page, |p, env| p.on_task_failed(&reason, env));
+                self.call(page, |p, env| p.on_task_failed(task, &reason, env));
             }
             LoopEvent::FreeSpace(bytes) => self.free_bytes = bytes,
-            LoopEvent::Signal => self.request_quit(),
+            LoopEvent::Signal(SignalKind::Hangup) => self.request_quit(false),
+            LoopEvent::Signal(SignalKind::Terminate) => self.request_quit(true),
         }
-        if self.quitting && !self.pages.iter().any(|page| page.holds_exit()) {
+    }
+
+    fn flow(&self) -> Flow {
+        if self.abandoned.is_some() {
+            Flow::Abandon
+        } else if self.quitting && self.holder().is_none() {
             Flow::Exit
         } else {
             Flow::Continue
         }
+    }
+
+    /// The terminal can no longer be drawn or read: quit as `q` does, so a
+    /// write in progress still finishes before the process leaves (S5).
+    pub fn terminal_lost(&mut self, reason: &str) -> Flow {
+        self.notices
+            .push(format!("the terminal went away: {reason}"));
+        self.request_quit(false);
+        self.flow()
+    }
+
+    /// The page holding the exit, if any.
+    fn holder(&self) -> Option<&dyn AnyPage> {
+        self.pages
+            .iter()
+            .find(|page| page.holds_exit())
+            .map(|page| page.as_ref())
     }
 
     pub fn draw(&mut self, buf: &mut Buffer, area: Rect, theme: &Theme) {
@@ -147,6 +186,18 @@ impl App {
         };
         let index = self.active.index();
         let mut view = self.pages[index].view(&ctx);
+        if let Some(step) = self
+            .quitting
+            .then(|| self.holder())
+            .flatten()
+            .map(|p| p.held_step())
+        {
+            view.foot = Some(StyledLine::new().warn("● ").dim(format!(
+                "Quitting after the {step} in progress · ctrl-c again quits now"
+            )));
+            view.keys = vec![KeyHint::new("ctrl-c", "quit now")];
+            view.overlay = None;
+        }
         if self.help_open {
             view.overlay = Some(help_overlay(&view.keys));
             view.keys = vec![KeyHint::new("esc", "close")];
@@ -172,6 +223,7 @@ impl App {
                 .flatten()
                 .collect(),
             notices: self.notices,
+            abandoned: self.abandoned,
         }
     }
 
@@ -179,14 +231,14 @@ impl App {
         let ctrl_c =
             key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL);
         if ctrl_c {
-            return self.request_quit();
+            return self.request_quit(true);
         }
         if self.quitting {
             return;
         }
         if self.too_small {
             if key.code == KeyCode::Char('q') {
-                self.request_quit();
+                self.request_quit(false);
             }
             return;
         }
@@ -211,14 +263,19 @@ impl App {
                     self.switch_to(page);
                 }
             }
-            KeyCode::Char('q') => self.request_quit(),
+            KeyCode::Char('q') => self.request_quit(false),
             KeyCode::Char('?') => self.help_open = true,
             _ => {}
         }
     }
 
-    fn request_quit(&mut self) {
+    /// `q`, Ctrl-C, a signal or a lost terminal. A `forceful` request (Ctrl-C,
+    /// SIGINT, SIGTERM) while an earlier one waits for a write leaves at once.
+    fn request_quit(&mut self, forceful: bool) {
         if self.quitting {
+            if forceful {
+                self.abandoned = self.holder().map(|page| page.held_step());
+            }
             return;
         }
         self.quitting = true;
@@ -228,8 +285,9 @@ impl App {
         }
     }
 
+    /// Only one run at a time: while a page holds the exit, no page is switched to (S4).
     fn switch_to(&mut self, page: PageId) {
-        if page == self.active {
+        if page == self.active || self.holder().is_some() {
             return;
         }
         self.active = page;
@@ -262,7 +320,6 @@ impl App {
             spawner: self.spawner.clone(),
             requests: Vec::new(),
             list_rows: self.list_rows[page.index()],
-            icons: self.icons,
         };
         let reply = f(self.pages[page.index()].as_mut(), &mut env);
         for request in env.requests {

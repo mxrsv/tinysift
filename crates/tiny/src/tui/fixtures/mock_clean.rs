@@ -9,8 +9,9 @@ use crate::tui::styled_line::{Role, StyledLine};
 use crate::tui::widgets::action_menu::{ActionMenu, MenuChoice};
 use crate::tui::widgets::confirm_box::{ConfirmBox, Tone};
 use crate::tui::widgets::meter::meter;
+use crate::tui::widgets::phrases::some_names;
 use crate::tui::widgets::size_format::{format_count, format_size};
-use crate::tui::widgets::text_fit::{cut, middle_ellipsis, wrap};
+use crate::tui::widgets::text_fit::{cut, fill, middle_ellipsis, wrap};
 
 struct Category {
     id: &'static str,
@@ -165,7 +166,7 @@ impl MockClean {
 
     fn row(&self, index: usize, c: &Category, ctx: &ViewCtx, max: u64) -> StyledLine {
         let name_width = ctx.list_width - 39 - if ctx.icons == IconMode::Nerd { 2 } else { 0 };
-        let name = format!("{:<name_width$}", cut(c.name, name_width));
+        let name = fill(c.name, name_width);
         let size = format!("{:>10}", format_size(c.bytes));
         let lead = if index == 0 {
             StyledLine::new().hi("❯ ")
@@ -317,13 +318,8 @@ impl Page for MockClean {
             }
             Boxed::Hard => {
                 let items: u64 = picked.iter().map(|c| c.items).sum();
-                let names = picked
-                    .iter()
-                    .take(3)
-                    .map(|c| c.name)
-                    .collect::<Vec<_>>()
-                    .join(", ");
-                let names = format!("{names} and {} more", picked.len() - 3);
+                let names: Vec<&str> = picked.iter().map(|c| c.name).collect();
+                let names = some_names(&names, 3, 28);
                 let facts = std::iter::once(StyledLine::from(format!(
                     "{} · {} items",
                     format_size(total),

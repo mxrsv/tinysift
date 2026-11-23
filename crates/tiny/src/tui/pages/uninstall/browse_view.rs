@@ -5,14 +5,15 @@ use tiny_core::uninstall::{valid_bundle_id, AppEntry, Plan};
 
 use super::engine::UninstallEngine;
 use super::model::{
-    figures, kept_place, kept_reason, label, last_used, plural, short_refusal, shown_path, AppRow,
+    figures, kept_place, kept_reason, label, last_used, short_refusal, shown_path, AppRow,
 };
 use super::{PlanRead, UninstallPage};
 use crate::tui::pages::{Detail, KeyHint, PageView, ViewCtx};
 use crate::tui::styled_line::StyledLine;
+use crate::tui::widgets::phrases::plural;
 use crate::tui::widgets::size_format::format_size;
-use crate::tui::widgets::spinner::spinner_glyph;
-use crate::tui::widgets::text_fit::{cut, wrap};
+use crate::tui::widgets::spinner::spinner_line;
+use crate::tui::widgets::text_fit::{cut, fill, wrap};
 
 /// Cells a row spends besides the name: cursor, tick, size, gap, last used, gap.
 const ROW_FIXED: usize = 37;
@@ -45,9 +46,7 @@ fn column_header(ctx: &ViewCtx) -> StyledLine {
 }
 
 fn spinner(ctx: &ViewCtx, text: &str) -> StyledLine {
-    StyledLine::new()
-        .storage(format!("{} ", spinner_glyph(ctx.tick)))
-        .dim(text)
+    spinner_line(ctx.tick, text)
 }
 
 /// The bundle identifier, or why leftovers were not looked up, as the command says.
@@ -160,7 +159,7 @@ impl<E: UninstallEngine> UninstallPage<E> {
 
     fn row(&self, index: usize, row: &AppRow, ctx: &ViewCtx) -> StyledLine {
         let nw = name_width(ctx);
-        let name = format!("{:<nw$}", cut(&row.app.name, nw.saturating_sub(1)));
+        let name = fill(&cut(&row.app.name, nw.saturating_sub(1)), nw);
         let ticked = self.ticked.contains(&row.app.path);
         let lead = if index == self.cursor.index() {
             StyledLine::new().hi("❯ ")
@@ -335,7 +334,7 @@ impl<E: UninstallEngine> UninstallPage<E> {
                 Some(PlanRead::Ready(plan)) => Some(figures(plan).removable),
                 _ => None,
             })
-            .sum();
+            .fold(0u64, u64::saturating_add);
         let failed = plans
             .iter()
             .filter(|read| matches!(read, Some(PlanRead::Failed(_))))

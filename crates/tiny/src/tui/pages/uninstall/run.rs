@@ -102,7 +102,7 @@ impl Run {
             .iter()
             .filter(|line| line.status == Status::Removed)
             .map(|line| line.bytes)
-            .sum()
+            .fold(0u64, u64::saturating_add)
     }
 
     pub fn count(&self, matches: impl Fn(&Status) -> bool) -> usize {

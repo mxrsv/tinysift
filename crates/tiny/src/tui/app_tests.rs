@@ -53,14 +53,16 @@ impl<const N: usize> Page for Probe<N> {
     fn on_key(&mut self, key: KeyEvent, ctx: &mut PageCtx<'_, String>) -> KeyReply {
         match key.code {
             KeyCode::Char('r') => ctx.reload(PageId::Processes),
-            KeyCode::Char('s') => ctx.show(PageId::System),
             KeyCode::Char('f') => ctx.refresh_free_space(),
-            KeyCode::Char('i') => self.note(format!("icons {}", ctx.icons().name())),
             KeyCode::Char('w') => {
                 ctx.spawn(|worker| {
                     worker.send("from a task".to_string());
                 })
                 .unwrap();
+            }
+            KeyCode::Char('p') => {
+                ctx.spawn(|_: crate::tui::work::Worker<String>| panic!("walker broke"))
+                    .unwrap();
             }
             _ if self.swallow => {}
             _ => return KeyReply::Ignored,
@@ -72,7 +74,12 @@ impl<const N: usize> Page for Probe<N> {
         self.note(message);
     }
 
-    fn on_task_failed(&mut self, reason: &str, _ctx: &mut PageCtx<'_, String>) {
+    fn on_task_failed(
+        &mut self,
+        _task: crate::tui::work::TaskId,
+        reason: &str,
+        _ctx: &mut PageCtx<'_, String>,
+    ) {
         self.note(format!("failed {reason}"));
     }
 
@@ -274,27 +281,12 @@ fn reload_shows_the_page_and_asks_it_to_read_again() {
 #[test]
 fn a_failed_task_reaches_its_page_and_the_notices() {
     let mut s = session(false);
-    s.screen.fail(PageId::Scan, "walker broke");
+    s.screen.press(KeyCode::Char('p')).settle();
     assert!(s
         .log
         .borrow()
-        .contains(&"Scan:failed walker broke".to_string()));
-    assert_eq!(s.screen.finish().notices, ["Scan: walker broke"]);
-}
-
-#[test]
-fn show_switches_without_a_reload_and_the_context_answers() {
-    let mut s = session(false);
-    s.screen
-        .press(KeyCode::Char('i'))
-        .press(KeyCode::Char('f'))
-        .settle();
-    s.screen.press(KeyCode::Char('s'));
-    assert_eq!(s.screen.active(), PageId::System);
-    let log = s.log.borrow();
-    assert!(log.contains(&"Clean:icons unicode".to_string()));
-    assert_eq!(log.last().unwrap(), "System:show");
-    assert!(!log.iter().any(|l| l.ends_with("reload")));
+        .contains(&"Clean:failed walker broke".to_string()));
+    assert_eq!(s.screen.finish().notices, ["Clean: walker broke"]);
 }
 
 #[test]
@@ -303,4 +295,83 @@ fn exit_cards_are_collected_in_tab_order() {
     let end = s.screen.finish();
     let text: Vec<String> = end.exit_card.iter().map(StyledLine::text).collect();
     assert_eq!(text, ["✓ Clean card", "✓ System card"]);
+}
+
+/// S4: only one run at a time, the same for every page.
+#[test]
+fn no_page_is_switched_to_while_a_page_holds_the_exit() {
+    let mut s = session(false);
+    s.holds.set(true);
+    for key in [
+        KeyCode::Tab,
+        KeyCode::BackTab,
+        KeyCode::Char('2'),
+        KeyCode::Char('5'),
+    ] {
+        s.screen.press(key);
+        assert_eq!(s.screen.active(), PageId::Clean, "{key:?}");
+    }
+    // A page's own request to show another page is held back too.
+    s.screen.press(KeyCode::Char('r'));
+    assert_eq!(s.screen.active(), PageId::Clean);
+    s.holds.set(false);
+    s.screen.press(KeyCode::Tab);
+    assert_eq!(s.screen.active(), PageId::Uninstall);
+}
+
+/// S6: the first request waits and says so; a second Ctrl-C or SIGTERM leaves at once.
+#[test]
+fn a_second_ctrl_c_while_waiting_leaves_at_once() {
+    let mut s = session(false);
+    s.holds.set(true);
+    s.screen.press_key(ctrl_c());
+    assert!(!s.screen.exited());
+    let text = s.screen.text();
+    assert!(
+        text.contains("● Quitting after the step in progress · ctrl-c again quits now"),
+        "{text}"
+    );
+    assert!(text.ends_with(" ctrl-c quit now"), "{text}");
+    s.screen.press(KeyCode::Char('q'));
+    assert!(!s.screen.exited(), "q again still waits");
+    s.screen.press_key(ctrl_c());
+    assert_eq!(s.screen.flow(), Flow::Abandon);
+    assert_eq!(s.screen.finish().abandoned, Some("step"));
+
+    let mut s = session(false);
+    s.holds.set(true);
+    s.screen.press(KeyCode::Char('q')).signal();
+    assert_eq!(s.screen.flow(), Flow::Abandon, "SIGTERM after q");
+}
+
+/// S5, S6: a closed terminal sends SIGHUP, maybe twice; the write still finishes.
+#[test]
+fn hangups_wait_for_the_write_and_never_leave_at_once() {
+    let mut s = session(false);
+    s.holds.set(true);
+    s.screen.hangup().hangup();
+    assert_eq!(s.screen.flow(), Flow::Continue);
+    s.holds.set(false);
+    s.screen
+        .deliver(PageId::Clean, "last step done".to_string());
+    assert_eq!(s.screen.flow(), Flow::Exit);
+    assert_eq!(s.screen.finish().abandoned, None);
+}
+
+/// S5: keys that can no longer be read quit as `q` does, after the write.
+#[test]
+fn lost_input_quits_after_the_write() {
+    let mut s = session(false);
+    s.holds.set(true);
+    s.screen.lose_input("Input/output error (os error 5)");
+    assert_eq!(s.screen.flow(), Flow::Continue);
+    s.holds.set(false);
+    s.screen
+        .deliver(PageId::Clean, "last step done".to_string());
+    assert_eq!(s.screen.flow(), Flow::Exit);
+    let end = s.screen.finish();
+    assert_eq!(
+        end.notices,
+        ["the terminal went away: Input/output error (os error 5)"]
+    );
 }

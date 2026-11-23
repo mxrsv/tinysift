@@ -37,19 +37,14 @@ pub fn short_refusal(reason: &str) -> &str {
     }
 }
 
-/// `today`, `298d ago`, `2,911d ago`, or `never` when macOS has no date.
+/// `today`, `298d ago`, `2,911d ago`, or `unknown` when macOS has no date,
+/// as `sift uninstall` says (S10): no date does not mean never used.
 pub fn last_used(days: Option<u64>) -> String {
     match days {
         Some(0) => "today".into(),
         Some(days) => format!("{}d ago", format_count(days)),
-        None => "never".into(),
+        None => "unknown".into(),
     }
-}
-
-/// `1 app`, `2 apps`, `1 entry`, `3 entries`.
-pub fn plural(count: usize, one: &str, many: &str) -> String {
-    let word = if count == 1 { one } else { many };
-    format!("{} {word}", format_count(count as u64))
 }
 
 /// The command's label for an entry (`app`, `cache`, `data`); entries the
@@ -225,7 +220,7 @@ mod tests {
     fn last_use_and_refusals_read_as_the_mock() {
         assert_eq!(last_used(Some(0)), "today");
         assert_eq!(last_used(Some(2_911)), "2,911d ago");
-        assert_eq!(last_used(None), "never");
+        assert_eq!(last_used(None), "unknown");
         assert_eq!(
             short_refusal("system app (com.apple.Keynote) — refuse"),
             "Apple app"

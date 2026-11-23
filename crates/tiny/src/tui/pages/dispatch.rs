@@ -7,6 +7,7 @@ use crossterm::event::KeyEvent;
 
 use super::contract::{KeyReply, Page, PageCtx, PageEnv, PageId, PageView, ViewCtx};
 use crate::tui::styled_line::StyledLine;
+use crate::tui::work::TaskId;
 
 /// [`Page`] without its message type, as the frame sees it.
 pub trait AnyPage {
@@ -16,10 +17,11 @@ pub trait AnyPage {
     fn on_reload(&mut self, env: &mut PageEnv);
     fn on_key(&mut self, key: KeyEvent, env: &mut PageEnv) -> KeyReply;
     fn on_message(&mut self, message: Box<dyn Any + Send>, env: &mut PageEnv);
-    fn on_task_failed(&mut self, reason: &str, env: &mut PageEnv);
+    fn on_task_failed(&mut self, task: TaskId, reason: &str, env: &mut PageEnv);
     fn is_busy(&self) -> bool;
     fn on_quit_request(&mut self, env: &mut PageEnv);
     fn holds_exit(&self) -> bool;
+    fn held_step(&self) -> &'static str;
     fn exit_card(&self) -> Option<Vec<StyledLine>>;
 }
 
@@ -58,8 +60,8 @@ impl<P: Page> AnyPage for Registered<P> {
         }
     }
 
-    fn on_task_failed(&mut self, reason: &str, env: &mut PageEnv) {
-        self.0.on_task_failed(reason, &mut PageCtx::new(env));
+    fn on_task_failed(&mut self, task: TaskId, reason: &str, env: &mut PageEnv) {
+        self.0.on_task_failed(task, reason, &mut PageCtx::new(env));
     }
 
     fn is_busy(&self) -> bool {
@@ -72,6 +74,10 @@ impl<P: Page> AnyPage for Registered<P> {
 
     fn holds_exit(&self) -> bool {
         self.0.holds_exit()
+    }
+
+    fn held_step(&self) -> &'static str {
+        self.0.held_step()
     }
 
     fn exit_card(&self) -> Option<Vec<StyledLine>> {

@@ -127,6 +127,36 @@ fn kept(path: &str, reason: &str) -> RemovalItem {
 }
 
 impl FakeEngine {
+    /// Only `apps`, each `(name, bundle bytes, days since last use)`, each
+    /// planned as its bundle, a cache of `cache` bytes and data of `data` bytes.
+    pub fn listing(apps: &[(&str, u64, Option<u64>)], cache: u64, data: u64) -> Self {
+        let apps: Vec<AppEntry> = apps
+            .iter()
+            .map(|&(name, bytes, days)| {
+                app(name, &format!("com.example.{}", name.len()), bytes, days)
+            })
+            .collect();
+        let items = apps
+            .iter()
+            .map(|entry| {
+                let id = entry.bundle_id.clone().unwrap_or_default();
+                (
+                    entry.name.clone(),
+                    vec![
+                        bundle(entry),
+                        self::cache(&format!("Caches/{id}"), cache),
+                        self::data(&format!("Application Support/{id}"), data),
+                    ],
+                )
+            })
+            .collect();
+        Self {
+            apps,
+            items,
+            ..Self::default()
+        }
+    }
+
     /// The mock's normal list: six apps, Keynote and Docker refused.
     pub fn normal() -> Self {
         let alt = app("AltTab", "com.lwouis.alt-tab-macos", 11_310_000, Some(298));

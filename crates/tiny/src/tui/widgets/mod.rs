@@ -7,6 +7,8 @@ pub mod list_cursor;
 pub mod list_window;
 pub mod meter;
 pub mod overlay_box;
+pub mod phrases;
+pub mod run_row;
 pub mod size_format;
 pub mod spinner;
 pub mod text_fit;

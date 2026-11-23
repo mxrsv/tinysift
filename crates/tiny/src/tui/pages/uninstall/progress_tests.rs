@@ -35,7 +35,6 @@ impl Direct {
                 spawner: Spawner::new(tx),
                 requests: Vec::new(),
                 list_rows: 18,
-                icons: IconMode::Unicode,
             },
             rx,
         };

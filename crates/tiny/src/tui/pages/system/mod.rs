@@ -9,14 +9,17 @@ use std::sync::Arc;
 use crossterm::event::{KeyCode, KeyEvent};
 
 use super::{KeyHint, KeyReply, Page, PageCtx, PageId, PageView, ViewCtx};
-use crate::tui::styled_line::{Role, StyledLine};
-use crate::tui::widgets::spinner::spinner_glyph;
+use crate::tui::styled_line::StyledLine;
+use crate::tui::widgets::spinner::spinner_line;
+use crate::tui::work::TaskId;
 use engine::{RealSystem, SystemEngine, SystemReading};
 
 pub struct SystemPage<E> {
     engine: Arc<E>,
     reading: Option<SystemReading>,
     status: Status,
+    /// The read in flight.
+    task: Option<TaskId>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +39,7 @@ impl<E: SystemEngine> SystemPage<E> {
             engine: Arc::new(engine),
             reading: None,
             status: Status::Idle,
+            task: None,
         }
     }
 
@@ -47,7 +51,10 @@ impl<E: SystemEngine> SystemPage<E> {
         self.status = match ctx.spawn(move |worker| {
             worker.send(engine.read());
         }) {
-            Ok(_) => Status::Reading,
+            Ok(task) => {
+                self.task = Some(task.id());
+                Status::Reading
+            }
             Err(error) => Status::Failed(error.to_string()),
         };
     }
@@ -85,9 +92,7 @@ impl<E: SystemEngine> Page for SystemPage<E> {
                 ..PageView::default()
             },
             None => PageView {
-                list: vec![StyledLine::new()
-                    .push(Role::Storage, format!("{} ", spinner_glyph(ctx.tick)))
-                    .dim("reading…")],
+                list: vec![spinner_line(ctx.tick, "reading…")],
                 keys,
                 ..PageView::default()
             },
@@ -117,10 +122,18 @@ impl<E: SystemEngine> Page for SystemPage<E> {
     fn on_message(&mut self, reading: SystemReading, _ctx: &mut PageCtx<'_, SystemReading>) {
         self.reading = Some(reading);
         self.status = Status::Idle;
+        self.task = None;
     }
 
-    fn on_task_failed(&mut self, reason: &str, _ctx: &mut PageCtx<'_, SystemReading>) {
-        self.status = Status::Failed(reason.to_string());
+    fn on_task_failed(
+        &mut self,
+        task: TaskId,
+        reason: &str,
+        _ctx: &mut PageCtx<'_, SystemReading>,
+    ) {
+        if self.task.take_if(|id| *id == task).is_some() {
+            self.status = Status::Failed(reason.to_string());
+        }
     }
 
     fn is_busy(&self) -> bool {

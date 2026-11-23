@@ -22,18 +22,12 @@ impl Theme {
         Self { colour: !no_colour }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by tests and the page test harness")
-    )]
+    #[cfg(test)]
     pub fn coloured() -> Self {
         Self { colour: true }
     }
 
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by tests and the page test harness")
-    )]
+    #[cfg(test)]
     pub fn monochrome() -> Self {
         Self { colour: false }
     }

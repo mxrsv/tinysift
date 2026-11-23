@@ -18,6 +18,8 @@ mod tasks;
 mod transitions;
 
 #[cfg(test)]
+mod consent_tests;
+#[cfg(test)]
 mod fake_engine;
 #[cfg(test)]
 mod fake_gate;
@@ -39,7 +41,7 @@ use super::{Page, PageCtx, PageId, PageView, ViewCtx};
 use crate::tui::widgets::action_menu::ActionMenu;
 use crate::tui::widgets::confirm_box::ConfirmBox;
 use crate::tui::widgets::list_cursor::ListCursor;
-use crate::tui::work::TaskHandle;
+use crate::tui::work::{TaskHandle, TaskId};
 use engine::{CoreEngine, UninstallEngine};
 use model::AppRow;
 use run::Run;
@@ -104,8 +106,8 @@ pub struct UninstallPage<E: UninstallEngine> {
     /// Picked apps, by bundle path.
     ticked: BTreeSet<PathBuf>,
     plans: HashMap<PathBuf, PlanRead>,
-    /// The one plan read in flight.
-    plan_task: Option<PathBuf>,
+    /// The one plan read in flight: the app's bundle path and the task.
+    plan_task: Option<(PathBuf, TaskId)>,
     /// The list read the shown rows and plans belong to.
     list_ticket: u64,
     next_ticket: u64,
@@ -220,7 +222,7 @@ impl<E: UninstallEngine> Page for UninstallPage<E> {
                 if ticket != self.list_ticket {
                     return;
                 }
-                if self.plan_task.as_ref() == Some(&path) {
+                if self.plan_task.as_ref().is_some_and(|(p, _)| *p == path) {
                     self.plan_task = None;
                 }
                 let read = result.map_or_else(PlanRead::Failed, PlanRead::Ready);
@@ -246,24 +248,31 @@ impl<E: UninstallEngine> Page for UninstallPage<E> {
         }
     }
 
-    fn on_task_failed(&mut self, reason: &str, ctx: &mut PageCtx<'_, Self::Msg>) {
+    fn on_task_failed(&mut self, task: TaskId, reason: &str, ctx: &mut PageCtx<'_, Self::Msg>) {
         // Every job turns an engine panic into its own answer; this is the
-        // fallback for one that ended without sending it.
+        // fallback for one that ended without sending it. Only a task the
+        // page still owns may change what it shows.
+        if self.plan_task.as_ref().is_some_and(|(_, id)| *id == task) {
+            if let Some((path, _)) = self.plan_task.take() {
+                self.plans.insert(path, PlanRead::Failed(reason.into()));
+            }
+            return;
+        }
         match &self.phase {
-            Phase::Running { .. } => self.end_run(Some(reason), ctx),
-            Phase::Reading { .. } => self.phase = Phase::Unreadable(reason.into()),
-            Phase::Freezing { .. } => {
+            Phase::Running { task: handle, .. } if handle.id() == task => {
+                self.end_run(Some(reason), ctx)
+            }
+            Phase::Reading { task: handle, .. } if handle.id() == task => {
+                self.phase = Phase::Unreadable(reason.into())
+            }
+            Phase::Freezing { task: handle, .. } if handle.id() == task => {
                 let picked = self.picked().into_iter().map(|row| row.app.name.clone());
                 let lines = picked
                     .map(|name| (name, 0, Some(reason.to_string())))
                     .collect();
                 self.phase = Phase::Done(Run::refused(lines));
             }
-            _ => {
-                if let Some(path) = self.plan_task.take() {
-                    self.plans.insert(path, PlanRead::Failed(reason.into()));
-                }
-            }
+            _ => {}
         }
     }
 
@@ -302,5 +311,9 @@ impl<E: UninstallEngine> Page for UninstallPage<E> {
 
     fn holds_exit(&self) -> bool {
         matches!(self.phase, Phase::Running { .. })
+    }
+
+    fn held_step(&self) -> &'static str {
+        "app"
     }
 }

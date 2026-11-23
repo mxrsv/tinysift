@@ -170,10 +170,13 @@ fn an_engine_refusal_ends_the_run_with_its_reason_and_no_card() {
 fn enter_on_done_measures_again_and_refreshes_the_free_space() {
     let engine = Arc::new(FakeEngine::with(normal()));
     let mut page = CleanPage::new(engine.clone(), Arc::new(std::time::Instant::now));
-    let listing = Listing::new(Discovery {
-        categories: normal(),
-        ..Discovery::default()
-    });
+    let listing = Listing::new(
+        Discovery {
+            categories: normal(),
+            ..Discovery::default()
+        },
+        None,
+    );
     let mut run = Run::new(
         &listing.plan(CleanAction::Trash),
         &listing,
@@ -188,7 +191,6 @@ fn enter_on_done_measures_again_and_refreshes_the_free_space() {
         spawner: Spawner::new(tx),
         requests: Vec::new(),
         list_rows: 20,
-        icons: IconMode::Unicode,
     };
     let reply = page.on_key(
         KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE),

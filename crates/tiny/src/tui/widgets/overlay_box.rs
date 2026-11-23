@@ -22,19 +22,6 @@ impl Overlay {
             .min(MAX_BOX_WIDTH)
     }
 
-    /// Cells inside the borders, after the one-cell left margin: the width
-    /// a line can fill without being cut.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "used by the action menu and confirmation box, plan task 07"
-        )
-    )]
-    pub fn content_width(box_width: usize) -> usize {
-        box_width.saturating_sub(3)
-    }
-
     /// The box as rows exactly `width` cells wide.
     pub fn boxed(&self, width: usize) -> Vec<StyledLine> {
         let inner = width.saturating_sub(2);
@@ -87,6 +74,5 @@ mod tests {
         assert_eq!(Overlay::width_on(120), 58);
         assert_eq!(Overlay::width_on(80), 58);
         assert_eq!(Overlay::width_on(60), 54);
-        assert_eq!(Overlay::content_width(58), 55);
     }
 }

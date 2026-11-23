@@ -204,7 +204,7 @@ fn force_quit_uses_the_same_box_with_its_loss_in_red() {
     assert!(probe.calls.lock().unwrap().is_empty());
     screen
         .press(KeyCode::Char('X'))
-        .press(KeyCode::Tab)
+        .press(KeyCode::Right)
         .press(KeyCode::Enter)
         .settle();
     let calls = probe.calls.lock().unwrap().clone();

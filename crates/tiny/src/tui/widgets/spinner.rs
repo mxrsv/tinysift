@@ -4,6 +4,15 @@
 /// Frames in turning order, starting on the glyph the mock draws.
 const FRAMES: [char; 10] = ['⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏', '⠋', '⠙'];
 
+use crate::tui::styled_line::StyledLine;
+
+/// `⠹ measuring…`: the spinner in the storage colour, then what it waits for.
+pub fn spinner_line(tick: u64, text: impl Into<String>) -> StyledLine {
+    StyledLine::new()
+        .storage(format!("{} ", spinner_glyph(tick)))
+        .dim(text)
+}
+
 /// The spinner glyph for a frame-loop tick.
 pub fn spinner_glyph(tick: u64) -> char {
     FRAMES[(tick % FRAMES.len() as u64) as usize]

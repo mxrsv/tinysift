@@ -6,6 +6,7 @@
 //! about what may be listed, ticked or removed is the engine's.
 
 mod boxes;
+mod discovery_map;
 mod engine;
 mod exit_card;
 mod keys;
@@ -36,11 +37,11 @@ use crate::tui::styled_line::StyledLine;
 use crate::tui::widgets::action_menu::ActionMenu;
 use crate::tui::widgets::confirm_box::ConfirmBox;
 use crate::tui::widgets::list_cursor::ListCursor;
-use crate::tui::work::{TaskHandle, Worker};
+use crate::tui::work::{TaskHandle, TaskId, Worker};
 
 use engine::{CleanEngine, CoreEngine, Discovery};
 use list_view::{ListScreen, Measuring};
-use listing::Listing;
+use listing::{Choices, Listing};
 use paths::PathList;
 use run::{Run, Session};
 
@@ -83,6 +84,8 @@ pub struct CleanPage {
     reads: u64,
     opened: bool,
     listing: Option<Listing>,
+    /// The choices of the last listing, carried into the next read (S2).
+    carried: Option<Choices>,
     cursor: ListCursor,
     stage: Stage,
     session: Session,
@@ -97,6 +100,7 @@ impl CleanPage {
             reads: 0,
             opened: false,
             listing: None,
+            carried: None,
             cursor: ListCursor::default(),
             stage: Stage::Stopped,
             session: Session::default(),
@@ -114,6 +118,10 @@ impl CleanPage {
     /// Measures again; the rows of the last read stay on screen, frozen, until it ends.
     fn start_read(&mut self, ctx: &mut PageCtx<'_, Msg>) {
         self.cancel_read();
+        // A read that listed nothing (stopped, failed whole) keeps the choices before it.
+        if let Some(listing) = self.listing.as_ref().filter(|l| !l.entries.is_empty()) {
+            self.carried = Some(listing.choices(self.carried.as_ref()));
+        }
         self.reads += 1;
         let read = self.reads;
         let review = self.review;
@@ -147,10 +155,13 @@ impl CleanPage {
     }
 
     fn fail_read(&mut self, reason: String) {
-        self.listing = Some(Listing::new(Discovery {
-            failure: Some(reason),
-            ..Discovery::default()
-        }));
+        self.listing = Some(Listing::new(
+            Discovery {
+                failure: Some(reason),
+                ..Discovery::default()
+            },
+            None,
+        ));
         self.stage = Stage::Listed;
     }
 
@@ -159,7 +170,7 @@ impl CleanPage {
         let plan = listing.plan(action);
         let mut run = Run::new(&plan, listing, (self.clock)());
         let engine = self.engine.clone();
-        let spawned = ctx.spawn(move |worker: Worker<Msg>| {
+        let spawned = ctx.spawn_write(move |worker: Worker<Msg>| {
             let result = engine.execute(&plan, &mut |outcome| {
                 let open = worker.send(Msg::Group(outcome.clone()));
                 // Stop is checked between categories only: one in progress always finishes (I14).
@@ -282,7 +293,7 @@ impl Page for CleanPage {
             }
             Msg::Read { read, discovery } => {
                 if matches!(self.stage, Stage::Reading { read: current, .. } if current == read) {
-                    self.listing = Some(Listing::new(discovery));
+                    self.listing = Some(Listing::new(discovery, self.carried.as_ref()));
                     self.cursor = ListCursor::default();
                     self.stage = Stage::Listed;
                 }
@@ -296,10 +307,13 @@ impl Page for CleanPage {
         }
     }
 
-    fn on_task_failed(&mut self, reason: &str, ctx: &mut PageCtx<'_, Msg>) {
-        match self.stage {
-            Stage::Running(_) => self.end_run(Err(reason.to_string()), ctx),
-            Stage::Reading { .. } => self.fail_read(reason.to_string()),
+    fn on_task_failed(&mut self, task: TaskId, reason: &str, ctx: &mut PageCtx<'_, Msg>) {
+        let owns = |handle: &Option<TaskHandle>| handle.as_ref().is_some_and(|h| h.id() == task);
+        match &self.stage {
+            Stage::Running(run) if owns(&run.task) => self.end_run(Err(reason.to_string()), ctx),
+            Stage::Reading { task: handle, .. } if owns(handle) => {
+                self.fail_read(reason.to_string())
+            }
             _ => {}
         }
     }
@@ -319,6 +333,10 @@ impl Page for CleanPage {
 
     fn holds_exit(&self) -> bool {
         matches!(self.stage, Stage::Running(_))
+    }
+
+    fn held_step(&self) -> &'static str {
+        "category"
     }
 
     fn exit_card(&self) -> Option<Vec<StyledLine>> {

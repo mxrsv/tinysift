@@ -3,20 +3,18 @@
 //! spinner or `·`, then the outcome; and the dry-run list of what would go.
 
 use super::engine::UninstallEngine;
-use super::model::{figures, label, plural, shown_path, MENU_CONSENT};
+use super::model::{figures, label, shown_path, MENU_CONSENT};
 use super::run::{Run, Status};
 use super::tasks::FrozenApp;
 use super::UninstallPage;
 use crate::tui::pages::{Detail, KeyHint, PageView, ViewCtx};
 use crate::tui::styled_line::StyledLine;
 use crate::tui::widgets::list_cursor::ListCursor;
+use crate::tui::widgets::phrases::plural;
+use crate::tui::widgets::run_row::{run_row, Mark};
 use crate::tui::widgets::size_format::format_size;
-use crate::tui::widgets::spinner::spinner_glyph;
-use crate::tui::widgets::text_fit::{cut, wrap};
+use crate::tui::widgets::text_fit::{cut, fill, fill_left, wrap};
 
-/// Name column of a run line, as Clean's: at most 36 cells.
-const RUN_NAME: usize = 36;
-const RUN_FIXED: usize = 32;
 const SIZE_WIDTH: usize = 10;
 /// A dry-run entry: indent, label, size, space.
 const ENTRY_FIXED: usize = 4 + 6 + 8 + 1;
@@ -38,39 +36,34 @@ fn wrapped(text: &str, width: usize) -> impl Iterator<Item = StyledLine> {
 impl<E: UninstallEngine> UninstallPage<E> {
     /// While running (`live`) and after: the ✓ list and the outcome.
     pub(super) fn run_view(&self, ctx: &ViewCtx, run: &Run, live: bool) -> PageView {
-        let nw = RUN_NAME.min(ctx.list_width.saturating_sub(RUN_FIXED));
         let list = run
             .lines
             .iter()
             .map(|line| {
-                let name = format!("{:<nw$}", cut(&line.name, nw));
-                let size = |text: String| format!("{text:>SIZE_WIDTH$}");
-                match &line.status {
-                    Status::Removed => StyledLine::new()
-                        .ok("✓ ")
-                        .plain(name)
-                        .dim(size(format_size(line.bytes))),
-                    Status::Running => StyledLine::new()
-                        .storage(format!("{} ", spinner_glyph(ctx.tick)))
-                        .hi(name)
-                        .dim(if run.hard {
-                            "  deleting for good…"
+                let mark = match &line.status {
+                    Status::Removed => Mark::Done {
+                        figure: format_size(line.bytes),
+                        tail: StyledLine::new(),
+                    },
+                    Status::Running => Mark::Running {
+                        tick: ctx.tick,
+                        doing: if run.hard {
+                            "deleting for good…"
                         } else {
-                            "  moving to Trash…"
-                        }),
-                    Status::Waiting => StyledLine::new().faint("· ").dim(cut(&line.name, nw)),
-                    Status::Kept(reason) => StyledLine::new()
-                        .warn("● ")
-                        .plain(name)
-                        .dim(size("kept".into()))
-                        .dim(format!("  {reason}")),
-                    Status::NotRun => StyledLine::new()
-                        .faint("· ")
-                        .dim(name)
-                        .dim(size("not run".into())),
-                }
+                            "moving to Trash…"
+                        },
+                    },
+                    Status::Waiting => Mark::Waiting,
+                    Status::Kept(reason) => Mark::Kept { reason },
+                    Status::NotRun => Mark::NotRun,
+                };
+                run_row("", &line.name, mark, ctx.list_width)
             })
             .collect();
+        // A long run scrolls with the app in progress (C1).
+        let pin = live
+            .then(|| run.lines.iter().position(|l| l.status == Status::Running))
+            .flatten();
         let (title, full, brief, keys) = if live {
             Self::running_detail(run, ctx)
         } else {
@@ -78,6 +71,7 @@ impl<E: UninstallEngine> UninstallPage<E> {
         };
         PageView {
             list,
+            pin,
             detail: Some(Detail { title, full, brief }),
             keys,
             ..PageView::default()
@@ -245,13 +239,13 @@ impl<E: UninstallEngine> UninstallPage<E> {
             .flat_map(|app| {
                 let sums = figures(&app.plan);
                 let head = StyledLine::new()
-                    .hi(format!("{:<nw$}", cut(&app.plan.app.name, nw)))
-                    .dim(format!("{:>SIZE_WIDTH$}", format_size(sums.removable)));
+                    .hi(fill(&app.plan.app.name, nw))
+                    .dim(fill_left(&format_size(sums.removable), SIZE_WIDTH));
                 let entries = app.plan.items_for(MENU_CONSENT).map(|item| {
                     StyledLine::new()
                         .plain("  ")
-                        .dim(format!("{:<6}", label(item)))
-                        .plain(format!("{:>8}", format_size(item.size)))
+                        .dim(fill(label(item), 6))
+                        .plain(fill_left(&format_size(item.size), 8))
                         .plain(" ")
                         .dim(cut(&shown_path(&item.path, library), path_width))
                 });

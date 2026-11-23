@@ -14,7 +14,7 @@ use crossterm::event::KeyEvent;
 use crate::tui::icons::IconMode;
 use crate::tui::styled_line::StyledLine;
 use crate::tui::widgets::overlay_box::Overlay;
-use crate::tui::work::{Spawner, TaskHandle, Worker};
+use crate::tui::work::{Spawner, TaskHandle, TaskId, Worker};
 
 /// The five tabs, in tab-bar order.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -95,6 +95,9 @@ pub struct PageView {
     /// Index into `list` of the highlighted row; the frame keeps it in view
     /// and draws it reversed. The row itself starts with `❯ ` (the page draws it).
     pub cursor: Option<usize>,
+    /// A row kept in view without being highlighted (the category in
+    /// progress). With neither `cursor` nor `pin` the list shows from the top.
+    pub pin: Option<usize>,
     pub detail: Option<Detail>,
     /// The pinned line above the bottom rule, e.g. `6.3 GB picked in 3 categories`.
     pub foot: Option<StyledLine>,
@@ -160,8 +163,10 @@ pub trait Page {
     fn on_message(&mut self, _message: Self::Msg, _ctx: &mut PageCtx<'_, Self::Msg>) {}
 
     /// One of this page's tasks panicked; `reason` is also printed after exit.
-    /// Stop any spinner it drove and show the failure.
-    fn on_task_failed(&mut self, _reason: &str, _ctx: &mut PageCtx<'_, Self::Msg>) {}
+    /// Act only when `task` is one the page still owns ([`TaskHandle::id`]):
+    /// stop any spinner it drove and show the failure. A task the page
+    /// stopped or replaced must never end newer work.
+    fn on_task_failed(&mut self, _task: TaskId, _reason: &str, _ctx: &mut PageCtx<'_, Self::Msg>) {}
 
     /// True while work runs: the frame redraws on a timer so spinners turn.
     fn is_busy(&self) -> bool {
@@ -172,9 +177,16 @@ pub trait Page {
     /// tasks; a step that changes files finishes first (I14).
     fn on_quit_request(&mut self, _ctx: &mut PageCtx<'_, Self::Msg>) {}
 
-    /// True while a write must finish before the TUI may close.
+    /// True while a write must finish before the TUI may close. While any
+    /// page holds it, the frame does not switch pages.
     fn holds_exit(&self) -> bool {
         false
+    }
+
+    /// What the write in progress works through, for the line shown while
+    /// quitting waits for it: `category`, `app`.
+    fn held_step(&self) -> &'static str {
+        "step"
     }
 
     /// Lines printed to stdout after the TUI closes (the Clean result card, I24).
@@ -197,7 +209,6 @@ pub struct PageEnv {
     pub spawner: Spawner,
     pub requests: Vec<FrameRequest>,
     pub list_rows: usize,
-    pub icons: IconMode,
 }
 
 /// The page's handle on the frame during one call.
@@ -224,29 +235,18 @@ impl<'a, M: Send + 'static> PageCtx<'a, M> {
         self.env.spawner.spawn(self.env.page, job)
     }
 
+    /// [`spawn`](Self::spawn) for work that changes files (a clean, an
+    /// uninstall): the process waits for it even when the terminal is gone.
+    pub fn spawn_write<F>(&mut self, job: F) -> std::io::Result<TaskHandle>
+    where
+        F: FnOnce(Worker<M>) + Send + 'static,
+    {
+        self.env.spawner.spawn_write(self.env.page, job)
+    }
+
     /// Visible list rows in the last frame, for PgUp/PgDn.
     pub fn list_rows(&self) -> usize {
         self.env.list_rows
-    }
-
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "used by category rows in Clean, plan task 07")
-    )]
-    pub fn icons(&self) -> IconMode {
-        self.env.icons
-    }
-
-    /// Switch to `page` (it gets `on_show`).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "used to return to Clean after Uninstall, plan task 09"
-        )
-    )]
-    pub fn show(&mut self, page: PageId) {
-        self.env.requests.push(FrameRequest::Show(page));
     }
 
     /// Switch to `page` and ask it to read again: Done's enter returns to a

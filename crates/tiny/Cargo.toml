@@ -18,6 +18,7 @@ dialoguer = "0.12"
 ratatui = { version = "0.30", default-features = false, features = ["crossterm_0_29"] }
 crossterm = "0.29"
 libc = "0.2"
+unicode-segmentation = "1.13"
 unicode-width = "0.2"
 signal-hook = "0.3"
 

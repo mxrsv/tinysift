@@ -247,3 +247,36 @@ fn a_window_below_the_minimum_says_so_instead_of_drawing_the_frame() {
     assert!(text.contains("this window is 60×20"));
     assert!(!text.contains("Uninstall"));
 }
+
+/// C1: a pinned row stays in view without being highlighted; a list with
+/// neither a cursor nor a pin shows from its top, whatever the last offset.
+#[test]
+fn a_pinned_row_stays_in_view_and_a_list_without_one_starts_at_the_top() {
+    let geo = Geometry::new(80, 24);
+    let bar = TabBar {
+        active: PageId::Clean,
+        icons: IconMode::Unicode,
+        free_bytes: None,
+    };
+    let view = |pin| PageView {
+        list: (0..85)
+            .map(|i| StyledLine::from(format!("row {i}")))
+            .collect(),
+        pin,
+        ..PageView::default()
+    };
+    let shown = compose(&geo, &bar, &view(None), 40);
+    assert_eq!(shown.offset, 0);
+    assert_eq!(shown.rows[2].text().trim_end(), " row 0");
+    let pinned = compose(&geo, &bar, &view(Some(60)), 0);
+    let text: Vec<String> = pinned.rows.iter().map(StyledLine::text).collect();
+    assert!(
+        text.iter().any(|row| row.trim_end() == " row 60"),
+        "{text:?}"
+    );
+    // Nothing in the body is drawn as highlighted (the tab bar's active tab is).
+    let body = &pinned.rows[2..pinned.rows.len() - 2];
+    assert!(body
+        .iter()
+        .all(|row| row.segs().iter().all(|seg| !seg.selected)));
+}

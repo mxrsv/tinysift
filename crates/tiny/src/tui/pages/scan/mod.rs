@@ -1,6 +1,8 @@
 //! Scan: large and old files in Downloads, Desktop and Documents. Opening the
 //! tab reads nothing; enter starts the scan (I17). The only action is `o`,
-//! show the highlighted file in Finder.
+//! show the highlighted file in Finder. The engine's walk cannot be
+//! interrupted: a stopped walk runs to its end, and a new scan asked for
+//! meanwhile waits for it instead of walking beside it (C5).
 
 mod engine;
 mod view;
@@ -16,7 +18,7 @@ use tiny_core::scan::types::{FileEntry, ScanData};
 use super::{KeyHint, KeyReply, Page, PageCtx, PageId, PageView, ViewCtx};
 use crate::tui::styled_line::StyledLine;
 use crate::tui::widgets::list_cursor::ListCursor;
-use crate::tui::work::TaskHandle;
+use crate::tui::work::{TaskHandle, TaskId};
 use engine::{RealScan, ScanEngine};
 use view::Which;
 
@@ -66,16 +68,26 @@ struct Running {
     text: Option<String>,
 }
 
+/// A stopped walk that has not ended yet.
+struct Stopping {
+    run: u64,
+    task: TaskId,
+}
+
 pub struct ScanPage<E> {
     engine: Arc<E>,
     home: Option<PathBuf>,
     shown: Shown,
     running: Option<Running>,
+    stopping: Option<Stopping>,
+    /// A scan asked for while a stopped walk was still ending: it starts then.
+    queued: bool,
     /// Counts scans so a stopped one's late messages are ignored.
     runs: u64,
     which: Which,
     cursors: [ListCursor; 2],
-    revealing: bool,
+    /// The `open -R` in flight.
+    revealing: Option<TaskId>,
     reveal_error: Option<String>,
 }
 
@@ -90,10 +102,12 @@ impl<E: ScanEngine> ScanPage<E> {
             engine: Arc::new(engine),
             shown: Shown::Idle,
             running: None,
+            stopping: None,
+            queued: false,
             runs: 0,
             which: Which::Large,
             cursors: [ListCursor::default(); 2],
-            revealing: false,
+            revealing: None,
             reveal_error: None,
         }
     }
@@ -114,6 +128,10 @@ impl<E: ScanEngine> ScanPage<E> {
         if self.running.is_some() {
             return;
         }
+        if self.stopping.is_some() {
+            self.queued = true;
+            return;
+        }
         self.runs += 1;
         let run = self.runs;
         let engine = Arc::clone(&self.engine);
@@ -122,9 +140,8 @@ impl<E: ScanEngine> ScanPage<E> {
                 worker.send(ScanMsg::Progress { run, text });
             };
             let outcome = engine.scan(&progress).map(Found::from_scan);
-            if !worker.is_cancelled() {
-                worker.send(ScanMsg::Finished { run, outcome });
-            }
+            // Sent even when stopped: the page waits for this walk's end.
+            worker.send(ScanMsg::Finished { run, outcome });
         });
         match spawned {
             Ok(handle) => {
@@ -138,10 +155,24 @@ impl<E: ScanEngine> ScanPage<E> {
         }
     }
 
-    /// The engine's walk cannot be interrupted: its result is dropped when it ends.
+    /// The engine's walk cannot be interrupted: its result is dropped when it
+    /// ends, and no new walk starts before then.
     fn stop(&mut self) {
+        self.queued = false;
         if let Some(running) = self.running.take() {
             running.handle.cancel();
+            self.stopping = Some(Stopping {
+                run: running.run,
+                task: running.handle.id(),
+            });
+        }
+    }
+
+    /// The stopped walk ended: start the scan that waited for it.
+    fn stopped_walk_ended(&mut self, ctx: &mut PageCtx<'_, ScanMsg>) {
+        self.stopping = None;
+        if std::mem::take(&mut self.queued) {
+            self.start(ctx);
         }
     }
 
@@ -155,13 +186,13 @@ impl<E: ScanEngine> ScanPage<E> {
         match ctx.spawn(move |worker| {
             worker.send(ScanMsg::Revealed(engine.reveal(&path)));
         }) {
-            Ok(_) => self.revealing = true,
+            Ok(task) => self.revealing = Some(task.id()),
             Err(error) => self.reveal_error = Some(error.to_string()),
         }
     }
 
     fn keys(&self) -> Vec<KeyHint> {
-        let own = if self.running.is_some() {
+        let own = if self.running.is_some() || self.queued {
             vec![KeyHint::new("esc", "stop")]
         } else {
             match &self.shown {
@@ -263,6 +294,9 @@ impl<E: ScanEngine> Page for ScanPage<E> {
         if let Some(running) = &self.running {
             return self.message(vec![view::scanning(running.text.as_deref(), ctx.tick)]);
         }
+        if self.queued {
+            return self.message(vec![view::waiting_for_stop(ctx.tick)]);
+        }
         match &self.shown {
             Shown::Idle => self.message(vec![view::idle()]),
             Shown::Failed(error) => self.message(view::failed(
@@ -274,7 +308,7 @@ impl<E: ScanEngine> Page for ScanPage<E> {
     }
 
     fn on_key(&mut self, key: KeyEvent, ctx: &mut PageCtx<'_, ScanMsg>) -> KeyReply {
-        if self.running.is_some() {
+        if self.running.is_some() || self.queued {
             if key.code != KeyCode::Esc {
                 return KeyReply::Ignored;
             }
@@ -291,7 +325,7 @@ impl<E: ScanEngine> Page for ScanPage<E> {
         }
     }
 
-    fn on_message(&mut self, message: ScanMsg, _ctx: &mut PageCtx<'_, ScanMsg>) {
+    fn on_message(&mut self, message: ScanMsg, ctx: &mut PageCtx<'_, ScanMsg>) {
         match message {
             ScanMsg::Progress { run, text } => {
                 if let Some(running) = self.running.as_mut().filter(|r| r.run == run) {
@@ -299,6 +333,9 @@ impl<E: ScanEngine> Page for ScanPage<E> {
                 }
             }
             ScanMsg::Finished { run, outcome } => {
+                if self.stopping.as_ref().is_some_and(|s| s.run == run) {
+                    return self.stopped_walk_ended(ctx);
+                }
                 if self.running.as_ref().is_none_or(|r| r.run != run) {
                     return;
                 }
@@ -312,24 +349,26 @@ impl<E: ScanEngine> Page for ScanPage<E> {
                 };
             }
             ScanMsg::Revealed(result) => {
-                self.revealing = false;
+                self.revealing = None;
                 self.reveal_error = result.err();
             }
         }
     }
 
-    fn on_task_failed(&mut self, reason: &str, _ctx: &mut PageCtx<'_, ScanMsg>) {
-        // A stopped scan's failure is not shown: its result was already dropped.
-        if self.running.take().is_some() {
+    fn on_task_failed(&mut self, task: TaskId, reason: &str, ctx: &mut PageCtx<'_, ScanMsg>) {
+        if self.running.as_ref().is_some_and(|r| r.handle.id() == task) {
+            self.running = None;
             self.shown = Shown::Failed(reason.to_string());
-        } else if self.revealing {
-            self.revealing = false;
+        } else if self.stopping.as_ref().is_some_and(|s| s.task == task) {
+            // A stopped scan's failure is not shown: its result was already dropped.
+            self.stopped_walk_ended(ctx);
+        } else if self.revealing.take_if(|id| *id == task).is_some() {
             self.reveal_error = Some(reason.to_string());
         }
     }
 
     fn is_busy(&self) -> bool {
-        self.running.is_some()
+        self.running.is_some() || self.queued
     }
 
     fn on_quit_request(&mut self, _ctx: &mut PageCtx<'_, ScanMsg>) {

@@ -1,7 +1,9 @@
 //! Fitting text into a width: end ellipsis, middle ellipsis for paths, word
-//! wrap, and path wrap after a slash. Widths are display cells.
+//! wrap, path wrap after a slash, and padding to a column. Widths are display
+//! cells counted per grapheme, as ratatui counts them; never pad with
+//! `format!("{:<w$}")`, which counts characters.
 
-use crate::tui::styled_line::{char_width, text_width};
+use crate::tui::styled_line::{graphemes, text_width};
 
 /// At most `width` cells; cut text ends in `…`.
 pub fn cut(text: &str, width: usize) -> String {
@@ -12,6 +14,20 @@ pub fn cut(text: &str, width: usize) -> String {
         return String::new();
     }
     format!("{}…", take_front(text, width - 1))
+}
+
+/// Exactly `width` cells: cut with `…`, then padded with spaces, so the
+/// next column starts in the same place whatever the text holds.
+pub fn fill(text: &str, width: usize) -> String {
+    let cut = cut(text, width);
+    let missing = width.saturating_sub(text_width(&cut));
+    format!("{cut}{}", " ".repeat(missing))
+}
+
+/// At least `width` cells, the text at the right: a figure in a column.
+pub fn fill_left(text: &str, width: usize) -> String {
+    let missing = width.saturating_sub(text_width(text));
+    format!("{}{text}", " ".repeat(missing))
 }
 
 /// At most `width` cells, keeping both ends: a third before the `…`, the rest
@@ -64,30 +80,31 @@ fn join_greedy<'a>(parts: impl Iterator<Item = &'a str>, gap: &str, width: usize
 
 fn take_front(text: &str, cells: usize) -> String {
     let mut left = cells;
-    text.chars()
-        .take_while(|&ch| {
-            let w = char_width(ch);
+    graphemes(text)
+        .take_while(|&(_, w)| {
             let fits = w <= left;
             left = left.saturating_sub(w);
             fits
         })
+        .map(|(grapheme, _)| grapheme)
         .collect()
 }
 
 fn take_back(text: &str, cells: usize) -> String {
     let mut left = cells;
-    let mut tail: Vec<char> = text
-        .chars()
+    let mut tail: Vec<&str> = graphemes(text)
+        .collect::<Vec<_>>()
+        .into_iter()
         .rev()
-        .take_while(|&ch| {
-            let w = char_width(ch);
+        .take_while(|&(_, w)| {
             let fits = w <= left;
             left = left.saturating_sub(w);
             fits
         })
+        .map(|(grapheme, _)| grapheme)
         .collect();
     tail.reverse();
-    tail.into_iter().collect()
+    tail.concat()
 }
 
 #[cfg(test)]
@@ -102,6 +119,21 @@ mod tests {
             "Crash reports …"
         );
         assert_eq!(cut("abc", 0), "");
+    }
+
+    #[test]
+    fn fill_pads_to_cells_not_characters() {
+        for name in [
+            "漢字のアプリ",
+            "Notes \u{2764}\u{FE0F}",
+            "Dev \u{1F469}\u{200D}\u{1F4BB} kit",
+            "plain",
+        ] {
+            assert_eq!(text_width(&fill(name, 12)), 12, "{name}");
+            assert_eq!(text_width(&fill(name, 3)), 3, "{name}");
+        }
+        assert_eq!(fill_left("1 GB", 6), "  1 GB");
+        assert_eq!(text_width(&fill_left("漢字", 6)), 6);
     }
 
     #[test]

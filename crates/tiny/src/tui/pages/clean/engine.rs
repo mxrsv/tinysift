@@ -9,11 +9,12 @@ use std::sync::atomic::AtomicBool;
 
 use clap::Parser;
 use tiny_core::clean::discover::{discover_for_cli_with, select_providers, CategoryGroup};
-use tiny_core::clean::execute::{execute_observed, GroupOutcome, ObservedRun};
-use tiny_core::clean::providers::{comes_back, desktop_report_only, ReportOnly};
-use tiny_core::clean::types::{CleanAction, ComesBack, RiskLevel};
+use tiny_core::clean::execute::{execute_observed, GroupOutcome, ObservedRun, ReviewExclusion};
+use tiny_core::clean::types::{CleanAction, CleanItem, ComesBack, RiskLevel};
 use tiny_core::options::CleanOptions;
 use tiny_core::progress::Progress;
+
+use super::discovery_map;
 
 /// What a category's items go through when they are cleaned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -74,12 +75,27 @@ pub struct Plan {
 }
 
 impl Plan {
-    /// The items the engine is asked to act on: every item of every group but the unticked paths.
-    pub fn handed(&self) -> impl Iterator<Item = &tiny_core::clean::types::CleanItem> {
+    /// The items the engine acts on: every item of every group but those the
+    /// engine keeps for the unticked paths, which are the unticked paths and
+    /// any item above or below one ([`ReviewExclusion`], S7).
+    pub fn handed(&self) -> impl Iterator<Item = &CleanItem> {
+        let rule = ReviewExclusion::new(&self.excluded);
         self.groups
             .iter()
             .flat_map(|group| &group.items)
-            .filter(|item| !self.excluded.contains(&item.path))
+            .filter(move |item| !rule.keeps(&item.path))
+    }
+
+    /// [`handed`](Self::handed), group by group.
+    pub fn handed_in<'a>(
+        &'a self,
+        group: &'a CategoryGroup,
+    ) -> impl Iterator<Item = &'a CleanItem> {
+        let rule = ReviewExclusion::new(&self.excluded);
+        group
+            .items
+            .iter()
+            .filter(move |item| !rule.keeps(&item.path))
     }
 
     /// Sum of the scan sizes of the handed items: the figure on the foot and the action box.
@@ -134,64 +150,19 @@ impl CleanEngine for CoreEngine {
             .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
         let home = std::env::var_os("HOME").map(PathBuf::from);
         let report = |p: Progress| progress(p.completed, p.total.unwrap_or(0));
-        let found = match discover_for_cli_with(&opts, Some(&report), Some(cancel)) {
-            Ok(found) => found,
-            Err(error) => {
-                return Discovery {
-                    failure: Some(error.to_string()),
-                    read_at,
-                    home,
-                    ..Discovery::default()
-                }
-            }
-        };
-        let categories = select_providers(&opts)
-            .iter()
-            .filter_map(|provider| {
-                let id = provider.id();
-                let route = match desktop_report_only(provider.as_ref()) {
-                    None => Route::Trash,
-                    Some(ReportOnly::NotPerPathTrash) => Route::ForGood,
-                    Some(ReportOnly::Destructive) => return None,
-                    Some(_) => Route::ReportOnly,
-                };
-                let finding = if let Some((_, reason)) =
-                    found.failed_categories.iter().find(|(c, _)| c == id)
-                {
-                    Finding::Failed {
-                        reason: reason.clone(),
-                    }
-                } else if let Some(group) = found.report.groups.iter().find(|g| g.id == id) {
-                    Finding::Found(group.clone())
-                } else if let Some((_, app)) =
-                    found.report.skipped_running.iter().find(|(c, _)| c == id)
-                {
-                    Finding::AppRunning { app: app.clone() }
-                } else {
-                    return None;
-                };
-                Some(Category {
-                    id: id.to_string(),
-                    label: provider.label().to_string(),
-                    risk: provider.risk(),
-                    reason: provider.inclusion_reason(),
-                    comes_back: comes_back(id),
-                    route,
-                    finding,
-                })
-            })
-            .collect();
-        Discovery {
-            categories,
-            failure: found.failed.then(|| {
-                found
-                    .diagnostics
-                    .first()
-                    .cloned()
-                    .unwrap_or_else(|| "a category could not be read".into())
-            }),
-            read_at,
-            home,
+        match discover_for_cli_with(&opts, Some(&report), Some(cancel)) {
+            Ok(found) => Discovery {
+                categories: discovery_map::categories(&select_providers(&opts), &found),
+                failure: discovery_map::failure(&found),
+                read_at,
+                home,
+            },
+            Err(error) => Discovery {
+                failure: Some(error.to_string()),
+                read_at,
+                home,
+                ..Discovery::default()
+            },
         }
     }
 

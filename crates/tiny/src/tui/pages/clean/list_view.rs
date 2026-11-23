@@ -5,13 +5,14 @@ use crate::tui::icons::IconMode;
 use crate::tui::pages::{Detail, KeyHint, PageView, ViewCtx};
 use crate::tui::styled_line::{Role, StyledLine};
 use crate::tui::widgets::meter::meter;
+use crate::tui::widgets::phrases::plural;
 use crate::tui::widgets::size_format::format_size;
-use crate::tui::widgets::spinner::spinner_glyph;
-use crate::tui::widgets::text_fit::{cut, middle_ellipsis, wrap};
+use crate::tui::widgets::spinner::spinner_line;
+use crate::tui::widgets::text_fit::{cut, fill, middle_ellipsis, wrap};
 
 use super::engine::{Finding, Route};
 use super::listing::{Entry, Listing};
-use super::wording::{comes_back, plural, shown_path};
+use super::wording::{comes_back, shown_path};
 
 /// Cells a row spends besides the name: lead, tick, bar, size and tag.
 const ROW_CHROME: usize = 39;
@@ -33,16 +34,17 @@ pub struct ListScreen<'a> {
 impl ListScreen<'_> {
     /// The list while a read runs: the rows of the last read (if any), then the progress line.
     pub fn measuring(&self, progress: Measuring, ctx: &ViewCtx) -> PageView {
-        let spinner = StyledLine::new()
-            .push(Role::Storage, format!("{} ", spinner_glyph(ctx.tick)))
-            .dim(if progress.total == 0 {
+        let spinner = spinner_line(
+            ctx.tick,
+            if progress.total == 0 {
                 "measuring…".to_string()
             } else {
                 format!(
                     "measuring… {} of {} categories",
                     progress.done, progress.total
                 )
-            });
+            },
+        );
         let rows = self.rows(ctx);
         let cursor = (!rows.is_empty()).then_some(self.cursor);
         PageView {
@@ -231,7 +233,7 @@ fn row(entry: &Entry, highlighted: bool, max: u64, ctx: &ViewCtx) -> StyledLine 
     } else {
         StyledLine::new().faint("◯ ")
     };
-    let name = format!("{:<name_width$}", cut(&category.label, name_width));
+    let name = fill(&category.label, name_width);
     let running = matches!(category.finding, Finding::AppRunning { .. });
     let size = if running {
         String::new()

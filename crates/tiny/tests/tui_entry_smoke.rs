@@ -2,7 +2,15 @@
 //! else it prints help and exits 2 as before. The pseudo-terminal tests run
 //! the binary under macOS `script` and check the terminal is given back
 //! (alternate screen left, cursor shown, line mode restored) after `q` and
-//! after SIGTERM. HOME is a temporary directory, so no setting is touched.
+//! after SIGTERM.
+//!
+//! What the launched binary reads: it opens on Clean, so it runs the same
+//! read-only discovery as `sift clean --dry-run` (the categories' locations
+//! under HOME and system-wide, and the read-only queries of the tools some
+//! categories use) and reads the startup volume's free space. No test
+//! presses a key that cleans, so nothing is changed. HOME is a temporary
+//! directory: the categories under it find nothing, and the `--icons`
+//! setting is written there, never to the user's own settings.
 
 use std::io::{Read, Write};
 use std::os::unix::fs::symlink;

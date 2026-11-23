@@ -1,6 +1,7 @@
-//! One clean as it runs and after: per category what moved, what was kept
-//! and what did not run, in scan sizes of the paths the engine reports (I11).
-//! The session adds up every clean for the exit card (TU4).
+//! One clean as it runs and after: per category what moved, what a tool was
+//! asked to remove, what was kept, where the engine stopped and what did not
+//! run, in scan sizes of the paths the engine reports (I11). The session adds
+//! up every clean for the exit card (TU4).
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -17,10 +18,11 @@ use crate::tui::work::TaskHandle;
 /// What one finished category did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Moved {
-    /// Scan sizes of the paths removed or whose removal a tool accepted.
+    /// Scan sizes of the paths the engine removed.
     pub bytes: u64,
-    /// A tool accepted the removal and finishes it in the background.
-    pub requested: bool,
+    /// Scan sizes of the paths a tool was asked to remove and finishes in the
+    /// background: not cleaned yet, so counted apart (S8).
+    pub requested: u64,
     /// Paths the engine kept, with its reason (`kept: ` taken off).
     pub kept: Vec<(PathBuf, String)>,
     pub kept_bytes: u64,
@@ -32,6 +34,10 @@ pub struct Moved {
 pub enum RowState {
     Waiting,
     Finished(Moved),
+    /// The engine stopped inside this category with this reason; what it
+    /// did before is not reported, so it may be partly done (S9).
+    Stopped(String),
+    /// The run ended before this category.
     NotRun,
 }
 
@@ -47,10 +53,25 @@ pub struct RunRow {
 /// Bytes of a run or a session, split as the done screen and the exit card show them.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Totals {
+    /// In Trash plus For good.
     pub cleaned: u64,
     pub in_trash: u64,
     pub for_good: u64,
+    /// Asked of a tool, not yet removed.
+    pub requested: u64,
     pub kept: u64,
+}
+
+impl Totals {
+    fn add(self, other: Totals) -> Totals {
+        Totals {
+            cleaned: self.cleaned.saturating_add(other.cleaned),
+            in_trash: self.in_trash.saturating_add(other.in_trash),
+            for_good: self.for_good.saturating_add(other.for_good),
+            requested: self.requested.saturating_add(other.requested),
+            kept: self.kept.saturating_add(other.kept),
+        }
+    }
 }
 
 pub struct Run {
@@ -113,12 +134,20 @@ impl Run {
 
     pub fn record(&mut self, outcome: &GroupOutcome) {
         let size = |path: &PathBuf| self.sizes.get(path).copied().unwrap_or(0);
+        let sum = |paths: &[PathBuf]| {
+            paths
+                .iter()
+                .fold(0u64, |sum, path| sum.saturating_add(size(path)))
+        };
         let report = &outcome.report;
-        let bytes = report
-            .removed_paths
-            .iter()
-            .chain(&report.removal_requested)
-            .fold(0u64, |sum, path| sum.saturating_add(size(path)));
+        let row = self
+            .rows
+            .iter_mut()
+            .find(|r| r.id == outcome.category_id && r.state == RowState::Waiting);
+        if let (Some(row), Some(reason)) = (row, &outcome.stopped) {
+            row.state = RowState::Stopped(reason.clone());
+            return;
+        }
         let mut kept: Vec<(PathBuf, String)> = report
             .failed
             .iter()
@@ -134,8 +163,8 @@ impl Run {
         let moved_anything =
             !report.removed_paths.is_empty() || !report.removal_requested.is_empty();
         let moved = Moved {
-            bytes,
-            requested: !report.removal_requested.is_empty(),
+            bytes: sum(&report.removed_paths),
+            requested: sum(&report.removal_requested),
             whole_kept: !moved_anything && !kept.is_empty(),
             kept,
             kept_bytes,
@@ -149,10 +178,13 @@ impl Run {
         }
     }
 
-    /// The engine returned: categories it did not reach did not run.
+    /// The engine returned: categories it did not reach did not run. An
+    /// error the engine stopped a category with is already on that row.
     pub fn end(&mut self, result: Result<ObservedRun, String>, took: Duration) {
         if let Err(error) = result {
-            self.error = Some(error);
+            if self.stopped_in().is_none() {
+                self.error = Some(error);
+            }
         }
         for row in &mut self.rows {
             if row.state == RowState::Waiting {
@@ -173,12 +205,21 @@ impl Run {
             } else {
                 (moved.bytes, 0)
             };
-            Totals {
-                cleaned: sum.cleaned.saturating_add(moved.bytes),
-                in_trash: sum.in_trash.saturating_add(in_trash),
-                for_good: sum.for_good.saturating_add(for_good),
-                kept: sum.kept.saturating_add(moved.kept_bytes),
-            }
+            sum.add(Totals {
+                cleaned: moved.bytes,
+                in_trash,
+                for_good,
+                requested: moved.requested,
+                kept: moved.kept_bytes,
+            })
+        })
+    }
+
+    /// The category the engine stopped inside, and its reason.
+    pub fn stopped_in(&self) -> Option<(&RunRow, &str)> {
+        self.rows.iter().find_map(|row| match &row.state {
+            RowState::Stopped(reason) => Some((row, reason.as_str())),
+            _ => None,
         })
     }
 
@@ -216,13 +257,7 @@ impl Session {
         }
         self.cleans += 1;
         self.took += run.took.unwrap_or_default();
-        let totals = run.totals();
-        self.totals = Totals {
-            cleaned: self.totals.cleaned.saturating_add(totals.cleaned),
-            in_trash: self.totals.in_trash.saturating_add(totals.in_trash),
-            for_good: self.totals.for_good.saturating_add(totals.for_good),
-            kept: self.totals.kept.saturating_add(totals.kept),
-        };
+        self.totals = self.totals.add(run.totals());
         for row in &run.rows {
             let RowState::Finished(moved) = &row.state else {
                 continue;

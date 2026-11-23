@@ -32,13 +32,6 @@ pub enum ConfirmReply {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-#[cfg_attr(
-    not(test),
-    allow(
-        dead_code,
-        reason = "opened by Clean, Uninstall and Processes, plan tasks 05, 07 and 09"
-    )
-)]
 pub struct ConfirmBox {
     title: String,
     tone: Tone,
@@ -74,10 +67,13 @@ impl ConfirmBox {
         Self { facts, ..self }
     }
 
-    /// ←→ or tab move the focus; enter answers for the focused button; esc cancels.
+    /// ←→ move the focus; enter answers for the focused button; esc cancels.
+    /// Every other key, tab included, does nothing while the box is open:
+    /// tab means "next page" everywhere else, so it never reaches the
+    /// destructive button (S3).
     pub fn on_key(&mut self, key: &KeyEvent) -> ConfirmReply {
         match key.code {
-            KeyCode::Left | KeyCode::Right | KeyCode::Tab | KeyCode::BackTab => {
+            KeyCode::Left | KeyCode::Right => {
                 self.act_focused = !self.act_focused;
                 ConfirmReply::Open
             }
@@ -230,6 +226,16 @@ mod tests {
         assert_eq!(press(&mut confirm, KeyCode::Enter), ConfirmReply::Cancelled);
         assert_eq!(press(&mut confirm, KeyCode::Esc), ConfirmReply::Cancelled);
         assert_eq!(press(&mut confirm, KeyCode::Char('y')), ConfirmReply::Open);
+        assert_eq!(press(&mut confirm, KeyCode::Enter), ConfirmReply::Cancelled);
+    }
+
+    #[test]
+    fn tab_never_moves_the_focus_to_the_destructive_button() {
+        let mut confirm = hard_delete();
+        for code in [KeyCode::Tab, KeyCode::BackTab] {
+            assert_eq!(press(&mut confirm, code), ConfirmReply::Open);
+            assert_eq!(confirm.overlay(), hard_delete().overlay(), "{code:?}");
+        }
         assert_eq!(press(&mut confirm, KeyCode::Enter), ConfirmReply::Cancelled);
     }
 

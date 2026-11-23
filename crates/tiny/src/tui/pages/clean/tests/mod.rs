@@ -1,9 +1,12 @@
 //! The Clean page against the fake engine: the mock's screens (`screens`),
 //! what reaches the engine (`engine_calls`) and how a run ends (`runs`).
 
+mod choices;
 mod engine_calls;
+mod outcomes;
 mod runs;
 mod screens;
+mod session;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
