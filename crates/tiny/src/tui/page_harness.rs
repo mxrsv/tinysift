@@ -23,7 +23,7 @@ use unicode_width::UnicodeWidthStr;
 
 use super::app::{App, Flow, SessionEnd};
 use super::icons::IconMode;
-use super::pages::{all_pages, register, Page, PageId};
+use super::pages::{register, AnyPage, Page, PageId, PageView, ViewCtx};
 use super::theme::Theme;
 use super::work::{LoopEvent, Spawner};
 
@@ -36,6 +36,39 @@ pub const MOCK_FREE_BYTES: u64 = 28_800_000_000;
 /// How long `settle` waits for background tasks.
 const SETTLE_LIMIT: Duration = Duration::from_secs(10);
 
+/// A page with no engine that draws nothing but the shared key hints.
+macro_rules! blank_page {
+    ($name:ident, $id:expr) => {
+        struct $name;
+        impl Page for $name {
+            const ID: PageId = $id;
+            type Msg = std::convert::Infallible;
+            fn view(&self, _ctx: &ViewCtx) -> PageView {
+                PageView {
+                    keys: super::pages::KeyHint::globals(),
+                    ..PageView::default()
+                }
+            }
+        }
+    };
+}
+blank_page!(BlankClean, PageId::Clean);
+blank_page!(BlankUninstall, PageId::Uninstall);
+blank_page!(BlankScan, PageId::Scan);
+blank_page!(BlankProcesses, PageId::Processes);
+blank_page!(BlankSystem, PageId::System);
+
+/// Five blank pages in tab order.
+fn blank_pages() -> Vec<Box<dyn AnyPage>> {
+    vec![
+        register(BlankClean),
+        register(BlankUninstall),
+        register(BlankScan),
+        register(BlankProcesses),
+        register(BlankSystem),
+    ]
+}
+
 pub struct PageHarness {
     app: App,
     rx: Receiver<LoopEvent>,
@@ -46,22 +79,23 @@ pub struct PageHarness {
 }
 
 impl PageHarness {
-    /// `page` in its own tab (the other four are the registry's), opened as
-    /// the user would open it, with background work settled.
+    /// `page` in its own tab, opened as the user would open it, with
+    /// background work settled. The other four tabs are blank pages: a test
+    /// never builds a real page, whose engine would read this machine.
     pub fn new<P: Page + 'static>(page: P, size: (u16, u16), icons: IconMode) -> Self {
-        let mut pages = all_pages();
+        let mut pages = blank_pages();
         pages[P::ID.index()] = register(page);
         Self::with_pages(pages, P::ID, size, icons)
     }
 
-    /// The session as `sift` opens it, every page from the registry.
-    pub fn registry(size: (u16, u16), icons: IconMode) -> Self {
-        Self::with_pages(all_pages(), PageId::Clean, size, icons)
+    /// The frame alone: five blank pages, opened on Clean.
+    pub fn blank(size: (u16, u16), icons: IconMode) -> Self {
+        Self::with_pages(blank_pages(), PageId::Clean, size, icons)
     }
 
     /// Five pages of your own, in tab order (wrap each with `pages::register`).
     pub fn with_pages(
-        pages: Vec<Box<dyn super::pages::AnyPage>>,
+        pages: Vec<Box<dyn AnyPage>>,
         open: PageId,
         (width, height): (u16, u16),
         icons: IconMode,

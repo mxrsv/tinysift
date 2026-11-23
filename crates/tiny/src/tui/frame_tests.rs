@@ -57,7 +57,7 @@ fn the_hard_delete_box_lands_where_the_mock_draws_it() {
 
 #[test]
 fn the_empty_frame_at_both_sizes() {
-    let mut std_screen = PageHarness::registry(STANDARD, IconMode::Unicode);
+    let mut std_screen = PageHarness::blank(STANDARD, IconMode::Unicode);
     let text = std_screen.text();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 24);
@@ -70,7 +70,7 @@ fn the_empty_frame_at_both_sizes() {
     assert_eq!(lines[22], "─".repeat(80));
     assert_eq!(lines[23], " tab page · q quit");
 
-    let mut wide = PageHarness::registry(WIDE, IconMode::Nerd);
+    let mut wide = PageHarness::blank(WIDE, IconMode::Nerd);
     let text = wide.text();
     let lines: Vec<&str> = text.lines().collect();
     assert_eq!(lines.len(), 34);
@@ -240,7 +240,7 @@ fn the_spinner_turns_with_the_tick() {
 
 #[test]
 fn a_window_below_the_minimum_says_so_instead_of_drawing_the_frame() {
-    let mut screen = PageHarness::registry(STANDARD, IconMode::Unicode);
+    let mut screen = PageHarness::blank(STANDARD, IconMode::Unicode);
     screen.resize(60, 20);
     let text = screen.text();
     assert!(text.contains("sift needs at least 80×24"));
