@@ -264,13 +264,6 @@ impl<'a, M: Send + 'static> PageCtx<'a, M> {
     }
 
     /// Read the free-disk figure in the tab bar again (after a clean).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "used after a clean or uninstall, plan tasks 07 and 09"
-        )
-    )]
     pub fn refresh_free_space(&mut self) {
         self.env.requests.push(FrameRequest::RefreshFreeSpace);
     }
