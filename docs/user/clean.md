@@ -19,7 +19,7 @@ Run `--dry-run` first on a new machine.
 
 ## Categories
 
-46 categories in three families. Each has a risk level that decides whether you see it by
+47 categories in three families. Each has a risk level that decides whether you see it by
 default.
 
 **Dev caches** — `cargo`, `npm`, `pnpm`, `yarn`, `uv`, `bun-cache`, `pip-cache`, `puppeteer`,
@@ -30,7 +30,7 @@ default.
 `xcode-derived`, `xcode-archives`, `xcode-devicesupport`, `xcode-previews`.
 
 **User storage** — `downloads-old`, `screenshots-old`, `mail-attachments`,
-`streaming-caches`, `chat-caches`, `browser-caches`.
+`streaming-caches`, `chat-caches`, `browser-caches`, `browser-offline-data`.
 
 **System leftovers** — `user-logs`, `user-caches`, `trash`, `quarantine`, `crash-reports`,
 `app-orphans`, `time-machine-local`, `font-quicklook-caches`.
@@ -106,9 +106,34 @@ along. Those overlapping selections are retained and explained in the final repo
   ([`user_logs.rs`](../../crates/tiny-core/src/clean/providers/user_logs.rs)).
 - `puppeteer` leaves out just the builds of a browser that is running (Chrome for Testing or
   `chrome-headless-shell`), without a message.
-- `browser-caches`, `chat-caches`, `streaming-caches` and `user-caches` instead leave out
+- `browser-caches`, `browser-offline-data`, `chat-caches`, `streaming-caches` and `user-caches` instead leave out
   just the folders of apps that are running, without a message. Quit the app and run again
   to see them.
+- `browser-caches` lists every profile of Safari, Chrome, Arc, Brave, Edge, Vivaldi, Opera and Firefox: a
+  Chromium profile's `Cache`, `Code Cache` and `Storage` under `~/Library/Caches`, and its `Cache`, `Code Cache`
+  and `GPUCache`; Safari's `com.apple.Safari` cache; Firefox's `cache2`. Never cookies, logins, preferences,
+  history, extensions, site storage or a service worker's scripts and registrations (`Service Worker/ScriptCache`,
+  `Service Worker/Database`), which no category offers. A browser counts only when its profile list (`Local State`,
+  Firefox's `profiles.ini`) can be read; otherwise `browser-caches` offers none of its folders. `user-caches`
+  offers the rest of `~/Library/Caches` around what `browser-caches` offers: a vendor folder (`Google`,
+  `BraveSoftware`, ...) whole when no folder in it is offered, else its other parts, such as a deleted profile's
+  folder, so nothing is counted twice
+  ([`browser_caches.rs`](../../crates/tiny-core/src/clean/providers/browser_caches.rs)).
+- `browser-offline-data` (Offline site data) lists each Chromium profile's `Service Worker/CacheStorage`: copies
+  sites keep for offline use. Sites download them again, but a page or file saved for offline reading goes with
+  them, so it only moves to the Trash.
+
+## Browser privacy in the desktop app
+
+The desktop app's Browsers page also cleans each Chrome, Arc, Brave, Edge, Vivaldi, Opera and Firefox profile's
+Privacy: cookies unused for 90 days whose site is not in the profile's history (trackers) or was not visited in
+90 days, and history entries older than 90 days, with their icons, top sites and shortcuts. Cookies of a site you
+visited in the last 90 days stay, so you stay signed in there. It runs only while the browser is quit;
+TinySift never quits it for you. The change is on this Mac only: a browser's sync account keeps its own copy.
+Safari history is never edited. Before anything changes, a backup of the browser's files goes to the Trash;
+Undo puts them back until the profile is scanned again, as long as the browser has not changed them since, and
+the backup stays in the Trash after that. The
+[internals](../internals/clean.md#browsers) list what Privacy leaves in place. `sift clean` has no Privacy step.
 
 ## Scanning in the desktop app
 
@@ -119,7 +144,7 @@ afresh. How the app presents this is in the [desktop guide](https://tinysift.app
 
 ## Your own files
 
-`downloads-old`, `screenshots-old` and `mail-attachments` hold files nothing recreates; once
+`downloads-old`, `screenshots-old`, `mail-attachments` and `browser-offline-data` hold files nothing recreates; once
 removed, only the Trash brings them back. Selecting one of these categories selects every
 file it lists, including ones that look private such as keys or recovery codes. Read the
 plan, and untick what you want to keep with `--review-paths`. The desktop app flags

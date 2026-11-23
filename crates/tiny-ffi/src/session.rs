@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use tiny_core::processes::{MachineSampler, Sampler};
 
+use crate::browsers::BrowsersState;
 use crate::cask::CaskState;
 use crate::clean::CleanState;
 use crate::large_files::LargeFilesState;
@@ -31,6 +32,8 @@ pub(crate) enum ScanSlot {
     Apps,
     /// `cask_catalogue`, `cask_outdated` and `cask_refresh_index`: all run `brew`.
     Casks,
+    /// `browsers_scan`.
+    Browsers,
 }
 
 impl ScanSlot {
@@ -41,6 +44,7 @@ impl ScanSlot {
             Self::LargeFiles => 1 << 2,
             Self::Apps => 1 << 3,
             Self::Casks => 1 << 4,
+            Self::Browsers => 1 << 5,
         }
     }
 }
@@ -62,6 +66,8 @@ pub struct TinySession {
     pub(crate) uninstall: Mutex<UninstallState>,
     pub(crate) large_files: Mutex<LargeFilesState>,
     pub(crate) cask: Mutex<CaskState>,
+    /// The last Browsers scan, kept as the consent basis of a privacy write.
+    pub(crate) browsers: Mutex<BrowsersState>,
     /// Agent worktrees' last listing and size cache; read-only work, outside the gate.
     pub(crate) worktrees: Mutex<WorktreesState>,
 }
@@ -196,12 +202,13 @@ mod tests {
     use super::*;
     use std::panic::{catch_unwind, AssertUnwindSafe};
 
-    const SLOTS: [ScanSlot; 5] = [
+    const SLOTS: [ScanSlot; 6] = [
         ScanSlot::Clean,
         ScanSlot::Storage,
         ScanSlot::LargeFiles,
         ScanSlot::Apps,
         ScanSlot::Casks,
+        ScanSlot::Browsers,
     ];
 
     #[test]

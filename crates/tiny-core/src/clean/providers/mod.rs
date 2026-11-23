@@ -14,6 +14,7 @@ pub use tool_command::DesktopTool;
 pub mod android_sdk;
 pub mod app_orphans;
 pub mod browser_caches;
+pub mod browser_offline_data;
 pub mod build_folders;
 pub mod chat_caches;
 pub mod codex_releases;
@@ -100,6 +101,7 @@ pub fn category_family(category_id: &str) -> Family {
         // UserStorage family
         "downloads-old" | "screenshots-old" | "mail-attachments" => Family::UserStorage,
         "streaming-caches" | "chat-caches" | "browser-caches" => Family::UserStorage,
+        "browser-offline-data" => Family::UserStorage,
         // System family
         "user-logs" | "user-caches" | "trash" => Family::System,
         "quarantine" | "crash-reports" | "font-quicklook-caches" => Family::System,
@@ -143,6 +145,9 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
             Some(ComesBack::TrashOnly)
         }
         "app-orphans" => Some(ComesBack::TrashOnly),
+        // Sites download their offline copies again, but files a user
+        // saved for offline reading are gone: only the Trash restores them.
+        "browser-offline-data" => Some(ComesBack::TrashOnly),
         "time-machine-local" | "trash" | "docker-volumes" => Some(ComesBack::NotRecoverable),
         _ => None,
     }
@@ -430,6 +435,7 @@ pub fn all_providers_with(
         Box::new(streaming_caches::StreamingCaches::new()),
         Box::new(chat_caches::ChatCaches::new()),
         Box::new(browser_caches::BrowserCaches::new()),
+        Box::new(browser_offline_data::BrowserOfflineData),
         Box::new(quarantine::Quarantine),
         Box::new(crash_reports::CrashReports),
         Box::new(app_orphans::AppOrphans::with_runner(runner.clone())),
@@ -486,6 +492,7 @@ pub fn known_category_ids() -> &'static [&'static str] {
         "streaming-caches",
         "chat-caches",
         "browser-caches",
+        "browser-offline-data",
         "quarantine",
         "crash-reports",
         "app-orphans",
