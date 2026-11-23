@@ -200,3 +200,56 @@ fn a_run_keeps_the_page() {
     screen.press(KeyCode::Tab);
     assert_eq!(screen.active(), PageId::Scan);
 }
+
+/// A read opens on the first row that can be ticked, in the sorted order,
+/// whatever order the engine listed the apps in; only `s` keeps the cursor
+/// on its app.
+#[test]
+fn a_read_opens_on_the_first_tickable_row_as_sorted() {
+    // Listed in this order; sorted by last use: Keynote, Alpha, Zed, Middle.
+    let engine = FakeEngine::listing(
+        &[
+            ("Middle", MB, None),
+            ("Zed", MB, Some(1)),
+            ("Keynote", MB, Some(900)),
+            ("Alpha", MB, Some(400)),
+        ],
+        0,
+        0,
+    )
+    .refusing("Keynote", super::fake_engine::APPLE_REFUSAL);
+    let mut screen = open(engine, STANDARD);
+    let highlighted = |screen: &mut PageHarness| {
+        let text = screen.text();
+        text.lines()
+            .find(|line| line.starts_with(" ❯ "))
+            .unwrap_or_else(|| panic!("no highlighted row in\n{text}"))
+            .to_string()
+    };
+    let text = screen.text();
+    let first = text.lines().nth(3).unwrap_or_default();
+    assert!(
+        first.contains("– Keynote"),
+        "the refused app sorts first:\n{text}"
+    );
+    assert!(highlighted(&mut screen).contains("◯ Alpha"));
+    // `s` (size, then name) keeps the cursor on Alpha.
+    screen.press(KeyCode::Down).press(KeyCode::Down).settle();
+    assert!(highlighted(&mut screen).contains("Middle"));
+    screen.press(KeyCode::Char('s')).settle();
+    assert!(
+        highlighted(&mut screen).contains("Middle"),
+        "s keeps its app"
+    );
+    screen
+        .press(KeyCode::Char('s'))
+        .press(KeyCode::Char('s'))
+        .settle();
+    // `r` reads again: back to the first tickable row.
+    screen.press(KeyCode::Char('r')).settle();
+    assert!(
+        highlighted(&mut screen).contains("◯ Alpha"),
+        "{}",
+        screen.text()
+    );
+}

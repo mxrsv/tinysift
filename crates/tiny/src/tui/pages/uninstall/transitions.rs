@@ -27,6 +27,8 @@ impl<E: UninstallEngine> UninstallPage<E> {
         };
     }
 
+    /// A read (the first, or `r`) opens on the first row of the list as
+    /// sorted that can be ticked; only `s` keeps the cursor on its app.
     pub(super) fn on_listed(&mut self, rows: Vec<AppRow>, ctx: &mut PageCtx<'_, Msg<E::Frozen>>) {
         let listed: BTreeSet<&PathBuf> = rows
             .iter()
@@ -36,7 +38,8 @@ impl<E: UninstallEngine> UninstallPage<E> {
         self.ticked.retain(|path| listed.contains(path));
         self.apps = rows;
         self.resort();
-        self.cursor.settle(self.apps.len(), |_| true);
+        let first = self.apps.iter().position(|row| !row.refused()).unwrap_or(0);
+        self.cursor = keys::cursor_at(first, self.apps.len());
         self.phase = Phase::Browse;
         self.read_next_plan(ctx);
     }

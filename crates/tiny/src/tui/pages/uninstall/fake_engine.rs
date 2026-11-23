@@ -280,6 +280,13 @@ impl FakeEngine {
     }
 
     /// The engine refuses `app` once its plan is built again at enter.
+    /// The engine refuses `app` as soon as the list is read (an Apple app).
+    pub fn refusing(self, app: &str, reason: &str) -> Self {
+        let mut refusals = self.refusals;
+        refusals.insert(app.into(), reason.into());
+        Self { refusals, ..self }
+    }
+
     pub fn refusing_later(self, app: &str, reason: &str) -> Self {
         let mut late_refusals = self.late_refusals;
         late_refusals.insert(app.into(), reason.into());
