@@ -10,7 +10,7 @@
 
 use std::collections::HashSet;
 use std::ops::ControlFlow;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use crate::engine_error;
 use crate::error::Result;
@@ -35,6 +35,33 @@ use observed::observed_with_policy;
 pub use observed::{GroupOutcome, ObservedRun};
 
 const TRASH_ID: &str = "trash";
+
+/// The paths unticked during review, and the rule the executor applies to
+/// them: an item is kept when it is one of them, lies inside one, or contains
+/// one. Anything that shows the size of a plan must apply the same rule.
+pub struct ReviewExclusion<'a> {
+    excluded: &'a HashSet<PathBuf>,
+    /// Every unticked path and every folder above one.
+    ancestors: HashSet<&'a Path>,
+}
+
+impl<'a> ReviewExclusion<'a> {
+    pub fn new(excluded: &'a HashSet<PathBuf>) -> Self {
+        Self {
+            excluded,
+            ancestors: excluded.iter().flat_map(|path| path.ancestors()).collect(),
+        }
+    }
+
+    /// The executor keeps `path`: it was unticked, or it overlaps an unticked path.
+    pub fn keeps(&self, path: &Path) -> bool {
+        self.ancestors.contains(path) || path.ancestors().any(|above| self.excluded.contains(above))
+    }
+
+    fn is_unticked(&self, path: &Path) -> bool {
+        self.excluded.contains(path)
+    }
+}
 
 pub fn execute(
     groups: &[&CategoryGroup],
@@ -177,8 +204,7 @@ fn execute_group(
 
 fn reviewed_items(
     items: &[CleanItem],
-    excluded: &HashSet<PathBuf>,
-    ancestors: &HashSet<&std::path::Path>,
+    review: &ReviewExclusion<'_>,
     policy: &PolicySnapshot,
     provider: Option<&dyn CleanProvider>,
     report: &mut ExecReport,
@@ -186,11 +212,9 @@ fn reviewed_items(
     let matcher = Matcher::new();
     items
         .iter()
-        .filter(|item| !excluded.contains(&item.path))
+        .filter(|item| !review.is_unticked(&item.path))
         .filter(|item| {
-            let reason = if ancestors.contains(item.path.as_path())
-                || item.path.ancestors().any(|path| excluded.contains(path))
-            {
+            let reason = if review.keeps(&item.path) {
                 "kept: overlaps a path excluded during review"
             } else {
                 if provider.is_some_and(|provider| {

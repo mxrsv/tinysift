@@ -1,13 +1,14 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
-use super::super::execute_with_policy;
+use super::super::{execute_with_policy, ReviewExclusion};
 use super::*;
 use crate::clean::process::test_support::MockChecker;
 use crate::clean::protection_store::StoreError;
 use crate::clean::types::{CleanItem, ExecAction, RiskLevel};
 
-/// Removes every item except those named `failure`, counting its calls.
+/// Removes every item except those named `failure`, counting its calls;
+/// an item named `explodes` makes the whole call fail.
 struct Recording {
     id: &'static str,
     calls: Arc<AtomicUsize>,
@@ -41,6 +42,9 @@ impl CleanProvider for Recording {
     }
     fn execute(&self, items: &[CleanItem], _action: ExecAction) -> Result<ExecReport> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        if items.iter().any(|i| i.path.ends_with("explodes")) {
+            return Err(crate::engine_error!("fixture tool crashed"));
+        }
         let (failed, removed): (Vec<_>, Vec<_>) =
             items.iter().partition(|i| i.path.ends_with("failure"));
         Ok(ExecReport {
@@ -90,7 +94,7 @@ fn providers(calls: &[Arc<AtomicUsize>; 3]) -> Vec<Box<dyn CleanProvider>> {
 
 fn fixture_groups() -> Vec<CategoryGroup> {
     vec![
-        group(IDS[0], &["/a", "/b/failure", "/excluded"]),
+        group(IDS[0], &["/a", "/failure", "/excluded"]),
         group(IDS[1], &["/c/denied", "/d"]),
         group(IDS[2], &["/e"]),
     ]
@@ -108,23 +112,16 @@ fn summary(report: &ExecReport) -> (Vec<PathBuf>, Vec<(PathBuf, String)>, Vec<Pa
     )
 }
 
+fn paths(list: &[&str]) -> Vec<PathBuf> {
+    list.iter().map(PathBuf::from).collect()
+}
+
 #[test]
-fn an_observer_that_never_stops_gives_what_execute_gives() {
+fn each_group_is_observed_with_what_it_did_and_execute_returns_the_same() {
     let groups = fixture_groups();
     let refs: Vec<&CategoryGroup> = groups.iter().collect();
     let excluded = HashSet::from([PathBuf::from("/excluded")]);
     let policy = PolicySnapshot::absent(Vec::new());
-    let today = execute_with_policy(
-        &refs,
-        CleanAction::Trash,
-        &excluded,
-        &policy,
-        &providers(&counters()),
-        &MockChecker::none(),
-        &|| Ok(()),
-    )
-    .unwrap();
-
     let mut seen = Vec::new();
     let observed = observed_with_policy(
         &refs,
@@ -141,17 +138,141 @@ fn an_observer_that_never_stops_gives_what_execute_gives() {
     )
     .unwrap();
 
-    assert_eq!(summary(&observed.report), summary(&today));
+    let per_group: Vec<_> = seen
+        .iter()
+        .map(|o| {
+            (
+                o.category_id.as_str(),
+                summary(&o.report),
+                o.stopped.clone(),
+            )
+        })
+        .collect();
+    let failed = |path: &str, reason: &str| (PathBuf::from(path), reason.to_string());
+    assert_eq!(
+        per_group,
+        [
+            (
+                IDS[0],
+                (
+                    paths(&["/a"]),
+                    vec![failed("/failure", "fixture mutation failed")],
+                    vec![]
+                ),
+                None
+            ),
+            (
+                IDS[1],
+                (
+                    paths(&["/d"]),
+                    vec![failed("/c/denied", "kept: provider refused fixture")],
+                    vec![]
+                ),
+                None
+            ),
+            (IDS[2], (paths(&["/e"]), vec![], vec![]), None),
+        ]
+    );
     assert!(observed.not_run.is_empty());
-    let ids: Vec<&str> = seen.iter().map(|o| o.category_id.as_str()).collect();
-    assert_eq!(ids, IDS, "one call per group, in plan order");
-    let mut merged = ExecReport::default();
-    for outcome in seen {
-        merged.merge(outcome.report);
-    }
-    assert_eq!(summary(&merged), summary(&today));
-    assert_eq!(today.removed_paths.len(), 3, "/a, /d and /e moved");
-    assert_eq!(today.failed.len(), 2, "the failure and the guard refusal");
+    let expected = (
+        paths(&["/a", "/d", "/e"]),
+        vec![
+            failed("/failure", "fixture mutation failed"),
+            failed("/c/denied", "kept: provider refused fixture"),
+        ],
+        vec![],
+    );
+    assert_eq!(summary(&observed.report), expected);
+    let through_execute = execute_with_policy(
+        &refs,
+        CleanAction::Trash,
+        &excluded,
+        &policy,
+        &providers(&counters()),
+        &MockChecker::none(),
+        &|| Ok(()),
+    )
+    .unwrap();
+    assert_eq!(summary(&through_execute), expected);
+}
+
+#[test]
+fn a_group_that_errors_is_observed_as_stopped_and_the_run_returns_its_error() {
+    let groups = [
+        group(IDS[0], &["/a"]),
+        group(IDS[1], &["/d", "/explodes"]),
+        group(IDS[2], &["/e"]),
+    ];
+    let refs: Vec<&CategoryGroup> = groups.iter().collect();
+    let policy = PolicySnapshot::absent(Vec::new());
+    let calls = counters();
+    let mut seen = Vec::new();
+    let result = observed_with_policy(
+        &refs,
+        CleanAction::Trash,
+        &HashSet::new(),
+        &policy,
+        &providers(&calls),
+        &MockChecker::none(),
+        &|| Ok(()),
+        &mut |outcome| {
+            seen.push((outcome.category_id.clone(), outcome.stopped.clone()));
+            ControlFlow::Continue(())
+        },
+    );
+    let error = result.unwrap_err().to_string();
+    assert_eq!(error, "fixture tool crashed");
+    assert_eq!(
+        seen,
+        [
+            (IDS[0].to_string(), None),
+            (IDS[1].to_string(), Some("fixture tool crashed".to_string())),
+        ]
+    );
+    assert_eq!(calls[2].load(Ordering::SeqCst), 0, "nothing ran after it");
+    // `execute` still fails with the same error.
+    let through_execute = execute_with_policy(
+        &refs,
+        CleanAction::Trash,
+        &HashSet::new(),
+        &policy,
+        &providers(&counters()),
+        &MockChecker::none(),
+        &|| Ok(()),
+    );
+    assert_eq!(through_execute.unwrap_err().to_string(), error);
+}
+
+#[test]
+fn the_review_rule_is_what_the_run_keeps() {
+    // A path of one category unticked inside an item of another.
+    let groups = [
+        group(IDS[0], &["/x/cache", "/y"]),
+        group(IDS[1], &["/x/cache/sub/file", "/z"]),
+        group(IDS[2], &["/x"]),
+    ];
+    let refs: Vec<&CategoryGroup> = groups.iter().collect();
+    let excluded = HashSet::from([PathBuf::from("/x/cache/sub/file")]);
+    let run = observed_with_policy(
+        &refs,
+        CleanAction::Trash,
+        &excluded,
+        &PolicySnapshot::absent(Vec::new()),
+        &providers(&counters()),
+        &MockChecker::none(),
+        &|| Ok(()),
+        &mut |_| ControlFlow::Continue(()),
+    )
+    .unwrap();
+    let rule = ReviewExclusion::new(&excluded);
+    let handed: Vec<PathBuf> = groups
+        .iter()
+        .flat_map(|g| &g.items)
+        .filter(|item| !rule.keeps(&item.path))
+        .map(|item| item.path.clone())
+        .collect();
+    assert_eq!(handed, paths(&["/y", "/z"]));
+    assert_eq!(run.report.removed_paths, handed);
 }
 
 #[test]

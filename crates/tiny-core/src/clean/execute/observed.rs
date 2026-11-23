@@ -14,7 +14,7 @@ use super::super::protection::PolicySnapshot;
 use super::super::protection_store::ProtectionStore;
 use super::super::providers::CleanProvider;
 use super::super::types::{CleanAction, ExecReport};
-use super::{execute_group, map_action, policy_failure, reviewed_items};
+use super::{execute_group, map_action, policy_failure, reviewed_items, ReviewExclusion};
 
 /// What one group did, handed to `execute_observed`'s observer right after
 /// the group ran: the paths it removed, the removals it requested, the
@@ -23,6 +23,10 @@ use super::{execute_group, map_action, policy_failure, reviewed_items};
 pub struct GroupOutcome {
     pub category_id: String,
     pub report: ExecReport,
+    /// The engine stopped inside this group with this error, which the run
+    /// then returns. What the group did before it stopped is not in `report`,
+    /// so the group may be partly done.
+    pub stopped: Option<String>,
 }
 
 /// The result of `execute_observed`: every group's report merged, and the
@@ -86,42 +90,53 @@ pub(super) fn observed_with_policy(
         }
         unchanged().inspect_err(|_| stopped.set(true))
     };
-    let excluded_ancestors: HashSet<_> = excluded_paths
-        .iter()
-        .flat_map(|path| path.ancestors())
-        .collect();
+    let review = ReviewExclusion::new(excluded_paths);
     for (index, group) in groups.iter().enumerate() {
         let mut report = ExecReport::default();
         let provider = providers.iter().find(|p| p.id() == group.id);
-        match check_policy() {
-            Err(error) => report.merge(policy_failure(&group.items, &error)),
+        let ran = match check_policy() {
+            Err(error) => {
+                report.merge(policy_failure(&group.items, &error));
+                Ok(())
+            }
             Ok(()) => {
                 let filtered = reviewed_items(
                     &group.items,
-                    excluded_paths,
-                    &excluded_ancestors,
+                    &review,
                     policy,
                     provider.map(|provider| provider.as_ref()),
                     &mut report,
                 );
-                if !filtered.is_empty() {
-                    let provider =
-                        provider.ok_or_else(|| engine_error!("no provider for {}", group.id))?;
-                    let exec_action = map_action(action, group.id.as_str())?;
-                    report.merge(execute_group(
-                        provider.as_ref(),
+                if filtered.is_empty() {
+                    Ok(())
+                } else {
+                    let provider = provider.map(|provider| provider.as_ref());
+                    run_group(
+                        provider,
+                        group,
                         &filtered,
-                        exec_action,
+                        action,
                         probe,
                         policy,
                         &check_policy,
-                    )?);
+                    )
+                    .map(|done| report.merge(done))
                 }
             }
+        };
+        if let Err(error) = ran {
+            // The observer hears which group stopped before the run returns the error.
+            let _ = on_group(&GroupOutcome {
+                category_id: group.id.clone(),
+                report,
+                stopped: Some(error.to_string()),
+            });
+            return Err(error);
         }
         let outcome = GroupOutcome {
             category_id: group.id.clone(),
             report,
+            stopped: None,
         };
         let flow = on_group(&outcome);
         run.report.merge(outcome.report);
@@ -131,6 +146,21 @@ pub(super) fn observed_with_policy(
         }
     }
     Ok(run)
+}
+
+/// Hands one group's reviewed items to its provider.
+fn run_group(
+    provider: Option<&dyn CleanProvider>,
+    group: &CategoryGroup,
+    items: &[crate::clean::types::CleanItem],
+    action: CleanAction,
+    probe: &dyn AppProbe,
+    policy: &PolicySnapshot,
+    unchanged: &dyn Fn() -> Result<()>,
+) -> Result<ExecReport> {
+    let provider = provider.ok_or_else(|| engine_error!("no provider for {}", group.id))?;
+    let exec_action = map_action(action, group.id.as_str())?;
+    execute_group(provider, items, exec_action, probe, policy, unchanged)
 }
 
 #[cfg(test)]
