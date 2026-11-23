@@ -1,0 +1,249 @@
+//! The frame against the approved mock. `MockClean` is a test-only page that
+//! draws the mock's Clean data through the shared widgets, so these tests pin
+//! the frame (regions, widths, overlay placement) to `tools/dump.js` output.
+
+use super::*;
+use crate::tui::page_harness::{PageHarness, STANDARD, WIDE};
+use crate::tui::pages::{KeyHint, Page, PageView, ViewCtx};
+use ratatui::style::{Color, Modifier};
+
+#[path = "fixtures/mock_clean.rs"]
+mod mock_clean;
+use mock_clean::{Boxed, MockClean};
+
+fn mock(review: bool, boxed: Boxed, size: (u16, u16), icons: IconMode) -> String {
+    PageHarness::new(MockClean { review, boxed }, size, icons).text()
+}
+
+fn fixture(text: &str) -> String {
+    text.trim_end_matches('\n').to_string()
+}
+
+#[test]
+fn clean_matches_the_mock_at_80_by_24() {
+    let expected = fixture(include_str!("fixtures/mock_clean_std.txt"));
+    assert_eq!(
+        mock(false, Boxed::None, STANDARD, IconMode::Unicode),
+        expected
+    );
+}
+
+#[test]
+fn clean_matches_the_mock_at_120_by_34() {
+    let expected = fixture(include_str!("fixtures/mock_clean_wide.txt"));
+    assert_eq!(mock(false, Boxed::None, WIDE, IconMode::Unicode), expected);
+}
+
+#[test]
+fn clean_matches_the_mock_in_nerd_mode() {
+    let expected = fixture(include_str!("fixtures/mock_clean_wide_nerd.txt"));
+    assert_eq!(mock(false, Boxed::None, WIDE, IconMode::Nerd), expected);
+}
+
+#[test]
+fn the_action_box_lands_where_the_mock_draws_it() {
+    let expected = fixture(include_str!("fixtures/mock_action_wide.txt"));
+    assert_eq!(mock(true, Boxed::Action, WIDE, IconMode::Unicode), expected);
+}
+
+#[test]
+fn the_hard_delete_box_lands_where_the_mock_draws_it() {
+    let expected = fixture(include_str!("fixtures/mock_hard_std.txt"));
+    assert_eq!(
+        mock(true, Boxed::Hard, STANDARD, IconMode::Unicode),
+        expected
+    );
+}
+
+#[test]
+fn the_empty_frame_at_both_sizes() {
+    let mut std_screen = PageHarness::registry(STANDARD, IconMode::Unicode);
+    let text = std_screen.text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 24);
+    assert_eq!(
+        lines[0],
+        "  Clean   Uninstall   Scan   Processes   System                    28.8 GB free"
+    );
+    assert_eq!(lines[1], "─".repeat(80));
+    assert!(lines[2..22].iter().all(|l| l.is_empty()));
+    assert_eq!(lines[22], "─".repeat(80));
+    assert_eq!(lines[23], " tab page · q quit");
+
+    let mut wide = PageHarness::registry(WIDE, IconMode::Nerd);
+    let text = wide.text();
+    let lines: Vec<&str> = text.lines().collect();
+    assert_eq!(lines.len(), 34);
+    assert!(
+        lines[0].starts_with("  \u{F00E2} Clean   \u{F0A7A} Uninstall"),
+        "{}",
+        lines[0]
+    );
+    assert!(lines[0].ends_with("28.8 GB free"));
+}
+
+#[test]
+fn a_long_list_scrolls_and_keeps_the_cursor_in_view() {
+    use crate::tui::pages::{KeyReply, PageCtx};
+    use crate::tui::widgets::list_cursor::ListCursor;
+    use crossterm::event::{KeyCode, KeyEvent};
+
+    #[derive(Default)]
+    struct Long {
+        cursor: ListCursor,
+    }
+    impl Page for Long {
+        const ID: PageId = PageId::Scan;
+        type Msg = ();
+        fn view(&self, _ctx: &ViewCtx) -> PageView {
+            PageView {
+                header: vec![StyledLine::new().dim("100 MB and up")],
+                list: (0..85)
+                    .map(|i| StyledLine::from(format!("row {i}")))
+                    .collect(),
+                cursor: Some(self.cursor.index()),
+                keys: KeyHint::globals(),
+                ..PageView::default()
+            }
+        }
+        fn on_key(&mut self, key: KeyEvent, ctx: &mut PageCtx<'_, ()>) -> KeyReply {
+            if self.cursor.on_key(&key, 85, ctx.list_rows(), |_| true) {
+                KeyReply::Handled
+            } else {
+                KeyReply::Ignored
+            }
+        }
+    }
+    let mut screen = PageHarness::new(Long::default(), STANDARD, IconMode::Unicode);
+    let lines = |screen: &mut PageHarness| -> Vec<String> {
+        screen.text().lines().map(str::to_string).collect()
+    };
+    let first = lines(&mut screen);
+    assert_eq!(first[2], " 100 MB and up");
+    assert_eq!(first[3], " row 0");
+    assert_eq!(first[21], "     … 67 more ↓");
+    screen.press(KeyCode::PageDown);
+    let paged = lines(&mut screen);
+    assert_eq!(paged[2], " 100 MB and up", "the header stays pinned");
+    assert_eq!(
+        paged[20], " row 18",
+        "the cursor row is the last one above the count"
+    );
+    assert_eq!(paged[21], "     … 66 more ↓");
+    screen.press(KeyCode::End);
+    let last = lines(&mut screen);
+    assert_eq!(last[21], " row 84", "the last page has no count");
+    assert_eq!(last[3], " row 66");
+}
+
+#[test]
+fn colours_follow_roles_and_the_selection_is_reversed() {
+    let mut screen = PageHarness::new(
+        MockClean {
+            review: false,
+            boxed: Boxed::None,
+        },
+        WIDE,
+        IconMode::Unicode,
+    );
+    let buffer = screen.buffer();
+    // Row 3 is the second category, not selected: its bar starts at x = 40.
+    assert_eq!(buffer[(40, 3)].fg, Color::Blue);
+    assert_eq!(buffer[(1, 1)].fg, Color::DarkGray, "rules are faint");
+    // The cursor row and the active tab are reversed without colour.
+    assert!(buffer[(40, 2)].modifier.contains(Modifier::REVERSED));
+    assert_eq!(buffer[(40, 2)].fg, Color::Reset);
+    assert!(buffer[(2, 0)].modifier.contains(Modifier::REVERSED));
+    for x in 0..120 {
+        for y in 0..34 {
+            assert_eq!(buffer[(x, y)].bg, Color::Reset, "no background at {x},{y}");
+        }
+    }
+
+    let buffer = screen.monochrome().buffer();
+    for x in 0..120 {
+        for y in 0..34 {
+            assert_eq!(
+                buffer[(x, y)].fg,
+                Color::Reset,
+                "colour at {x},{y} with NO_COLOR"
+            );
+        }
+    }
+    assert!(buffer[(40, 2)].modifier.contains(Modifier::REVERSED));
+}
+
+#[test]
+fn rows_never_overflow_and_resizing_redraws_the_same_regions() {
+    let mut screen = PageHarness::new(
+        MockClean {
+            review: true,
+            boxed: Boxed::Hard,
+        },
+        WIDE,
+        IconMode::Nerd,
+    );
+    for (width, height) in [(120, 34), (80, 24), (100, 30), (99, 30), (200, 60)] {
+        screen.resize(width, height);
+        let text = screen.text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), usize::from(height));
+        for line in &lines {
+            assert!(
+                text_width(line) <= usize::from(width),
+                "{width}×{height}: {line}"
+            );
+        }
+        assert_eq!(lines[1], "─".repeat(usize::from(width)));
+        assert_eq!(
+            lines[usize::from(height) - 2],
+            "─".repeat(usize::from(width))
+        );
+        assert_eq!(
+            lines[usize::from(height) - 1],
+            " ←→ move · enter choose · esc cancel"
+        );
+    }
+}
+
+#[test]
+fn the_spinner_turns_with_the_tick() {
+    use crate::tui::widgets::spinner::spinner_glyph;
+    struct Busy;
+    impl Page for Busy {
+        const ID: PageId = PageId::Scan;
+        type Msg = ();
+        fn view(&self, ctx: &ViewCtx) -> PageView {
+            PageView {
+                list: vec![StyledLine::new()
+                    .storage(spinner_glyph(ctx.tick).to_string())
+                    .dim(" reading… 48,210 files so far")],
+                keys: vec![KeyHint::new("esc", "stop")],
+                ..PageView::default()
+            }
+        }
+        fn is_busy(&self) -> bool {
+            true
+        }
+    }
+    let mut screen = PageHarness::new(Busy, STANDARD, IconMode::Unicode);
+    assert_eq!(
+        screen.text().lines().nth(2),
+        Some(" ⠹ reading… 48,210 files so far")
+    );
+    screen.set_tick(1);
+    assert_eq!(
+        screen.text().lines().nth(2),
+        Some(" ⠸ reading… 48,210 files so far")
+    );
+}
+
+#[test]
+fn a_window_below_the_minimum_says_so_instead_of_drawing_the_frame() {
+    let mut screen = PageHarness::registry(STANDARD, IconMode::Unicode);
+    screen.resize(60, 20);
+    let text = screen.text();
+    assert!(text.contains("sift needs at least 80×24"));
+    assert!(text.contains("this window is 60×20"));
+    assert!(!text.contains("Uninstall"));
+}

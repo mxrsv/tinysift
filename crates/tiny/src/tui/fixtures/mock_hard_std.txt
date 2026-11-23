@@ -1,0 +1,24 @@
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ Xcode DerivedData                       ━━━━━━━━━━━━     6.2 GB
+   ◉ node_modules (idle)                     ━━━━━━━━━━━━     3.8 GB  review
+   ◯ npm cache                               ━━━━━━━━━━━━     1.1 GB  review
+   ◉ pnpm store                              ━━━━━━━━━━━━     840 MB  review
+   ◯ Homebr╭─ Hard delete ──────────────────────────────────────────╮ review
+   ◉ Crash │                                                        │
+   ◉ User l│ ● Delete 5 categories for good?                        │
+           │   10.9 GB · 154 items                                  │
+           │   Xcode DerivedData, node_modules (idle), pnpm store   │
+           │   and 2 more                                           │
+           │   It skips the Trash. Nothing can restore it.          │
+           │                                                        │
+           │  Cancel     Delete for good                            │
+           │                                                        │
+ ── Highlig╰────────────────────────────────────────────────────────╯──────────
+ Xcode DerivedData  6.2 GB · 43 items
+ Goes to     Trash  Finder › Put Back    comes back when you build again
+ Listed      Xcode rebuilds it
+
+ 10.9 GB picked in 5 categories    ● Trash 10.1 GB    ● for good 840 MB
+────────────────────────────────────────────────────────────────────────────────
+ ←→ move · enter choose · esc cancel
