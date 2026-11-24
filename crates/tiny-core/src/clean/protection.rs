@@ -460,7 +460,8 @@ impl<R: DirReader> Matcher<R> {
     /// Where `path` really is: the folder holding it with every symlink
     /// resolved, then its own name as spelled (the last name is never
     /// followed). `None` when that is the spelling given or nothing is at the
-    /// folder; an error when the folder is there and cannot be resolved.
+    /// folder; an error when the folder is there and cannot be resolved, or
+    /// resolves to a path no rule could name.
     fn real_location(&self, path: &Path) -> Result<Option<Vec<OsString>>, io::ErrorKind> {
         let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
             return Ok(None);
@@ -469,7 +470,9 @@ impl<R: DirReader> Matcher<R> {
             Some(dir) if dir != parent => dir.join(name),
             _ => return Ok(None),
         };
-        Ok(path_components(&real).ok())
+        path_components(&real)
+            .map(Some)
+            .map_err(|_| io::ErrorKind::InvalidInput)
     }
 
     fn real_dir(&self, dir: &Path) -> RealDir {

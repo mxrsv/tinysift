@@ -343,6 +343,28 @@ fn unresolvable_equivalence_blocks_instead_of_passing() {
 }
 
 #[test]
+fn a_second_spelling_never_turns_a_doubt_or_a_file_rule_into_a_pass() {
+    // The candidate has two spellings (`/T/b` is really `/t/b`) and neither
+    // can be told from the rule: the doubt stays.
+    let two_names = [("/t", 1), ("/t/a", 5), ("/t/b", 5)];
+    let eval = fake(true, &two_names, "/t/A", "/T/b");
+    assert!(eval.blocks.is_empty());
+    assert!(matches!(eval.uncertain[0].doubt, Doubt::Ambiguous { .. }));
+    assert!(!eval.allows_move());
+
+    // A file rule covers nothing inside its path under either spelling, and
+    // still holds the path itself and what carries it.
+    let file = [rule(Path::new("/t/Cache"), RuleScope::File)];
+    let relate = |candidate: &str| {
+        let matcher = Matcher::with_reader(FakeFs::new(true, TREE));
+        matcher.evaluate(&file, Path::new(candidate))
+    };
+    assert!(relate("/T/cache/SUB").allows_move());
+    assert_eq!(relate("/T/CACHE").blocks[0].relation, Equal);
+    assert_eq!(relate("/T").blocks[0].relation, CarriesRule);
+}
+
+#[test]
 fn two_different_missing_names_and_malformed_paths_are_doubtful() {
     let eval = fake(true, TREE, "/t/Missing1", "/t/Missing2");
     assert!(matches!(eval.uncertain[0].doubt, Doubt::BothMissing { .. }));
