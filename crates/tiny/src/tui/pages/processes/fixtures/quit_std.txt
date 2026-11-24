@@ -5,11 +5,11 @@
     43154  ━━━━━━━━━━━━   19.6%     89 MB  AltTab
       934  ━━━━━━━━━━━━   17.4%    111 MB  cfprefsd
      1548  ━━━━━━━━━━━━   13.9%    191 MB  Google Chrome Helper
-     1240  ━━━━━━━━━━━━    8.1%    519 MB  Google Chrome
-    92184  ╭─ Quit process ─────────────────────────────────────────╮
-           │                                                        │
+     1240  ╭─ Quit process ─────────────────────────────────────────╮
+    92184  │                                                        │
            │ ● Quit Google Chrome Helper (Renderer)?                │
-           │   PID 17703 is asked to close. Unsaved work may be los…│
+           │   PID 17703 is asked to close.                         │
+           │   Unsaved work may be lost.                            │
            │                                                        │
            │  Cancel     Quit                                       │
            │                                                        │

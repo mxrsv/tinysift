@@ -10,11 +10,11 @@
                                                                            │ Memory      559 MB
                                                                            │ Listens on  :3000 :9229
                                                                            │
-                                                                           │
                                ╭─ Quit process ─────────────────────────────────────────╮
                                │                                                        │
                                │ ● Quit Google Chrome Helper (Renderer)?                │
-                               │   PID 17703 is asked to close. Unsaved work may be los…│
+                               │   PID 17703 is asked to close.                         │
+                               │   Unsaved work may be lost.                            │
                                │                                                        │
                                │  Cancel     Quit                                       │
                                │                                                        │

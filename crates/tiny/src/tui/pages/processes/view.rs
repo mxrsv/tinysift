@@ -146,10 +146,10 @@ pub fn confirm_box(info: &ProcessInfo, kind: TerminateKind) -> ConfirmBox {
             format!("Quit {}?", info.name),
             "Quit",
         )
-        .with_facts(vec![StyledLine::new().dim(format!(
-            "PID {} is asked to close. Unsaved work may be lost.",
-            info.pid
-        ))]),
+        .with_facts(vec![
+            StyledLine::new().dim(format!("PID {} is asked to close.", info.pid)),
+            StyledLine::new().dim("Unsaved work may be lost."),
+        ]),
         TerminateKind::Force => ConfirmBox::new(
             "Force quit process",
             Tone::Permanent,
