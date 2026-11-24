@@ -16,11 +16,13 @@ and its output are a terminal ([`entry.rs`](../../crates/tiny/src/tui/entry.rs))
 is unchanged: every command and flag works as before, and bare `sift` in a pipe or a script
 still prints the help and exits with status 2.
 
-The terminal must be at least 80×24. A smaller one gets a one-line message on stderr and exit
-status 2; use `sift <command>` there. If the window shrinks below that while the view is open,
-it shows the minimum size until the window is large enough again; `q` still quits. From 100
-columns the highlighted row's detail is a pane on the right; below that it is three lines under
-the list.
+The terminal must be at least 60×18, so a split pane works. A smaller one gets a one-line
+message on stderr and exit status 2; use `sift <command>` there. If the window shrinks below that
+while the view is open, it shows the minimum size until the window is large enough again; `q`
+still quits. From 100 columns the highlighted row's detail is a pane on the right; below that it
+is three lines under the list. Under 80 columns the bars get shorter before the names do, the
+free-disk figure leaves the tab bar, and a key bar that does not fit ends in `? keys · q quit`:
+`?` lists every key of the page.
 
 `NO_COLOR` set to any non-empty value drops every colour
 ([`theme.rs`](../../crates/tiny/src/tui/theme.rs)).

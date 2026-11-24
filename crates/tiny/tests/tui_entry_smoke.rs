@@ -1,4 +1,4 @@
-//! Bare `sift` opens the TUI only in a terminal of 80×24 or more; everywhere
+//! Bare `sift` opens the TUI only in a terminal of 60×18 or more; everywhere
 //! else it prints help and exits 2 as before. The pseudo-terminal tests run
 //! the binary under macOS `script` and check the terminal is given back
 //! (alternate screen left, cursor shown, line mode restored) after `q` and
@@ -218,6 +218,20 @@ fn ctrl_c_is_a_key_in_raw_mode_and_quits_like_q() {
 }
 
 #[test]
+fn the_smallest_terminal_opens_the_tui_and_q_still_quits() {
+    let (_dir, bin) = binary_named("sift");
+    let Some(mut pty) = Pty::start(&bin, 60, 18) else {
+        return;
+    };
+    pty.wait_for("q quit");
+    pty.press("q");
+    let text = pty.finish();
+    assert!(text.contains(ENTER_ALTERNATE), "{text:?}");
+    assert!(text.contains("STATUS 0"), "{text:?}");
+    assert_restored(&text);
+}
+
+#[test]
 fn sigterm_leaves_the_tui_and_gives_the_terminal_back() {
     let (_dir, bin) = binary_named("sift");
     let Some(pty) = Pty::start(&bin, 80, 24) else {
@@ -236,13 +250,13 @@ fn sigterm_leaves_the_tui_and_gives_the_terminal_back() {
 #[test]
 fn a_small_terminal_gets_one_line_and_no_tui() {
     let (_dir, bin) = binary_named("sift");
-    let Some(pty) = Pty::start(&bin, 70, 20) else {
+    let Some(pty) = Pty::start(&bin, 59, 18) else {
         return;
     };
     let text = pty.finish();
     assert!(!text.contains(ENTER_ALTERNATE), "{text:?}");
     assert!(
-        text.contains("sift needs a terminal of at least 80×24; this one is 70×20."),
+        text.contains("sift needs a terminal of at least 60×18; this one is 59×18."),
         "{text:?}"
     );
     assert!(text.contains("sift <command>"));

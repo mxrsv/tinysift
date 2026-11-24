@@ -163,11 +163,11 @@ mod tests {
 
     #[test]
     fn the_size_line_is_one_line_naming_the_minimum_and_the_commands() {
-        let line = too_small_line("sift", 70, 20);
+        let line = too_small_line("sift", 50, 16);
         assert!(!line.contains('\n'));
-        assert!(line.contains("80×24") && line.contains("70×20"));
+        assert!(line.contains("60×18") && line.contains("50×16"));
         assert!(line.contains("sift <command>"));
-        assert!(too_small_line("tinysift", 70, 20).contains("tinysift <command>"));
+        assert!(too_small_line("tinysift", 50, 16).contains("tinysift <command>"));
     }
 
     #[test]

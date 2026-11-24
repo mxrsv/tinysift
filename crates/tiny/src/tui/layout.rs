@@ -1,9 +1,10 @@
 //! The frame's fixed geometry, from the terminal size alone, so no data or
 //! state can move a region.
 
-/// Below this the TUI does not open (I7): Terminal.app's default size.
-pub const MIN_WIDTH: u16 = 80;
-pub const MIN_HEIGHT: u16 = 24;
+/// Below this the TUI does not open (I7): a split pane or a small window
+/// still fits, while a row keeps room for its name next to the figures.
+pub const MIN_WIDTH: u16 = 60;
+pub const MIN_HEIGHT: u16 = 18;
 /// From this width the detail is a right-hand pane (I8).
 const TWO_COLUMNS_FROM: usize = 100;
 /// The right-hand pane, including its separator column.
@@ -76,9 +77,10 @@ mod tests {
     }
 
     #[test]
-    fn the_minimum_is_80_by_24() {
-        assert!(Geometry::fits(80, 24));
-        assert!(!Geometry::fits(79, 24));
-        assert!(!Geometry::fits(80, 23));
+    fn the_minimum_is_60_by_18() {
+        assert!(Geometry::fits(60, 18));
+        assert!(Geometry::fits(74, 32));
+        assert!(!Geometry::fits(59, 18));
+        assert!(!Geometry::fits(60, 17));
     }
 }

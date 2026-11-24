@@ -241,10 +241,10 @@ fn the_spinner_turns_with_the_tick() {
 #[test]
 fn a_window_below_the_minimum_says_so_instead_of_drawing_the_frame() {
     let mut screen = PageHarness::blank(STANDARD, IconMode::Unicode);
-    screen.resize(60, 20);
+    screen.resize(59, 20);
     let text = screen.text();
-    assert!(text.contains("sift needs at least 80×24"));
-    assert!(text.contains("this window is 60×20"));
+    assert!(text.contains("sift needs at least 60×18"));
+    assert!(text.contains("this window is 59×20"));
     assert!(!text.contains("Uninstall"));
 }
 
@@ -280,3 +280,122 @@ fn a_pinned_row_stays_in_view_and_a_list_without_one_starts_at_the_top() {
         .iter()
         .all(|row| row.segs().iter().all(|seg| !seg.selected)));
 }
+
+/// The smallest window the TUI opens in (I7).
+const SMALLEST: (u16, u16) = (60, 18);
+
+/// A Clean mock screen: review on, which box, and a key pressed first.
+type MockScreen = (bool, fn() -> Boxed, Option<crossterm::event::KeyCode>);
+
+/// The rows of the box drawn over `text` that hold something, without its borders.
+fn box_content(text: &str) -> Vec<String> {
+    let lines: Vec<&str> = text.lines().collect();
+    let top = lines.iter().position(|line| line.contains('╭'));
+    let bottom = lines.iter().position(|line| line.contains('╰'));
+    let (Some(top), Some(bottom)) = (top, bottom) else {
+        return Vec::new();
+    };
+    lines[top + 1..bottom]
+        .iter()
+        .filter_map(|line| {
+            let inner = line.split('│').nth(1)?.trim();
+            (!inner.is_empty()).then(|| inner.to_string())
+        })
+        .collect()
+}
+
+#[test]
+fn the_smallest_window_keeps_every_box_whole_and_the_way_out() {
+    use crossterm::event::KeyCode;
+    let (width, height) = SMALLEST;
+    let screens: [MockScreen; 5] = [
+        (false, || Boxed::None, None),
+        (true, || Boxed::None, None),
+        (true, || Boxed::Action, None),
+        (true, || Boxed::Hard, None),
+        (true, || Boxed::None, Some(KeyCode::Char('?'))),
+    ];
+    for (review, boxed, key) in screens {
+        let shot = |size| {
+            let page = MockClean {
+                review,
+                boxed: boxed(),
+            };
+            let mut screen = PageHarness::new(page, size, IconMode::Unicode);
+            if let Some(key) = key {
+                screen.press(key);
+            }
+            screen.text()
+        };
+        let small = shot(SMALLEST);
+        let lines: Vec<&str> = small.lines().collect();
+        assert_eq!(lines.len(), usize::from(height));
+        for line in &lines {
+            assert!(text_width(line) <= usize::from(width), "{line}");
+        }
+        let key_bar = lines[usize::from(height) - 1];
+        assert!(
+            ["q quit", "esc cancel", "esc close"]
+                .iter()
+                .any(|way_out| key_bar.ends_with(way_out)),
+            "{key_bar}"
+        );
+        assert!(
+            small.contains('╭') == small.contains('╰'),
+            "a box lost its bottom border:\n{small}"
+        );
+        assert_eq!(
+            box_content(&small),
+            box_content(&shot(STANDARD)),
+            "a box lost or cut a row:\n{small}"
+        );
+    }
+}
+
+#[test]
+fn a_narrow_key_bar_keeps_quit_and_points_to_the_full_list() {
+    let keys = [
+        KeyHint::new("↑↓", "move"),
+        KeyHint::new("space", "tick"),
+        KeyHint::new("v", "review"),
+        KeyHint::new("p", "paths"),
+        KeyHint::new("enter", "clean"),
+        KeyHint::new("tab", "page"),
+        KeyHint::new("q", "quit"),
+    ];
+    assert_eq!(
+        key_bar(&keys, 60).text(),
+        " space tick · v review · enter clean · ? keys · q quit"
+    );
+    assert_eq!(
+        key_bar(&keys, 44).text(),
+        " space tick · enter clean · ? keys · q quit"
+    );
+    let boxed = [
+        KeyHint::new("←→", "move"),
+        KeyHint::new("enter", "choose"),
+        KeyHint::new("esc", "cancel"),
+    ];
+    assert_eq!(key_bar(&boxed, 30).text(), " enter choose · esc cancel");
+    assert_eq!(
+        key_bar(&boxed, 80).text(),
+        " ←→ move · enter choose · esc cancel"
+    );
+}
+
+#[test]
+fn a_narrow_tab_bar_drops_the_free_figure_not_a_tab() {
+    let bar = TabBar {
+        active: PageId::Clean,
+        icons: IconMode::Unicode,
+        free_bytes: Some(MOCK_FREE),
+    };
+    let narrow = tab_bar(50, &bar).text();
+    assert!(
+        narrow.contains("System") && !narrow.contains("free"),
+        "{narrow}"
+    );
+    assert!(tab_bar(80, &bar).text().contains("28.8 GB free"));
+}
+
+const MOCK_FREE: u64 = crate::tui::page_harness::MOCK_FREE_BYTES;

@@ -56,13 +56,13 @@ pub fn compose(geo: &Geometry, bar: &TabBar, view: &PageView, offset: usize) -> 
         .chain(std::iter::once(rule.clone()))
         .chain(body.rows)
         .chain(std::iter::once(rule))
-        .chain(std::iter::once(key_bar(&view.keys)))
+        .chain(std::iter::once(key_bar(&view.keys, width)))
         .map(|row| row.fit(width))
         .collect();
     let overlay = view.overlay.as_ref().map(|overlay| {
         let box_width = Overlay::width_on(width);
         let boxed: Vec<_> = overlay
-            .boxed(box_width)
+            .boxed_within(box_width, geo.body_rows)
             .into_iter()
             .take(geo.body_rows)
             .collect();
@@ -156,10 +156,14 @@ fn tab_bar(width: usize, bar: &TabBar) -> StyledLine {
             })
     };
     let spaced = strip(" ");
-    let tabs = if spaced.width() + free.width() + 2 <= width {
-        spaced
+    let fits = |tabs: &StyledLine, free: &StyledLine| tabs.width() + free.width() + 2 <= width;
+    let (tabs, free) = if fits(&spaced, &free) {
+        (spaced, free)
+    } else if fits(&strip(""), &free) {
+        (strip(""), free)
     } else {
-        strip("")
+        // A narrow window keeps every tab whole and drops the free-disk figure.
+        (strip(""), StyledLine::new())
     };
     let filler = width.saturating_sub(1 + tabs.width() + free.width()).max(1);
     StyledLine::from(" ")
@@ -168,14 +172,53 @@ fn tab_bar(width: usize, bar: &TabBar) -> StyledLine {
         .append(free)
 }
 
-fn key_bar(keys: &[KeyHint]) -> StyledLine {
-    let text = keys
-        .iter()
-        .map(|hint| format!("{} {}", hint.key, hint.action))
-        .collect::<Vec<_>>()
-        .join(" · ");
+/// The key hints, joined. When they do not all fit, hints leave in this order
+/// until the rest fits: `tab`, then `↑↓`, then the others from the right, and
+/// `enter` (the page's main action) last. The last hint (quit, or cancel in a
+/// box) always stays, so the way out is on screen; where the `?` list opens
+/// (the last hint is `q`), `? keys` stands for the hints left out.
+fn key_bar(keys: &[KeyHint], width: usize) -> StyledLine {
+    let label = |hint: &KeyHint| format!("{} {}", hint.key, hint.action);
+    let room = width.saturating_sub(1);
+    let line = |kept: &[&KeyHint], tail: &[String]| {
+        kept.iter()
+            .map(|hint| label(hint))
+            .chain(tail.iter().cloned())
+            .collect::<Vec<_>>()
+            .join(" · ")
+    };
+    let all: Vec<&KeyHint> = keys.iter().collect();
+    let text = match all.split_last() {
+        Some((last, rest)) if text_width(&line(&all, &[])) > room => {
+            let tail: Vec<String> = if last.key == "q" {
+                vec![format!("? {MORE_KEYS}"), label(last)]
+            } else {
+                vec![label(last)]
+            };
+            let rank = |hint: &KeyHint| match hint.key.as_str() {
+                "tab" => 0,
+                "↑↓" => 1,
+                "enter" => 3,
+                _ => 2,
+            };
+            let mut leaving: Vec<usize> = (0..rest.len()).rev().collect();
+            leaving.sort_by_key(|&index| rank(rest[index]));
+            let mut kept: Vec<&KeyHint> = rest.to_vec();
+            for index in leaving {
+                if text_width(&line(&kept, &tail)) <= room {
+                    break;
+                }
+                kept.retain(|hint| !std::ptr::eq(*hint, rest[index]));
+            }
+            line(&kept, &tail)
+        }
+        _ => line(&all, &[]),
+    };
     StyledLine::from(" ").dim(text)
 }
+
+/// The hint that stands for the keys a narrow key bar leaves out.
+const MORE_KEYS: &str = "keys";
 
 struct Body {
     rows: Vec<StyledLine>,

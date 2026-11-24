@@ -9,14 +9,13 @@ use super::engine::{Ports, ProcessRow};
 use crate::tui::pages::Detail;
 use crate::tui::styled_line::{Role, StyledLine};
 use crate::tui::widgets::confirm_box::{ConfirmBox, Tone};
-use crate::tui::widgets::meter::meter;
+use crate::tui::widgets::meter::{meter, name_and_bar, BAR};
 use crate::tui::widgets::size_format::format_size;
 use crate::tui::widgets::text_fit::{cut, wrap};
 
 /// Cells before the name: lead (2), PID (6), gap (2), bar (12), gap (1),
 /// CPU% (7), gap (1), memory (9), gap (2).
 const BEFORE_NAME: usize = 42;
-const BAR: usize = 12;
 /// The CPU bar turns to the warning role above this percent, and to the bad role above the next.
 const CPU_WARN_ABOVE: f32 = 50.0;
 const CPU_BAD_ABOVE: f32 = 90.0;
@@ -25,10 +24,19 @@ const LABEL: usize = 12;
 
 pub const CPU_NOTE: &str = "CPU is per core, so one process can pass 100%.";
 
-pub fn heading() -> StyledLine {
+/// The name and bar widths of a row `list_width` cells wide.
+fn columns(list_width: usize) -> (usize, usize) {
+    name_and_bar(list_width.saturating_sub(BEFORE_NAME - BAR))
+}
+
+pub fn heading(list_width: usize) -> StyledLine {
+    let (_, bar) = columns(list_width);
     StyledLine::new().dim(format!(
-        "  {:>6}  {:<20}{:>10}  NAME",
-        "PID", "CPU", "MEMORY"
+        "  {:>6}  {:<cpu$}{:>10}  NAME",
+        "PID",
+        "CPU",
+        "MEMORY",
+        cpu = bar + 8
     ))
 }
 
@@ -46,16 +54,14 @@ pub fn row(info: &ProcessInfo, highlighted: bool, list_width: usize) -> StyledLi
         _ => Role::Cpu,
     };
     let fraction = cpu.map_or(0.0, |cpu| f64::from(cpu / 100.0));
+    let (name, bar) = columns(list_width);
     lead.dim(format!("{:>6}", info.pid))
         .plain("  ")
-        .append(meter(fraction, BAR, bar_role))
+        .append(meter(fraction, bar, bar_role))
         .plain(" ")
         .push(value, format!("{:>7}", cpu_cell(cpu)))
         .plain(format!(" {:>9}  ", memory_cell(info.memory_bytes)))
-        .push(
-            value,
-            cut(&info.name, list_width.saturating_sub(BEFORE_NAME)),
-        )
+        .push(value, cut(&info.name, name))
 }
 
 pub fn detail(row: &ProcessRow, refused: Option<&Refusal>, width: usize) -> Detail {
@@ -235,7 +241,7 @@ mod tests {
     #[test]
     fn the_heading_and_a_row_line_up_like_the_mock() {
         assert_eq!(
-            heading().text(),
+            heading(78).text(),
             "     PID  CPU                     MEMORY  NAME"
         );
         let info = ProcessInfo {
@@ -260,6 +266,12 @@ mod tests {
             "   43154  ━━━━━━━━━━━━   19.6%     89 MB  AltTab"
         );
         assert_eq!(text_width(&line.text()), BEFORE_NAME + "AltTab".len());
+        // At 60 columns the bar gives way so the name keeps its room.
+        assert_eq!(heading(58).text(), "     PID  CPU             MEMORY  NAME");
+        assert_eq!(
+            row(&info, false, 58).text(),
+            "   43154  ━━━━   19.6%     89 MB  AltTab"
+        );
     }
 
     #[test]

@@ -258,7 +258,7 @@ impl<E: ProcessEngine> Page for ProcessesPage<E> {
             view::detail(row, refused, ctx.detail_width)
         });
         PageView {
-            header: vec![view::heading()],
+            header: vec![view::heading(ctx.list_width)],
             cursor: (!rows.is_empty()).then_some(cursor),
             list,
             detail,

@@ -4,7 +4,7 @@
 use crate::tui::icons::IconMode;
 use crate::tui::pages::{Detail, KeyHint, PageView, ViewCtx};
 use crate::tui::styled_line::{Role, StyledLine};
-use crate::tui::widgets::meter::meter;
+use crate::tui::widgets::meter::{meter, name_and_bar, BAR};
 use crate::tui::widgets::phrases::plural;
 use crate::tui::widgets::size_format::format_size;
 use crate::tui::widgets::spinner::spinner_line;
@@ -14,7 +14,8 @@ use super::engine::{Finding, Route};
 use super::listing::{Entry, Listing};
 use super::wording::{comes_back, shown_path};
 
-/// Cells a row spends besides the name: lead, tick, bar, size and tag.
+/// Cells a row spends besides the name: lead, tick, bar, size and tag, with
+/// the bar at its full width.
 const ROW_CHROME: usize = 39;
 const LABEL: usize = 12;
 
@@ -222,9 +223,10 @@ fn row(entry: &Entry, highlighted: bool, max: u64, ctx: &ViewCtx) -> StyledLine 
             .plain(category.label.as_str())
             .dim(format!("   not read: {reason}"));
     }
-    let name_width = ctx
-        .list_width
-        .saturating_sub(ROW_CHROME + if ctx.icons == IconMode::Nerd { 2 } else { 0 });
+    let (name_width, bar) = name_and_bar(
+        ctx.list_width
+            .saturating_sub(ROW_CHROME - BAR + if ctx.icons == IconMode::Nerd { 2 } else { 0 }),
+    );
     let on = entry.ticked && entry.tickable();
     let tick = if entry.locked() {
         StyledLine::new().faint("– ")
@@ -259,7 +261,7 @@ fn row(entry: &Entry, highlighted: bool, max: u64, ctx: &ViewCtx) -> StyledLine 
             name,
         )
         .plain(" ")
-        .append(meter(fraction, 12, Role::Storage))
+        .append(meter(fraction, bar, Role::Storage))
         .plain(" ")
         .push(if on { Role::Hi } else { Role::Dim }, format!("{size:>10}"))
         .plain("  ");

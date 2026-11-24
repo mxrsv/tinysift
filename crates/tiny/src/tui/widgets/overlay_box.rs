@@ -2,9 +2,10 @@
 
 use crate::tui::styled_line::StyledLine;
 
-/// Widest box the frame draws; narrower terminals get `width - 6`.
+/// Widest box the frame draws; narrower terminals get `width - 2`, so from
+/// the 60-column minimum every box keeps the width its lines were written for.
 pub const MAX_BOX_WIDTH: usize = 58;
-const SIDE_MARGIN: usize = 6;
+const SIDE_MARGIN: usize = 2;
 
 /// A box over the page. `lines` are the rows inside it, drawn one cell in
 /// from the left border; blank lines are spacing. The frame centres it.
@@ -20,6 +21,32 @@ impl Overlay {
         terminal_width
             .saturating_sub(SIDE_MARGIN)
             .min(MAX_BOX_WIDTH)
+    }
+
+    /// The box at most `max_rows` tall: when it would be taller, blank
+    /// spacing lines go first, from the bottom up, so no content row is cut.
+    pub fn boxed_within(&self, width: usize, max_rows: usize) -> Vec<StyledLine> {
+        let over = (self.lines.len() + 2).saturating_sub(max_rows);
+        let blanks: Vec<usize> = self
+            .lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| line.width() == 0)
+            .map(|(index, _)| index)
+            .rev()
+            .take(over)
+            .collect();
+        Self {
+            title: self.title.clone(),
+            lines: self
+                .lines
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !blanks.contains(index))
+                .map(|(_, line)| line.clone())
+                .collect(),
+        }
+        .boxed(width)
     }
 
     /// The box as rows exactly `width` cells wide.
@@ -70,9 +97,37 @@ mod tests {
     }
 
     #[test]
-    fn the_box_is_58_wide_or_six_less_than_the_terminal() {
+    fn a_short_window_drops_blank_lines_before_any_content() {
+        let overlay = Overlay {
+            title: "Keys".into(),
+            lines: vec![
+                StyledLine::new(),
+                StyledLine::from("a"),
+                StyledLine::new(),
+                StyledLine::from("b"),
+                StyledLine::new(),
+            ],
+        };
+        let rows = |max| -> Vec<String> {
+            overlay
+                .boxed_within(12, max)
+                .iter()
+                .map(StyledLine::text)
+                .collect()
+        };
+        assert_eq!(rows(10).len(), 7);
+        assert_eq!(
+            rows(5)[1..4],
+            ["│          │", "│ a        │", "│ b        │"]
+        );
+        assert_eq!(rows(4)[1..3], ["│ a        │", "│ b        │"]);
+    }
+
+    #[test]
+    fn the_box_is_58_wide_or_two_less_than_the_terminal() {
         assert_eq!(Overlay::width_on(120), 58);
         assert_eq!(Overlay::width_on(80), 58);
-        assert_eq!(Overlay::width_on(60), 54);
+        assert_eq!(Overlay::width_on(60), 58);
+        assert_eq!(Overlay::width_on(50), 48);
     }
 }
