@@ -84,18 +84,86 @@ fn a_path_picked_through_a_symlink_is_kept_where_it_really_is() {
 }
 
 #[test]
+fn a_picked_path_holds_a_candidate_the_scan_spells_through_a_symlink() {
+    let dir = fixture_dir("picked-scan-link", &[], 1);
+    let real = dir.join("real");
+    std::fs::create_dir(&real).unwrap();
+    for name in ["a", "b"] {
+        std::fs::write(real.join(name), b"x").unwrap();
+    }
+    std::os::unix::fs::symlink(&real, dir.join("alias")).unwrap();
+    let session = TestSession::new();
+    keep_path(&session, &real.join("a")).unwrap();
+
+    // A provider builds its root from the system's own spelling, links and
+    // all (the Font cache is `/var/folders/…`), and discovery keeps it.
+    let scanned = dir.join("alias");
+    let discovery = discover(&session, &providers(&scanned)).unwrap();
+    assert!(id_of(&discovery, "/alias/a").starts_with('d'));
+    let protection = session.clean_protection().unwrap();
+    let held = candidate_protection(&protection, &discovery, "/a");
+    assert!(
+        matches!(held.guards.first(), Some(FfiProtectionGuard::Kept { rule_id, .. }) if rule_id == "r1"),
+        "the rule names the real location and the scan another spelling: {held:?}"
+    );
+    assert!(candidate_protection(&protection, &discovery, "/b")
+        .guards
+        .is_empty());
+
+    let preview = session.clean_preview(ids(&discovery)).unwrap();
+    let moving: Vec<&str> = preview.items.iter().map(|i| i.path.as_str()).collect();
+    assert_eq!(
+        moving,
+        [text(&scanned.join("b"))],
+        "only the item no rule holds"
+    );
+    assert!(
+        matches!(
+            preview.excluded.as_slice(),
+            [FfiPreviewExclusion {
+                reason: FfiExclusionReason::Protected { .. },
+                ..
+            }]
+        ),
+        "{:?}",
+        preview.excluded
+    );
+    remove(&dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn a_path_on_the_data_volume_is_kept_under_its_short_spelling() {
+    let dir = fixture_dir("picked-data-volume", &["a"], 1);
+    let long = Path::new("/System/Volumes/Data").join(dir.strip_prefix("/").unwrap());
+    if !long.join("a").exists() {
+        // The temp dir is not on the data volume here: nothing to shorten.
+        remove(&dir);
+        return;
+    }
+    let session = TestSession::new();
+    let kept = keep_path(&session, &long.join("a")).unwrap();
+    assert_eq!(rules(&kept)[0].path, text(&dir.join("a")));
+    remove(&dir);
+}
+
+#[test]
 fn paths_a_rule_cannot_name_are_refused_without_writing() {
     let dir = fixture_dir("picked-refused", &["a"], 1);
     std::os::unix::fs::symlink(dir.join("a"), dir.join("link")).unwrap();
     let session = TestSession::new();
     session.clean_protection().unwrap();
 
-    let cases: [(String, &str); 6] = [
+    let cases: [(String, &str); 7] = [
         ("relative/path".into(), "not absolute"),
         (format!("{}/", text(&dir)), "canonical form"),
         (format!("{}/../x", text(&dir)), "canonical form"),
         ("/".into(), "root"),
-        (text(&dir.join("missing")), "cannot be inspected"),
+        (text(&dir.join("missing")), "nothing is at this path"),
+        (
+            text(&dir.join("missing").join("deeper")),
+            "nothing is at this path",
+        ),
         (text(&dir.join("link")), "link or a special file"),
     ];
     for (path, words) in cases {

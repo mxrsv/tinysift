@@ -10,6 +10,8 @@
 //! create files; only a write or an execution takes the exclusive lease.
 
 use std::fs;
+use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use tiny_core::clean::protection::{
@@ -193,8 +195,8 @@ fn write_error(error: StoreError) -> FfiError {
         StoreError::Stale { .. } | StoreError::Changed | StoreError::StoreLost => {
             FfiError::ProtectionChanged
         }
-        StoreError::Duplicate(id) => FfiError::InvalidInput {
-            detail: format!("this path is already kept by saved rule {id}"),
+        StoreError::Duplicate(_) => FfiError::InvalidInput {
+            detail: "this path is already kept".into(),
         },
         StoreError::UnknownRule(id) => FfiError::InvalidInput {
             detail: format!("there is no saved rule {id}"),
@@ -216,10 +218,12 @@ struct CandidateView {
     keep_scope: Option<RuleScope>,
 }
 
-/// The candidate a keep resolved, re-checked against disk before the write.
+/// What a keep resolved, re-checked against disk before the write.
 struct KeepTarget {
     path: PathBuf,
     scope: RuleScope,
+    /// What the user does when the path changed meanwhile.
+    again: &'static str,
 }
 
 /// A rule write as the caller named it: an ID, or the path a user picked.
@@ -234,8 +238,9 @@ impl KeepTarget {
     /// (or the reverse) would silently change what the rule covers.
     fn revalidate(&self) -> Result<(), FfiError> {
         let shown = self.path.display();
+        let again = self.again;
         let invalid = |why: String| FfiError::InvalidInput {
-            detail: format!("{shown} {why}; scan again"),
+            detail: format!("{shown} {why}; {again}"),
         };
         match fs::symlink_metadata(&self.path) {
             Ok(meta) if scope_of(&meta) == Some(self.scope) => Ok(()),
@@ -401,39 +406,49 @@ impl TinySession {
         let scope = candidate.keep_scope.ok_or_else(|| FfiError::InvalidInput {
             detail: format!("{} cannot be kept", path.display()),
         })?;
-        Ok(KeepTarget { path, scope })
+        Ok(KeepTarget {
+            path,
+            scope,
+            again: "scan again",
+        })
     }
 
-    /// What a rule for a picked `path` would cover, read from disk. The folder
-    /// holding it is resolved to its real location, because rules compare
-    /// components and a scan never walks through a symlink: a rule spelled
-    /// through one would hold nothing. The picked name itself is never
-    /// followed. A rule on the home folder or above it would hold every
-    /// candidate, so it is refused rather than saved.
+    /// What a rule for a picked path would cover, read from disk. The rule is
+    /// saved where the item really is (the folder holding it resolved, the
+    /// short spelling of the data volume), so the list shows one honest
+    /// path; the matcher compares real locations, so a scan that spells the
+    /// item through a link is held all the same. The picked name itself is
+    /// never followed. A rule on the home folder or above it would hold
+    /// every candidate, so it is refused rather than saved. The refusals
+    /// name no path: the app says which one was asked.
     fn picked_target(picked: &str, home: &Path) -> Result<KeepTarget, FfiError> {
-        let invalid = |why: String| FfiError::InvalidInput {
-            detail: format!("{picked} {why}"),
+        let invalid = |detail: String| FfiError::InvalidInput { detail };
+        let unnamed = |e| invalid(format!("it cannot be kept: {e}"));
+        let unread = |e: io::Error| match e.kind() {
+            io::ErrorKind::NotFound => invalid("nothing is at this path".into()),
+            _ => invalid(format!("it cannot be inspected now ({e})")),
         };
-        let unnamed = |e| invalid(format!("cannot be kept: {e}"));
         let spelled = Path::new(picked);
         validate_rule_path(spelled).map_err(unnamed)?;
         let (Some(parent), Some(name)) = (spelled.parent(), spelled.file_name()) else {
-            return Err(invalid("cannot be kept".into()));
+            return Err(invalid("it cannot be kept".into()));
         };
-        let path = fs::canonicalize(parent)
-            .map_err(|e| invalid(format!("cannot be inspected now ({e})")))?
-            .join(name);
+        let path = short_spelling(fs::canonicalize(parent).map_err(unread)?.join(name));
         validate_rule_path(&path).map_err(unnamed)?;
         if let Some(reason) = protected_reason(&path, Some(home), false) {
             return Err(invalid(format!(
-                "is {reason}, which holds everything Clean looks at; choose something inside it"
+                "it is {reason}, which holds everything Clean looks at; choose something inside it"
             )));
         }
-        let meta = fs::symlink_metadata(&path)
-            .map_err(|e| invalid(format!("cannot be inspected now ({e})")))?;
-        let scope = scope_of(&meta)
-            .ok_or_else(|| invalid("is a link or a special file and cannot be kept".into()))?;
-        Ok(KeepTarget { path, scope })
+        let meta = fs::symlink_metadata(&path).map_err(unread)?;
+        let scope = scope_of(&meta).ok_or_else(|| {
+            invalid("it is a link or a special file; choose the item itself".into())
+        })?;
+        Ok(KeepTarget {
+            path,
+            scope,
+            again: "choose it again",
+        })
     }
 
     /// One rule write under the gate and the exclusive store lock. The rules
@@ -489,6 +504,21 @@ impl TinySession {
     /// A stored preview was built for the old rules.
     fn drop_preview(&self) {
         self.clean_state().preview = None;
+    }
+}
+
+/// macOS shows the data volume twice: `/System/Volumes/Data/Users` is
+/// `/Users`. Resolving links leaves the long spelling alone, so it is
+/// shortened here when both name one item.
+fn short_spelling(path: PathBuf) -> PathBuf {
+    let Ok(rest) = path.strip_prefix("/System/Volumes/Data") else {
+        return path;
+    };
+    let short = Path::new("/").join(rest);
+    let item = |p: &Path| fs::symlink_metadata(p).ok().map(|m| (m.dev(), m.ino()));
+    match (item(&path), item(&short)) {
+        (Some(long), Some(same)) if long == same => short,
+        _ => path,
     }
 }
 
