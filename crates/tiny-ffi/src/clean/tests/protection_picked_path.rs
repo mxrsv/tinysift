@@ -131,6 +131,60 @@ fn a_picked_path_holds_a_candidate_the_scan_spells_through_a_symlink() {
     remove(&dir);
 }
 
+#[test]
+fn one_item_gets_one_rule_whatever_spelling_asks() {
+    let dir = fixture_dir("picked-twice", &[], 1);
+    let real = dir.join("real");
+    std::fs::create_dir(&real).unwrap();
+    std::fs::write(real.join("a"), b"x").unwrap();
+    std::os::unix::fs::symlink(&real, dir.join("alias")).unwrap();
+    let session = TestSession::new();
+
+    // The scan row keeps the scan's own spelling, through the link.
+    let discovery = discover(&session, &providers(&dir.join("alias"))).unwrap();
+    let kept = keep_candidate(&session, &id_of(&discovery, "/alias/a"));
+    assert_eq!(rules(&kept)[0].path, text(&dir.join("alias").join("a")));
+
+    let again = session.clean_keep_path(text(&real.join("a")), 1);
+    assert!(refused(&again, "already kept"), "{again:?}");
+    let through = session.clean_keep_path(text(&dir.join("alias").join("a")), 1);
+    assert!(refused(&through, "already kept"), "{through:?}");
+    assert_eq!(rules(&session.clean_protection().unwrap()).len(), 1);
+    remove(&dir);
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+fn the_data_volume_and_another_case_do_not_get_past_the_home_refusal() {
+    let dir = fixture_dir("picked-home-spellings", &[], 1);
+    let home = dir.join("Users").join("someone");
+    std::fs::create_dir_all(&home).unwrap();
+    let session = TestSession::new();
+    session.clean_state().home_inputs = Some((Some(home.clone()), Some(home.clone())));
+    session.clean_protection().unwrap();
+
+    // The long spelling of the data volume holds the home folder too.
+    for above in ["/System/Volumes/Data", "/System/Volumes", "/System"] {
+        let result = session.clean_keep_path(above.into(), 0);
+        assert!(
+            refused(&result, "an ancestor of the home folder"),
+            "{above}: {result:?}"
+        );
+    }
+    // Where the volume ignores case, another case is the same folder.
+    if dir.join("USERS").exists() {
+        let shouted = session.clean_keep_path(text(&dir.join("Users").join("SOMEONE")), 0);
+        assert!(refused(&shouted, "the home folder"), "{shouted:?}");
+        let above = session.clean_keep_path(text(&dir.join("USERS")), 0);
+        assert!(
+            refused(&above, "an ancestor of the home folder"),
+            "{above:?}"
+        );
+    }
+    assert!(!session.store().dir().exists(), "nothing was written");
+    remove(&dir);
+}
+
 #[cfg(target_os = "macos")]
 #[test]
 fn a_path_on_the_data_volume_is_kept_under_its_short_spelling() {

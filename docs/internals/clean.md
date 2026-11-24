@@ -742,10 +742,11 @@ Each path is therefore compared twice, as spelled and at its real location (the 
 holding it with every symlink resolved, then its own name), and a rule holds a candidate when
 any spelling of one relates to any spelling of the other. The last name is never followed: a
 link to a kept item is its own entry, and moving the link moves nothing kept. A candidate
-whose folder is there but cannot be resolved counts as held. Renames are not tracked, so a
-rule for a path that is missing today applies again if that path returns. Equivalent spellings on a volume that folds case or Unicode are decided from the
-real directory entries; anything that cannot be decided (unreadable parent, several entries
-for one inode) counts as held, not as free. Tiny's own store, lock and staging paths are
+whose folder is there but cannot be resolved counts as held; a rule whose folder is gone or
+cannot be resolved keeps its spelling alone. Renames are not tracked, so a rule for a path
+that is missing today applies again if that path returns. Equivalent spellings on a volume
+that folds case or Unicode are decided from the real directory entries; anything that cannot
+be decided (unreadable parent, several entries for one inode) counts as held, not as free. Tiny's own store, lock and staging paths are
 internal rules, so cleanup never moves them or an ancestor that holds them. A tool item that
 names no file (Homebrew's cleanup) is held at run time when a rule touches a path its tool
 deletes or deletes inside ([`tool_touches`](../../crates/tiny-core/src/clean/providers/homebrew.rs):
@@ -758,12 +759,14 @@ remove, with the revision it last read
 ([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The one
 path Swift sends is a file or folder the user picked to keep outside a scan
 (`clean_keep_path`, same file): it can only add a rule, never select or move anything. Rust
-saves the rule where the item really is (the folder holding it resolved, and the short
-spelling of the data volume, `/Users/…` for `/System/Volumes/Data/Users/…`), takes the scope
-from the item's own metadata and refuses, as `InvalidInput` with words the app shows after
-naming the path itself, a path that is not absolute and normalized, is missing, is a symlink
-or a special file, is already kept, or is the home folder or a folder holding it, since that
-rule would hold every candidate. Paths outside the home folder are allowed. The
+saves the rule where the item really is (the folders above it resolved, its own name as the
+volume spells it, and the short spelling of the data volume, `/Users/…` for
+`/System/Volumes/Data/Users/…`), takes the scope from the item's own metadata and refuses, as
+`InvalidInput` with words the app shows after naming the path itself, a path that is not
+absolute and normalized, is missing, is a symlink or a special file, is already kept under
+any spelling, or is the home folder or a folder holding it under either spelling of the data
+volume, since that rule would hold every candidate. Paths outside the home folder are
+allowed. The matcher does not map the data volume's long spelling, which no scan produces. The
 [CLI executor](../../crates/tiny-core/src/clean/execute.rs) takes the same exclusive lease before
 acting, reports every item the rules do not allow as kept, and refuses the whole run when they
 cannot be read.

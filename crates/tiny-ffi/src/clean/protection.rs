@@ -18,6 +18,10 @@ use tiny_core::clean::protection::{
     validate_rule_path, Evaluation, Matcher, PolicySnapshot, ProtectionRule, Relation, RuleScope,
     INTERNAL_ID_PREFIX,
 };
+
+/// Where macOS shows the data volume a second time: `/System/Volumes/Data/Users`
+/// is `/Users`.
+const DATA_VOLUME: &str = "/System/Volumes/Data";
 use tiny_core::clean::protection_store::StoreError;
 use tiny_core::clean::trash_plan::{protected_reason, PlannedItem};
 
@@ -222,8 +226,9 @@ struct CandidateView {
 struct KeepTarget {
     path: PathBuf,
     scope: RuleScope,
-    /// What the user does when the path changed meanwhile.
-    again: &'static str,
+    /// A path the user picked, not a scan's candidate: its refusals name no
+    /// path and no scan.
+    picked: bool,
 }
 
 /// A rule write as the caller named it: an ID, or the path a user picked.
@@ -237,15 +242,22 @@ impl KeepTarget {
     /// The path must still be what the user saw: a folder swapped for a file
     /// (or the reverse) would silently change what the rule covers.
     fn revalidate(&self) -> Result<(), FfiError> {
-        let shown = self.path.display();
-        let again = self.again;
-        let invalid = |why: String| FfiError::InvalidInput {
-            detail: format!("{shown} {why}; {again}"),
+        let invalid = |scanned: &str, picked: &str| FfiError::InvalidInput {
+            detail: match self.picked {
+                true => format!("it {picked}; choose it again"),
+                false => format!("{} {scanned}; scan again", self.path.display()),
+            },
         };
         match fs::symlink_metadata(&self.path) {
             Ok(meta) if scope_of(&meta) == Some(self.scope) => Ok(()),
-            Ok(_) => Err(invalid("changed kind since the scan".into())),
-            Err(e) => Err(invalid(format!("cannot be inspected now ({e})"))),
+            Ok(_) => Err(invalid(
+                "changed kind since the scan",
+                "changed while it was being saved",
+            )),
+            Err(e) => {
+                let why = format!("cannot be inspected now ({e})");
+                Err(invalid(&why, &why))
+            }
         }
     }
 }
@@ -409,18 +421,19 @@ impl TinySession {
         Ok(KeepTarget {
             path,
             scope,
-            again: "scan again",
+            picked: false,
         })
     }
 
     /// What a rule for a picked path would cover, read from disk. The rule is
-    /// saved where the item really is (the folder holding it resolved, the
-    /// short spelling of the data volume), so the list shows one honest
-    /// path; the matcher compares real locations, so a scan that spells the
-    /// item through a link is held all the same. The picked name itself is
-    /// never followed. A rule on the home folder or above it would hold
-    /// every candidate, so it is refused rather than saved. The refusals
-    /// name no path: the app says which one was asked.
+    /// saved where the item really is (the folders above it resolved, its own
+    /// name as the volume spells it, the short spelling of the data volume),
+    /// so the list shows one honest path and a second pick of the same item
+    /// is seen as the same. The picked item itself is never followed: a link
+    /// is refused. A rule on the home folder or above it, under either
+    /// spelling of the data volume, would hold every candidate, so it is
+    /// refused rather than saved. The refusals name no path: the app says
+    /// which one was asked.
     fn picked_target(picked: &str, home: &Path) -> Result<KeepTarget, FfiError> {
         let invalid = |detail: String| FfiError::InvalidInput { detail };
         let unnamed = |e| invalid(format!("it cannot be kept: {e}"));
@@ -433,21 +446,26 @@ impl TinySession {
         let (Some(parent), Some(name)) = (spelled.parent(), spelled.file_name()) else {
             return Err(invalid("it cannot be kept".into()));
         };
-        let path = short_spelling(fs::canonicalize(parent).map_err(unread)?.join(name));
+        let found = fs::canonicalize(parent).map_err(unread)?.join(name);
+        let meta = fs::symlink_metadata(&found).map_err(unread)?;
+        let scope = scope_of(&meta).ok_or_else(|| {
+            invalid("it is a link or a special file; choose the item itself".into())
+        })?;
+        // Not a link, so this only gives its name the spelling the volume holds.
+        let path = short_spelling(fs::canonicalize(&found).map_err(unread)?);
         validate_rule_path(&path).map_err(unnamed)?;
-        if let Some(reason) = protected_reason(&path, Some(home), false) {
+        let long_home = Path::new(DATA_VOLUME).join(home.strip_prefix("/").unwrap_or(home));
+        let holds_home = protected_reason(&path, Some(home), false)
+            .or_else(|| protected_reason(&path, Some(&long_home), false));
+        if let Some(reason) = holds_home {
             return Err(invalid(format!(
                 "it is {reason}, which holds everything Clean looks at; choose something inside it"
             )));
         }
-        let meta = fs::symlink_metadata(&path).map_err(unread)?;
-        let scope = scope_of(&meta).ok_or_else(|| {
-            invalid("it is a link or a special file; choose the item itself".into())
-        })?;
         Ok(KeepTarget {
             path,
             scope,
-            again: "choose it again",
+            picked: true,
         })
     }
 
@@ -474,6 +492,11 @@ impl TinySession {
         let written = match (&change, &target) {
             (Change::Keep(_) | Change::KeepPath(_), Some(target)) => {
                 target.revalidate()?;
+                if already_kept(lease.snapshot(), &target.path) {
+                    return Err(FfiError::InvalidInput {
+                        detail: "this path is already kept".into(),
+                    });
+                }
                 self.drop_preview();
                 lease.add(expected, &target.path, target.scope).map(drop)
             }
@@ -507,11 +530,20 @@ impl TinySession {
     }
 }
 
-/// macOS shows the data volume twice: `/System/Volumes/Data/Users` is
-/// `/Users`. Resolving links leaves the long spelling alone, so it is
-/// shortened here when both name one item.
+/// Whether a saved rule already names `path`, under any spelling: two rules
+/// for one item would leave it kept after the user removed one.
+fn already_kept(policy: &PolicySnapshot, path: &Path) -> bool {
+    let matcher = Matcher::new();
+    policy.rules.iter().any(|rule| {
+        let found = matcher.evaluate([rule], path);
+        found.blocks.iter().any(|b| b.relation == Relation::Equal)
+    })
+}
+
+/// Resolving links leaves the long spelling of the data volume alone, so it
+/// is shortened here when both spellings name one item.
 fn short_spelling(path: PathBuf) -> PathBuf {
-    let Ok(rest) = path.strip_prefix("/System/Volumes/Data") else {
+    let Ok(rest) = path.strip_prefix(DATA_VOLUME) else {
         return path;
     };
     let short = Path::new("/").join(rest);
