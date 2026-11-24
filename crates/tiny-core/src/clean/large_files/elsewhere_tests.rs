@@ -107,8 +107,10 @@ impl World {
                 home: &self.home,
                 applications: &applications,
                 probe,
+                owned_min_bytes: MB as u64,
             },
             frees_nothing,
+            Vec::new(),
             None,
         )
     }
@@ -136,6 +138,9 @@ impl World {
                         only_copy_min_bytes: MB as u64,
                         other_min_bytes: MB as u64,
                         other_min_age_days: 90,
+                        old_downloads_days: Some(30),
+                        owned_min_bytes: MB as u64,
+                        cloud_min_bytes: MB as u64,
                     },
                     last_used: &NoLastUsed,
                     now: SystemTime::now(),
@@ -278,7 +283,9 @@ fn a_cancelled_scan_lists_nothing_it_did_not_reach() {
             home: &world.home,
             applications: &applications,
             probe: &probe,
+            owned_min_bytes: MB as u64,
         },
+        vec![],
         vec![],
         Some(&flag),
     );
@@ -352,6 +359,7 @@ fn sizes_read_as_the_app_writes_them() {
         fingerprint: PathFingerprint::of(
             &fs::symlink_metadata(world.home.join("Documents/x.bin")).unwrap(),
         ),
+        follows_size_filter: true,
     };
     let rows = world.scan(&quiet(), vec![file]);
     assert_eq!(
@@ -359,6 +367,8 @@ fn sizes_read_as_the_app_writes_them() {
         Some(8_530_000_000)
     );
     assert!(rows[0].elsewhere.as_ref().unwrap().kind == "File");
+    // The walk's flag reaches the row: the size filter applies to it.
+    assert!(rows[0].follows_size_filter());
 }
 
 #[test]
@@ -371,6 +381,7 @@ fn a_hard_linked_file_says_another_link_stays() {
         modified: None,
         fingerprint: PathFingerprint::of(&fs::symlink_metadata(&path).unwrap()),
         path,
+        follows_size_filter: false,
     };
     let rows = world.scan(&quiet(), vec![file]);
     assert!(
@@ -378,4 +389,5 @@ fn a_hard_linked_file_says_another_link_stays() {
         "{}",
         rows[0].reason
     );
+    assert!(!rows[0].follows_size_filter());
 }

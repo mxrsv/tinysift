@@ -71,7 +71,7 @@ fn unknown_stale_and_unloaded_requests_are_rejected_without_writing() {
     assert_eq!((revision(&kept), rules(&kept).len()), (1, 1));
     let again = session.clean_keep(id_of(&second, "/a"), 1);
     assert!(
-        matches!(&again, Err(FfiError::InvalidInput { detail }) if detail.contains("r1")),
+        matches!(&again, Err(FfiError::InvalidInput { detail }) if detail.contains("already kept")),
         "{again:?}"
     );
     remove(&dir);

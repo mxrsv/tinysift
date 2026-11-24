@@ -6,9 +6,10 @@
 //! The checks are Clean's own pieces, in Clean's order: the saved "always
 //! keep" rules (held for the whole run through the lease, a change stops the
 //! run), `/System`, the path still the file the scan saw (size and mtime for
-//! a file), not a symlink, on the home volume, inside a folder the scan
-//! looked at through real folders, no running process holding it
-//! (`open_files`), and not a protected path.
+//! a file), what must stay for it still there (a copy's original, an
+//! archive's whole unpacked copy), not a symlink, on the home volume, inside
+//! a folder the scan looked at through real folders, no running process
+//! holding it (`open_files`), and not a protected path.
 
 use std::fs;
 use std::io;
@@ -28,6 +29,8 @@ use crate::clean::protection_store::StoreLease;
 use crate::clean::trash_plan::{inside_system, protected_reason};
 use crate::progress::ProgressCallback;
 
+use super::archive_beside::extracted_beside;
+
 /// One path to move, as the scan recorded it.
 #[derive(Debug, Clone)]
 pub struct PlannedMove {
@@ -37,6 +40,12 @@ pub struct PlannedMove {
     /// original of a Copies row (CP1). Without it the move is skipped, so a
     /// copy never goes while its original is gone.
     pub must_remain: Option<(PathBuf, PathFingerprint)>,
+    /// An archive's Copies row (LV-L6): the unpacked item beside it that
+    /// must still hold every file the archive lists, at the same sizes,
+    /// checked again right before the move. `must_remain` covers only its
+    /// largest file, so an entry moved or deleted since the scan would
+    /// otherwise go unnoticed.
+    pub must_stay_unpacked: Option<PathBuf>,
 }
 
 /// Everything a run needs besides the plan.
@@ -243,6 +252,11 @@ fn check(planned: &PlannedMove, ctx: &MoveContext<'_>) -> Result<(), SkipReason>
         match fs::symlink_metadata(keeper) {
             Ok(m) if m.is_file() && PathFingerprint::of(&m) == *fingerprint => {}
             _ => return Err(SkipReason::Changed),
+        }
+    }
+    if let Some(beside) = &planned.must_stay_unpacked {
+        if !extracted_beside(path).is_some_and(|e| e.beside == *beside) {
+            return Err(SkipReason::Changed);
         }
     }
     if meta.dev() != home_device(Some(ctx.home))? {

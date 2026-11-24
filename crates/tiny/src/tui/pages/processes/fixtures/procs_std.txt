@@ -1,0 +1,24 @@
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+      PID  CPU                     MEMORY  NAME
+ ❯  17703  ━━━━━━━━━━━━   39.0%    559 MB  Google Chrome Helper (Renderer)
+    43154  ━━━━━━━━━━━━   19.6%     89 MB  AltTab
+      934  ━━━━━━━━━━━━   17.4%    111 MB  cfprefsd
+     1548  ━━━━━━━━━━━━   13.9%    191 MB  Google Chrome Helper
+     1240  ━━━━━━━━━━━━    8.1%    519 MB  Google Chrome
+    92184  ━━━━━━━━━━━━    7.1%    601 MB  node (claude)
+
+
+
+
+
+
+
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Google Chrome Helper (Renderer)  PID 17703 · yours
+ Parent Google Chrome (1240)   children 0   memory 559 MB
+ Listens on  :3000 :9229
+
+ CPU is per core, so one process can pass 100%.
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · s sort · r read again · x quit · X force quit · tab page · q quit

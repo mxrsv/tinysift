@@ -1,5 +1,5 @@
-//! Group 2, Installers: a `.dmg`, `.pkg`, `.iso` or `.xip` whose app is
-//! already in Applications (IN1). The match is the file name against the
+//! Group 2, Installers: a `.dmg`, `.pkg`, `.iso` or `.xip` in Downloads,
+//! Desktop or Documents whose app is already in Applications (IN1, LV-L6). The match is the file name against the
 //! names of the app bundles found there, nothing else; an installer with no
 //! such app is not this group's (later groups place it).
 
@@ -12,6 +12,7 @@ use crate::clean::fs_safe::PathFingerprint;
 use crate::clean::private_size::private_allocated_bytes;
 
 use super::app_version::AppVersions;
+use super::lens::Lens;
 use super::name_match::{is_newer, parse_name, parse_version};
 use super::{FreesNothing, Group, LargeFile};
 
@@ -25,7 +26,8 @@ pub const INSTALLER_EXTENSIONS: &[&str] = &["dmg", "pkg", "iso", "xip"];
 /// Where to look, injectable so a test never reads the real home.
 #[derive(Debug, Clone)]
 pub struct InstallerRoots {
-    /// Folders whose direct children are looked at (Downloads, Desktop).
+    /// Folders whose direct children are looked at (Downloads, Desktop,
+    /// Documents).
     pub folders: Vec<PathBuf>,
     /// Folders whose direct `.app` children count as installed.
     pub applications: Vec<PathBuf>,
@@ -34,7 +36,11 @@ pub struct InstallerRoots {
 impl InstallerRoots {
     pub fn for_home(home: &Path) -> Self {
         Self {
-            folders: vec![home.join("Downloads"), home.join("Desktop")],
+            folders: vec![
+                home.join("Downloads"),
+                home.join("Desktop"),
+                home.join("Documents"),
+            ],
             applications: vec![PathBuf::from("/Applications"), home.join("Applications")],
         }
     }
@@ -133,6 +139,7 @@ fn installer(
             allocated: meta.blocks().saturating_mul(512),
             modified: meta.modified().ok(),
             fingerprint: PathFingerprint::of(&meta),
+            follows_size_filter: false,
         });
         return None;
     }
@@ -163,6 +170,9 @@ fn installer(
         fingerprint: PathFingerprint::of(&meta),
         elsewhere: None,
         copy: None,
+        extracted: None,
+        lens: Lens::Installer,
+        downloaded_from: None,
     })
 }
 

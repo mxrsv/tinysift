@@ -1,15 +1,22 @@
-//! Groups 3 and 4 of Large Files (GR1): one read-only walk of the user's
-//! home, metadata only, nothing hashed. A video of 500 MB or more is
-//! "Only copy on this Mac"; any other file of 500 MB or more that has not
-//! changed for 90 days is "Other large files" (GR3).
+//! Groups 3 and 4 of Large Files (GR1, LV-L6), with the group 1 and group 5
+//! items the same walk meets: one read-only walk of the user's home,
+//! metadata only, nothing hashed. A file of a kind group 3 holds (video,
+//! audio, disk image, archive, database dump) is "Only copy on this Mac";
+//! any other file that has not changed for 90 days is "Other large files";
+//! neither when Smart Clean's Old Downloads already lists it (LV-L5). Both groups
+//! list from `Limits::only_copy_min_bytes` / `other_min_bytes` (500 MB by
+//! default, the size filter's choice, never under the 100 MB scan floor).
 //!
-//! What the walk never enters or lists (NL1): anything outside the home
-//! (symlinks are not followed), `~/Library` (app libraries are [`super::elsewhere`]'s),
-//! app bundles, packages (what macOS calls one, plus a fixed list for those
-//! whose app is not installed) and package libraries, VM bundles, another
-//! volume's mount point, hidden folders (tool
-//! caches, `.Trash`), Smart Clean's build-output folder names, a folder with
-//! a `.git` inside (a git work tree), and an iCloud placeholder.
+//! What the walk never enters or lists (NL1, LV-L5): anything outside the
+//! home (symlinks are not followed), `~/Library` and hidden folders (their
+//! app data is read only through [`super::elsewhere`] and the known
+//! locations of [`super::owned`]), app bundles, packages (what macOS calls
+//! one, plus a fixed list for those whose app is not installed) and package
+//! libraries, another volume's mount point, Smart Clean's build-output
+//! folder names, a folder with a `.git` inside (a git work tree), and an
+//! iCloud placeholder. A virtual machine or disk image bundle whose format
+//! marker is inside, and a VirtualBox machine folder, are not entered
+//! either: each becomes one group 5 item.
 //!
 //! The existing CLI walker (`scan::walker`) did not fit: it collects every
 //! file of a root into memory, stops at a depth of 12, aborts the whole walk
@@ -24,23 +31,35 @@ use std::time::{Duration, SystemTime};
 
 use crate::clean::fs_safe::PathFingerprint;
 use crate::clean::private_size::private_allocated_bytes;
+use crate::options::CleanOptions;
 use crate::progress::{report, ProgressCallback};
 
+use super::archive_beside::{is_checked_archive, unpacked_beside};
 use super::copies::{find_pairs, CopyOf, VideoEntry, COPY_MIN_BYTES};
 use super::last_used::LastUsed;
+use super::lens::Lens;
+use super::owned::{owner_of_folder, virtualbox_vm, OwnedItem};
 use super::package_dir::is_package;
+use super::row_words::{days_between, idle_days, only_copy_kind, only_copy_reason, other_reason};
+use super::where_from::downloaded_from;
 use super::{FreesNothing, Group, LargeFile};
 
+/// 100 MB, decimal: nothing smaller is listed by any group (LV-L5).
+pub const SCAN_FLOOR_BYTES: u64 = 100_000_000;
+/// The size filter's choices for groups 3 and 4 (LV-L5): 100 MB, 500 MB, 1 GB.
+pub const SIZE_FILTER_BYTES: [u64; 3] = [SCAN_FLOOR_BYTES, 500_000_000, 1_000_000_000];
+/// Groups 3 and 4 list from 500 MB unless the filter says otherwise (GR3).
+pub const DEFAULT_SIZE_FILTER_BYTES: u64 = 500_000_000;
 /// 500 MB, decimal (GR3), judged on private bytes like every threshold here.
-pub const OTHER_MIN_BYTES: u64 = 500_000_000;
+pub const OTHER_MIN_BYTES: u64 = DEFAULT_SIZE_FILTER_BYTES;
 /// "Only copy" has no threshold of its own in the spec: it takes group 4's.
 pub const ONLY_COPY_MIN_BYTES: u64 = OTHER_MIN_BYTES;
+const SECONDS_PER_DAY: u64 = 86_400;
+
 /// Not changed for this many days (GR1 group 4).
 pub const OTHER_MIN_AGE_DAYS: u64 = 90;
-/// What makes a file a video: the one kind group 3 explains so far.
+/// What makes a file a video.
 pub const VIDEO_EXTENSIONS: &[&str] = &["mp4", "mov", "mkv", "m4v", "avi", "webm"];
-
-const SECONDS_PER_DAY: u64 = 86_400;
 /// How many entries pass between two progress reports.
 const PROGRESS_EVERY: u64 = 2_000;
 /// `SF_DATALESS` in `st_flags`: the file's bytes are in iCloud, not on disk.
@@ -78,7 +97,8 @@ const OPAQUE_EXTENSIONS: &[&str] = &[
     "fcpbundle",
     "imovielibrary",
     "theater",
-    // Virtual machines and disk bundles an app manages.
+    // Virtual machines and disk bundles an app manages: one group 5 item
+    // when their marker is inside (`owned`), never entered either way.
     "utm",
     "vmwarevm",
     "pvm",
@@ -96,6 +116,15 @@ pub struct Limits {
     pub only_copy_min_bytes: u64,
     pub other_min_bytes: u64,
     pub other_min_age_days: u64,
+    /// Smart Clean's Old Downloads lists every file directly in
+    /// `~/Downloads` unused for more than this many days; such a file is
+    /// that category's, not group 4's (LV-L5). `None` claims nothing.
+    pub old_downloads_days: Option<u64>,
+    /// A group 5 item an app owns that frees less is not listed: the floor.
+    pub owned_min_bytes: u64,
+    /// A cloud app's local copy is listed in group 5 from this size, the
+    /// groups 3 and 4 default; the size filter does not change it.
+    pub cloud_min_bytes: u64,
 }
 
 impl Default for Limits {
@@ -105,7 +134,23 @@ impl Default for Limits {
             only_copy_min_bytes: ONLY_COPY_MIN_BYTES,
             other_min_bytes: OTHER_MIN_BYTES,
             other_min_age_days: OTHER_MIN_AGE_DAYS,
+            // The days the app's Smart Clean scans with.
+            old_downloads_days: Some(CleanOptions::default().idle_days),
+            owned_min_bytes: SCAN_FLOOR_BYTES,
+            cloud_min_bytes: DEFAULT_SIZE_FILTER_BYTES,
         }
+    }
+}
+
+impl Limits {
+    /// The defaults with groups 3 and 4 listing from `min_bytes` (the size
+    /// filter); `None` under the scan floor.
+    pub fn with_size_filter(min_bytes: u64) -> Option<Self> {
+        (min_bytes >= SCAN_FLOOR_BYTES).then(|| Self {
+            only_copy_min_bytes: min_bytes,
+            other_min_bytes: min_bytes,
+            ..Self::default()
+        })
     }
 }
 
@@ -130,6 +175,8 @@ pub struct HomeScan {
     pub visited: u64,
     /// Files of the size a group lists whose blocks are all shared (FN1).
     pub frees_nothing: Vec<FreesNothing>,
+    /// Virtual machines and disk image bundles the walk met (group 5).
+    pub owned: Vec<OwnedItem>,
 }
 
 /// Reads only: folder listings and file metadata, plus `last_used` for a
@@ -161,8 +208,10 @@ pub(super) fn scan_home_on(
         .limits
         .only_copy_min_bytes
         .min(walk.limits.other_min_bytes);
-    // Videos big enough to be half of a Copies pair (CP1).
+    // Videos big enough to be half of a Copies pair (CP1), and archives
+    // big enough to be a Copies row (LV-L6).
     let mut videos: Vec<VideoEntry> = Vec::new();
+    let mut archives: Vec<PathBuf> = Vec::new();
     while let Some(dir) = pending.pop() {
         let entries = match fs::read_dir(&dir) {
             Ok(entries) => entries.flatten().collect::<Vec<_>>(),
@@ -176,6 +225,20 @@ pub(super) fn scan_home_on(
         // A git work tree is the developer's; the home itself may hold dotfiles.
         if dir != walk.home && entries.iter().any(|e| e.file_name() == ".git") {
             continue;
+        }
+        // A VirtualBox machine is one group 5 item, never its disk files.
+        if dir != walk.home {
+            let names: Vec<(String, bool)> = entries
+                .iter()
+                .map(|e| {
+                    let is_file = e.file_type().is_ok_and(|t| t.is_file());
+                    (e.file_name().to_string_lossy().into_owned(), is_file)
+                })
+                .collect();
+            if let Some(item) = virtualbox_vm(&dir, &names) {
+                scan.owned.push(item);
+                continue;
+            }
         }
         for entry in entries {
             if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
@@ -195,19 +258,25 @@ pub(super) fn scan_home_on(
                 report(progress, "scan", scan.visited, None, &dir.to_string_lossy());
             }
             if meta.is_dir() {
-                if meta.dev() == device
-                    && !skips_folder(&path, &name, walk.home)
-                    && !is_dataless(&meta)
-                {
+                if meta.dev() != device || is_dataless(&meta) {
+                    continue;
+                }
+                if let Some(item) = owner_of_folder(&path) {
+                    scan.owned.push(item);
+                } else if !skips_folder(&path, &name, walk.home) {
                     pending.push(path);
                 }
             } else if meta.is_file() && !is_dataless(&meta) {
-                if allocated(&meta) >= walk.limits.copy_min_bytes && is_video(&path) {
-                    videos.push(VideoEntry {
-                        path: path.clone(),
-                        bytes: meta.len(),
-                        fingerprint: PathFingerprint::of(&meta),
-                    });
+                if allocated(&meta) >= walk.limits.copy_min_bytes {
+                    if is_video(&path) {
+                        videos.push(VideoEntry {
+                            path: path.clone(),
+                            bytes: meta.len(),
+                            fingerprint: PathFingerprint::of(&meta),
+                        });
+                    } else if is_checked_archive(&path) && !walk.claimed.contains(&path) {
+                        archives.push(path.clone());
+                    }
                 }
                 if allocated(&meta) < min_bytes {
                     continue;
@@ -224,6 +293,7 @@ pub(super) fn scan_home_on(
         }
     }
     add_copies(&mut scan, &videos, walk.limits.copy_min_bytes);
+    add_archive_copies(&mut scan, &archives, walk.limits.copy_min_bytes, cancel);
     scan.files
         .sort_by(|a, b| b.frees.bytes.cmp(&a.frees.bytes).then(a.path.cmp(&b.path)));
     report(progress, "scan", scan.visited, None, "Done");
@@ -261,6 +331,9 @@ fn add_copies(scan: &mut HomeScan, videos: &[VideoEntry], min_bytes: u64) {
             matched_app: None,
             fingerprint: pair.row.fingerprint,
             elsewhere: None,
+            extracted: None,
+            lens: Lens::Video,
+            downloaded_from: None,
             copy: Some(CopyOf {
                 keeper: pair.keeper.path,
                 keeper_bytes: pair.keeper.bytes,
@@ -269,6 +342,61 @@ fn add_copies(scan: &mut HomeScan, videos: &[VideoEntry], min_bytes: u64) {
                 facts: pair.facts,
                 keeper_duration_ms: pair.keeper_duration_ms,
             }),
+        });
+    }
+}
+
+/// Group 1 (LV-L6): an archive whose contents sit unpacked beside it leaves
+/// groups 3 and 4. It needs `min_bytes` of private bytes, as a video copy.
+/// Its unpacked files leave groups 3 and 4 too: the archive holds a copy of
+/// each, so none is "the only copy", and the archive's row explains them.
+/// A file in the folder that the archive does not list stays where it was.
+fn add_archive_copies(
+    scan: &mut HomeScan,
+    archives: &[PathBuf],
+    min_bytes: u64,
+    cancel: Option<&AtomicBool>,
+) {
+    for path in archives {
+        if cancel.is_some_and(|flag| flag.load(Ordering::Acquire)) {
+            return;
+        }
+        let Some((extracted, unpacked)) = unpacked_beside(path) else {
+            continue;
+        };
+        let (Ok(meta), Ok(frees)) = (fs::symlink_metadata(path), private_allocated_bytes(path))
+        else {
+            continue;
+        };
+        if frees.bytes < min_bytes {
+            continue;
+        }
+        let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+            continue;
+        };
+        let beside = extracted
+            .beside
+            .file_name()
+            .map_or_else(String::new, |n| n.to_string_lossy().into_owned());
+        let unpacked: HashSet<PathBuf> = unpacked.into_iter().collect();
+        scan.files.retain(|f| {
+            f.path != *path
+                && !(matches!(f.group, Group::OnlyCopy | Group::OtherLarge)
+                    && unpacked.contains(&f.path))
+        });
+        scan.files.push(LargeFile {
+            path: path.clone(),
+            name: stem.to_string(),
+            group: Group::Copies,
+            reason: format!("Its contents sit unpacked beside it in {beside}"),
+            frees,
+            matched_app: None,
+            fingerprint: PathFingerprint::of(&meta),
+            elsewhere: None,
+            copy: None,
+            extracted: Some(extracted),
+            lens: Lens::Archive,
+            downloaded_from: downloaded_from(path),
         });
     }
 }
@@ -341,6 +469,7 @@ fn candidate(
                 allocated: allocated(meta),
                 modified: meta.modified().ok(),
                 fingerprint: PathFingerprint::of(meta),
+                follows_size_filter: true,
             });
         }
         return None;
@@ -349,21 +478,45 @@ fn candidate(
         .extension()
         .and_then(|e| e.to_str())
         .map(str::to_lowercase);
-    let video = extension
-        .as_deref()
-        .is_some_and(|e| VIDEO_EXTENSIONS.contains(&e));
-    let (group, min_bytes) = match video {
-        true => (Group::OnlyCopy, walk.limits.only_copy_min_bytes),
-        false => (Group::OtherLarge, walk.limits.other_min_bytes),
-    };
     let modified = meta.modified().ok()?;
-    let reason = match group {
-        Group::OnlyCopy => video_reason(days_between(modified, walk.now)),
-        _ => other_reason(path, extension.as_deref(), modified, walk)?,
+    // The where-from attribute is read only for a file that is listed.
+    let (group, reason, from) = match only_copy_kind(extension.as_deref()) {
+        Some(kind) => {
+            if frees.bytes < walk.limits.only_copy_min_bytes {
+                return None;
+            }
+            let days = days_between(modified, walk.now);
+            // A kind is no more specific than Old Downloads' age (LV-L5 (3)).
+            if old_downloads_owns(path, walk, modified) {
+                // Spotlight is asked only once the change date alone passes.
+                let used = walk.last_used.last_used(path).filter(|u| *u > modified);
+                if used.is_none_or(|u| old_downloads_owns(path, walk, u)) {
+                    return None;
+                }
+            }
+            let from = downloaded_from(path);
+            let reason = only_copy_reason(kind, from.as_deref(), days);
+            (Group::OnlyCopy, reason, from)
+        }
+        None => {
+            if frees.bytes < walk.limits.other_min_bytes {
+                return None;
+            }
+            let (days, verb, at) = idle_days(
+                path,
+                modified,
+                walk.now,
+                walk.limits.other_min_age_days,
+                walk.last_used,
+            )?;
+            if old_downloads_owns(path, walk, at) {
+                return None;
+            }
+            let from = downloaded_from(path);
+            let reason = other_reason(extension.as_deref(), from.as_deref(), days, verb);
+            (Group::OtherLarge, reason, from)
+        }
     };
-    if frees.bytes < min_bytes {
-        return None;
-    }
     let stem = path.file_stem()?.to_str()?;
     Some(LargeFile {
         path: path.to_path_buf(),
@@ -375,62 +528,28 @@ fn candidate(
         fingerprint: PathFingerprint::of(meta),
         elsewhere: None,
         copy: None,
+        extracted: None,
+        lens: Lens::of_path(path),
+        downloaded_from: from,
     })
 }
 
-fn video_reason(days: u64) -> String {
-    format!("Video · changed {}", ago(days))
-}
-
-/// Group 4's reason, `None` while the file is too recent. Spotlight's date
-/// wins only when it is newer, and then the sentence says "used", because
-/// that is the fact it checked (LR1).
-fn other_reason(
-    path: &Path,
-    extension: Option<&str>,
-    modified: SystemTime,
-    walk: &HomeWalk<'_>,
-) -> Option<String> {
-    let min_days = walk.limits.other_min_age_days;
-    // Spotlight is asked only once the modification date alone passes.
-    if days_between(modified, walk.now) < min_days {
-        return None;
-    }
-    let used = walk
-        .last_used
-        .last_used(path)
-        .filter(|used| *used > modified);
-    let (days, verb) = match used {
-        Some(used) => (days_between(used, walk.now), "used"),
-        None => (days_between(modified, walk.now), "changed"),
-    };
-    (days >= min_days).then(|| format!("{} · not {verb} for {days} days", kind_of(extension)))
-}
-
-fn days_between(then: SystemTime, now: SystemTime) -> u64 {
-    now.duration_since(then).unwrap_or(Duration::ZERO).as_secs() / SECONDS_PER_DAY
-}
-
-fn ago(days: u64) -> String {
-    match days {
-        0 => "today".into(),
-        1 => "1 day ago".into(),
-        n => format!("{n} days ago"),
-    }
-}
-
-/// What the extension says the file is; the extension itself otherwise.
-fn kind_of(extension: Option<&str>) -> String {
-    let kind = match extension {
-        Some("dmg" | "iso" | "img" | "sparseimage") => "Disk image",
-        Some("pkg" | "mpkg" | "xip") => "Installer package",
-        Some("zip" | "tar" | "gz" | "tgz" | "bz2" | "xz" | "zst" | "7z" | "rar") => "Archive",
-        Some("vmdk" | "vdi" | "qcow2" | "vhd" | "vhdx") => "Virtual disk",
-        Some("wav" | "aif" | "aiff" | "flac" | "mp3" | "m4a" | "aac") => "Audio",
-        Some("psd" | "tif" | "tiff" | "raw" | "dng") => "Image",
-        Some("pdf") => "PDF",
-        Some(other) if !other.is_empty() => return format!("{} file", other.to_uppercase()),
-        _ => "File",
-    };
-    kind.to_string()
+/// True when Smart Clean's Old Downloads lists this group 3 or 4 file (LV-L5
+/// (3): no Smart Clean category may already own its path; only a copy, an
+/// installer or an unpacked archive is the more specific reason, and groups 1
+/// and 2 are decided apart from this). That category lists every visible
+/// regular file directly in `~/Downloads` neither changed nor opened for more
+/// than its days; `at` is the same fact here (the newer of the change date
+/// and Spotlight's last-used date). The age is compared in seconds, as that
+/// category does (`> days * 86400`), so a file aged 30 to 31 days is in one
+/// place only, never in both and never in neither.
+fn old_downloads_owns(path: &Path, walk: &HomeWalk<'_>, at: SystemTime) -> bool {
+    walk.limits.old_downloads_days.is_some_and(|limit| {
+        let age = walk
+            .now
+            .duration_since(at)
+            .unwrap_or(Duration::ZERO)
+            .as_secs();
+        age > limit * SECONDS_PER_DAY && path.parent() == Some(&walk.home.join("Downloads"))
+    })
 }

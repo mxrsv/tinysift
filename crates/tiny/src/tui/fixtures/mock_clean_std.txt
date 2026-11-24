@@ -1,0 +1,24 @@
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ Xcode DerivedData                       ━━━━━━━━━━━━     6.2 GB
+   ◉ Crash reports / DiagnosticReports       ━━━━━━━━━━━━      89 MB
+   ◉ User logs                               ━━━━━━━━━━━━      50 KB
+
+     v also lists what is worth a look first
+
+
+
+
+
+
+
+
+
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Xcode DerivedData  6.2 GB · 43 items
+ Goes to     Trash  Finder › Put Back    comes back when you build again
+ Listed      Xcode rebuilds it
+
+ 6.3 GB picked in 3 categories    ● Trash 6.3 GB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v review · p paths · enter clean · tab page · q quit

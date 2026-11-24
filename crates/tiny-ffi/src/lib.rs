@@ -10,8 +10,10 @@ compile_error!("tiny-ffi must be built with panic = \"unwind\"");
 
 uniffi::setup_scaffolding!();
 
+pub mod browsers;
 pub mod cask;
 pub mod clean;
+pub mod disk_breakdown;
 pub mod large_files;
 pub mod processes;
 pub mod session;
@@ -72,6 +74,19 @@ pub enum FfiError {
     #[error("uninstall refused: {refusal:?}")]
     UninstallRefused {
         refusal: uninstall::FfiUninstallRefusal,
+    },
+    /// A browser Privacy clean or its Undo was refused before any browser
+    /// file changed (the browser runs, the Undo expired...).
+    #[error("browser privacy refused: {refusal:?}")]
+    BrowserPrivacyRefused {
+        refusal: browsers::FfiBrowserPrivacyRefusal,
+    },
+    /// A Privacy clean's edit failed after its backup reached the Trash.
+    /// `undo_id` is set when some file did change; Undo puts it back.
+    #[error("browser privacy clean failed: {detail}")]
+    BrowserPrivacyFailed {
+        detail: String,
+        undo_id: Option<String>,
     },
 }
 

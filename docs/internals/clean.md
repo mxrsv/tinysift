@@ -66,8 +66,8 @@ home folder, its ancestors and tool-printed paths outside home
 ([`protected_reason`](../../crates/tiny-core/src/clean/trash_plan.rs)).
 
 App gating has two mechanisms, both `pgrep -a -x` on a process name (`pnpm` adds a third check, below). `-a` counts
-`pgrep`'s own ancestors, so `tiny clean` sees the terminal, editor, agent or package script it runs inside. `quit_apps()` (default
-`requires_app_quit()`) skips the whole category while its app runs. `browser-caches`,
+`pgrep`'s own ancestors, so `sift clean` sees the terminal, editor, agent or package script it runs inside. `quit_apps()` (default
+`requires_app_quit()`) skips the whole category while its app runs. `browser-caches`, `browser-offline-data`,
 `chat-caches`, `streaming-caches` and `user-caches` instead drop only a running app's paths
 inside `discover()` (`ScanContext::known_running`). Right before each move the app re-checks
 `item_apps(path)` and `check_item(path)`. The [CLI executor](../../crates/tiny-core/src/clean/execute.rs)
@@ -322,6 +322,20 @@ Playwright, Camoufox, Buzz, llama.cpp, Kitty, Poetry virtualenvs, renv, pnpm `dl
 one is not offered whole (`npm` offers its other children). A category that names a place on purpose
 (`puppeteer`, `huggingface`) is not a broad sweep and does not use the list.
 
+**Browser folders (SF1).** `browser-caches` and `browser-offline-data` take their folders from
+[`browsers::discover`](../../crates/tiny-core/src/browsers/discovery.rs), one item per folder per profile, tagged
+`Evidence::BrowserProfile`, and gate each on its own browser. Their name lists hold cache folders only; a test pins
+that no cookie, login, preference, history, extension or site-storage file lies at or under an offered path.
+`Service Worker/CacheStorage` is its own category, Review and `TrashOnly`, because it can hold what a user saved
+for offline reading; the app leaves it out of its ticked-ahead set. A Chromium browser or Firefox whose profile list
+`discover` cannot read (a `DiscoveryIssue`, or no `profiles.ini`) gets no folders. `user-caches` offers
+`~/Library/Caches` around `claimed_folders`, the same list `browser-caches` offers: a child with no claimed folder
+in it is offered whole, one with claimed folders inside is listed child by child (`unclaimed`), so a deleted
+profile's folder or another app's cache in a vendor folder is still offered and no path is offered by both. Those
+parts keep the vendor folder's gate plus their browser's process names, and the IDE Local History check applies to
+each part ([`browser_caches.rs`](../../crates/tiny-core/src/clean/providers/browser_caches.rs),
+[`user_caches.rs`](../../crates/tiny-core/src/clean/providers/user_caches.rs)).
+
 **Re-check before a move (SF2).** `validate` skips an item whose owning app runs (`AppRunning`, cause
 `InUse`) and one whose fingerprint differs (`Changed`, cause `ChangedSinceScan`): a file's size or
 mtime, a folder's identity. A folder's contents are not compared, since caches churn between scan and
@@ -429,7 +443,7 @@ and keeps nothing; the root shell runs only `/bin/sh`, `/usr/bin/pgrep` and `/bi
   other failure is ever retried as administrator.
 
 The CLI never runs `sudo`: `execute` refuses a `needs_admin` category with
-`needs administrator rights; the tiny CLI never runs sudo`.
+`needs administrator rights; the sift CLI never runs sudo`.
 
 ## The desktop's checked uninstall
 
@@ -484,7 +498,9 @@ every move goes through `Trash` (the app passes `NativeTrash`). Nothing here del
 
 | Call | Gate | What it does |
 | --- | --- | --- |
-| `large_files_scan(token, progress)` | takes it | Read-only. Replaces the earlier scan and any preview. Returns `FfiLargeFile` records (`id`, `path`, `name`, `group`, `reason`, `frees_bytes`, `frees_is_exact`, `matched_app_path`, and for group 5 `kind`, `app_name`, `app_bundle_id`, `app_running`, `preview_path`, `shared_bytes`, `last_changed`, and for group 1 `keeper_path`, `keeper_bytes`, `keep_rule`, `duration_ms`, `keeper_duration_ms`, `width`, `height`, `audio_tracks`) and `unreadable_folders`. |
+| `large_files_scan(token, progress)` | takes it | Read-only. Replaces the earlier scan and any preview. Returns `FfiLargeFile` records (`id`, `path`, `name`, `group`, `reason`, `frees_bytes`, `frees_is_exact`, `matched_app_path`, and for group 5 `kind`, `app_name`, `app_bundle_id`, `app_running`, `preview_path`, `shared_bytes`, `last_changed`, and for group 1 `keeper_path`, `keeper_bytes`, `keep_rule`, `duration_ms`, `keeper_duration_ms`, `width`, `height`, `audio_tracks`, and for an archive copy `extracted_path`, `extracted_entries`; every row carries `lens` and `follows_size_filter`, and groups 3 and 4 `downloaded_from`) and `unreadable_folders`. Groups 3 and 4 list from 500 MB. |
+| `large_files_scan_with(options, token, progress)` | takes it | The same scan with `FfiLargeFilesScanOptions`: `root` as `large_files_scan_in` (`None` is the whole home) and `groups_3_4_min_bytes` (default 500 MB), the size filter for groups 3 and 4 only (`Limits::with_size_filter`). A minimum under the 100 MB floor, or a `root` outside the home, is `InvalidInput` before anything is scanned. The app scans once at the floor and filters its own list, so a change of filter keeps the picks: it hides a row whose `follows_size_filter` is set (every group 3 and 4 row, by `frees_bytes`, and a group 5 file that frees nothing the home walk handed over, by `shared_bytes`) under its choice. |
+| `large_files_size_filters()` | none | `floor_bytes` (100 MB), `choices_bytes` (100 MB, 500 MB, 1 GB) and `default_bytes` (500 MB), so the app types none of them. |
 | `large_files_scan_in(root, token, progress)` | takes it | `large_files_scan` for one folder of the home ([`large_files.rs`](../../crates/tiny-ffi/src/large_files.rs)): the whole scan runs, so a copy is still a copy wherever its pair lives, then only the files inside `root` are listed and a later move reaches only them. `root` must resolve to an existing folder inside the home, else `InvalidInput` before anything is scanned. |
 | `large_files_preview(file_ids)` | none | Builds the one preview from IDs of the current scan. Unknown IDs and an empty list are refused; a file a saved "always keep" rule holds is returned in `held_ids` and left out. Unreadable rules fail it (`ProtectionUnavailable`). Replaces any earlier preview. |
 | `large_files_move(preview_id, token, progress)` | takes it | Spends the preview, then moves. Returns one result per item (`FfiItemOutcome`, `FfiFailureCause`, `bytes_moved`, `trashed_path`) and a `move_id`. |
@@ -520,7 +536,7 @@ that went back return to the scan's list (same IDs); items that did not stay in 
 later move replaces what Undo takes. Emptying the Trash (the app asks Finder through the Trash row) ends Undo.
 
 **Scan, step 1: Installers** ([`installers.rs`](../../crates/tiny-core/src/clean/large_files/installers.rs)). Direct
-children of `~/Downloads` and `~/Desktop` ending in `.dmg`, `.pkg`, `.iso` or `.xip` (regular files, not symlinks) whose
+children of `~/Downloads`, `~/Desktop` and `~/Documents` ending in `.dmg`, `.pkg`, `.iso` or `.xip` (regular files, not symlinks) whose
 private bytes are at least `INSTALLER_MIN_BYTES` (100 MB). A file is listed only when an app bundle directly inside
 `/Applications` or `~/Applications` has the same normalised name
 ([`name_match.rs`](../../crates/tiny-core/src/clean/large_files/name_match.rs): lower case, separators ignored, version,
@@ -535,21 +551,39 @@ architecture and "installer" tokens cut after the first word). The reason is `<A
 (`scan_home`): folder listings and file metadata only, nothing hashed, cancellable, progress every 2000 entries. A file
 is looked at only when its allocated blocks reach the smaller threshold; then its private bytes must be above 0 and reach
 the group's threshold, and a file whose private bytes are 0 (a full clone, or a hard link with another link elsewhere) goes to group 5
-instead, see step 3. A video (`mp4 mov mkv m4v avi webm`) of 500 MB or more is
-`OnlyCopy` ("only_copy"), reason `Video · changed N days ago`; the spec fixes no threshold for this group, so it takes
-group 4's. Any other file of 500 MB or more whose modification date is 90 days old is `OtherLarge` ("other_large"),
-reason `<kind> · not changed for N days`; Spotlight's last-used date (`mdls`, asked only for a file that already passed
-every other test) wins when newer, and then the reason says `not used for N days`. The kind comes from the extension
-(`Disk image`, `Archive`, ... or `<EXT> file`). A file an installer row claimed is left out; an installer with no
-installed app can land in group 4. Never listed (NL1), and never entered: symlinks (nothing outside the home is
-reached), hidden names, `~/Library`, `~/Music/Music`, `~/Movies/TV`, app bundles and package libraries by extension
+instead, see step 3. **Sizes (LV-L5):** nothing under `SCAN_FLOOR_BYTES` (100 MB) is listed by any group; groups 1 and
+2 list from it, groups 3 and 4 from `Limits::only_copy_min_bytes` / `other_min_bytes`, 500 MB by default
+(`DEFAULT_SIZE_FILTER_BYTES`) and the size filter's choice through `large_files_scan_with` (`SIZE_FILTER_BYTES`). A file of
+a kind group 3 holds (LV-L6, [`row_words.rs`](../../crates/tiny-core/src/clean/large_files/row_words.rs)) is `OnlyCopy`
+("only_copy") whatever its age: a video (`mp4 mov mkv m4v avi webm`), audio (`wav aif aiff flac mp3 m4a aac`), a disk
+image no installed app matched (`dmg iso img sparseimage toast`; step 1 claims the matched ones), an archive not
+unpacked beside it (`zip tar gz tgz bz2 xz zst 7z rar xip`; step 2b takes the unpacked ones) and a database dump
+(`sql dump`); reason `<Kind> · changed N days ago`. Any other file whose modification date is 90 days old is
+`OtherLarge` ("other_large"), reason `<kind> · not changed for N days`; Spotlight's last-used date (`mdls`, asked only
+for a file that already passed every other test) wins when newer, and then the reason says `not used for N days`. The
+kind comes from the extension (`Installer package`, `Virtual disk`, ... or `<EXT> file`). **Downloaded from:** a listed
+group 3 or 4 file whose `com.apple.metadata:kMDItemWhereFroms` attribute (a binary plist array, read with `getxattr`,
+never following a symlink, [`where_from.rs`](../../crates/tiny-core/src/clean/large_files/where_from.rs)) names an
+http(s) or ftp URL says so: `Disk image from github.com · changed 3 days ago`; only the host leaves core
+(`downloaded_from`), since a URL can carry a token. **Smart Clean beats groups 3 and 4 (LV-L5 (3)):** a group 3 or 4
+file directly in `~/Downloads` whose age (the newer of its change date and Spotlight's last-used date; a group 3 file
+asks Spotlight only once its change date alone passes) exceeds `Limits::old_downloads_days` (Smart Clean's `idle_days`,
+30 by default, the value the app scans with) is left out, because Smart Clean's Old Downloads (`downloads_old.rs`) lists
+every visible regular file there neither changed nor opened for that long. Groups 1 and 2 keep such a file: a copy, an
+installer or an unpacked archive is the more specific reason; a kind is not. A file an installer row claimed is left out.
+**Lens:** every row carries `LargeFile::lens` ([`lens.rs`](../../crates/tiny-core/src/clean/large_files/lens.rs),
+`video installer archive virtual_machine audio other`), decided from the extension or a group 5 item's owner, never from
+the group. Never listed (NL1), and never entered: symlinks (nothing outside the home is reached), hidden names,
+`~/Library`, `~/Music/Music`, `~/Movies/TV`, app bundles and package libraries by extension
 (`app photoslibrary musiclibrary tvlibrary fcpbundle imovielibrary ...`) and any folder with an extension that macOS
 treats as a package (`NSURLIsPackageKey`, [`package_dir.rs`](../../crates/tiny-core/src/clean/large_files/package_dir.rs);
-a bundle-bit package without an extension is still walked), a folder on another volume than the home (`st_dev`), VM bundles (`utm vmwarevm pvm sparsebundle`),
-Smart Clean's build-output folder names (`node_modules target build DerivedData Pods ...`), a folder with a `.git` entry
-(the home itself is exempt, so a dotfiles repo does not hide everything), and an iCloud placeholder (`SF_DATALESS`).
-The walk is added to the move's scanned roots, so a group 3 or 4 file moves and undoes through the same checks.
-Tests inject the limits, "now", the Spotlight table and the claimed set (`Limits`, `HomeWalk`, `LastUsed`).
+a bundle-bit package without an extension is still walked), a folder on another volume than the home (`st_dev`), VM and
+disk bundles (`utm vmwarevm pvm sparsebundle`: one group 5 item when their marker is inside, see step 3), a folder that
+holds a `.vbox` file (a VirtualBox machine, one group 5 item), Smart Clean's build-output folder names
+(`node_modules target build DerivedData Pods ...`), a folder with a `.git` entry (the home itself is exempt, so a
+dotfiles repo does not hide everything), and an iCloud placeholder (`SF_DATALESS`). The walk is added to the move's
+scanned roots, so a group 3 or 4 file moves and undoes through the same checks. Tests inject the limits, "now", the
+Spotlight table and the claimed set (`Limits`, `HomeWalk`, `LastUsed`).
 
 **Scan, step 2b: Copies, the original stays**
 ([`copies.rs`](../../crates/tiny-core/src/clean/large_files/copies.rs),
@@ -573,6 +607,23 @@ file that stays remains in whatever group it was in. Both halves need 100 MB, so
 `PlannedMove::must_remain` makes the move skip (`Changed`) when the file that stays is gone or changed since the scan, and
 `large_files_preview` refuses a request that holds a copy together with its keeper (`InvalidInput`).
 
+**Scan, step 2c: Copies, an archive unpacked beside it**
+([`archive_beside.rs`](../../crates/tiny-core/src/clean/large_files/archive_beside.rs)). The walk keeps every `.zip` whose
+allocated blocks reach `copy_min_bytes`; after the walk its central directory is read (names, sizes, kinds; nothing is
+decompressed; Zip64 sizes and offsets are read; more than 50 000 entries or a directory over 32 MB is not checked). The
+unpacked copy is where Archive Utility puts it: beside the archive when every entry shares one top-level item, else in a
+folder named after the archive. It is a copy only when every listed file is there, a regular file of the same size and not an
+iCloud placeholder, every folder is a folder and every link a link; `__MACOSX/` and `.DS_Store` entries are left out, and a
+name that is absolute, holds `..`, a backslash or invalid UTF-8 makes the archive unchecked. The row is `Group::Copies`
+with `extracted: Some(Extracted)`, reason `Its contents sit unpacked beside it in <name>`, and needs 100 MB of private
+bytes; it leaves group 3, and so does every unpacked file the archive lists, from groups 3 and 4 (the archive holds a
+copy of each, so none is the only copy, and the archive's row explains them); a file in that folder the archive does
+not list stays where it was. Tarballs stay group 3 archives (listing them means decompressing them whole). Safety: the
+preview's `must_remain` is the largest unpacked file with its fingerprint, and `must_stay_unpacked` is the unpacked
+item, checked again with `extracted_beside` right before the move, so the move skips (`Changed`) once any listed file
+is gone or a different size, whichever route took it; `large_files_preview` refuses the archive together with any file
+inside its unpacked copy (`InvalidInput`).
+
 **Scan, step 3: Remove these elsewhere**
 ([`elsewhere.rs`](../../crates/tiny-core/src/clean/large_files/elsewhere.rs)). `Group::Elsewhere` ("elsewhere") is
 listed and never movable: `Group::movable()` is false and `large_files_preview` refuses its IDs (`InvalidInput`), alone
@@ -585,15 +636,105 @@ table of id, app name, bundle ID, process name, home-relative folder, bundle ext
 `recording-meta.json`, else the bundle name). It frees its private bytes (FG-L1); `last_changed` is the newest file date
 inside; the preview is UTM's `screenshot.png` or Cap's `screenshots/display.jpg` (else another image there); the owning
 app is the `.app` of that name in the Applications folders, and `app_running` is the app probe (`pgrep -x`) at scan time
-(an unknown answer is false; task 11's move asks again). (2) FN1: every large file whose private bytes are 0. The
-installer scan hands over installer-type files of 100 MB or more in Downloads and Desktop whatever their name, the home
-walk any file of 500 MB or more, both before the age and name tests; a path found twice counts once. The reason comes
+(an unknown answer is false; task 11's move asks again). (1b) Items an app owns
+([`owned.rs`](../../crates/tiny-core/src/clean/large_files/owned.rs), LV-L5, LV-L6), each one row with the owner named
+(`app_name`, `app_bundle_id`, `matched_app_path` when its `.app` is in an Applications folder or ships with macOS),
+`kind`, `lens` and a reason `<where to act>, not here · <checked fact>`; one that frees less than
+`Limits::owned_min_bytes` (the 100 MB floor) is left out. The walk lists, without entering: a `.pvm` holding `config.pvs`
+(Parallels Desktop), a `.vmwarevm` holding a `.vmx` (VMware Fusion), a `.utm` holding `config.plist` outside UTM's
+library (UTM), a folder holding a `.vbox` file (VirtualBox), and a `.sparsebundle` holding `Info.plist` and `bands/`
+(Disk Utility, kind `Disk image`). A bundle with one of these extensions but no marker is neither entered nor listed.
+`KNOWN_LOCATIONS` are the places the walk skips, each opened only to measure an item and name its owner:
+`~/Library/Containers/com.docker.docker/Data/vms/0/data/Docker.raw` or `Docker.qcow2` (Docker Desktop);
+`~/.colima/_lima/<instance>` and `_lima/_disks/<name>` holding `diffdisk`, `basedisk` or `datadisk` (Colima); each
+folder of `~/Library/Application Support/MobileSync/Backup` (Finder, named by `Info.plist`'s `Device Name` when the plist
+is XML); and every visible, local (not `SF_DATALESS`) file of `Limits::cloud_min_bytes` (500 MB, not moved by the size
+filter) under `~/Library/CloudStorage/<App>-<account>` (Dropbox, Google Drive, OneDrive, Box by the folder's first word,
+else that word), skipping git work trees. The paths follow each app's documented layout and were not read on a real Mac;
+tests use fixtures. A location that exists but cannot be listed (device backups without Full Disk Access) is added to
+`unreadable_folders`. Items on another volume are not listed. (2) FN1: every large file whose private bytes are 0. The
+installer scan hands over installer-type files of 100 MB or more in Downloads, Desktop and Documents whatever their name,
+the home walk any file of the groups 3 and 4 minimum or more, both before the age and name tests; a path found twice counts once,
+as the installer scan's. The walk's rows carry `follows_size_filter` (`FreesNothing::follows_size_filter`), so the app's size
+filter hides them under its choice as it hides groups 3 and 4: a scan at the 100 MB floor then shows no more of them at
+the 500 MB default than a scan at 500 MB. The installer scan's keep group 2's 100 MB. The reason comes
 from `sharing_of`: if the file is an APFS clone and a file with the same clone ID sits inside a known library, it reads
 `Frees nothing: UTM's Windows VM holds the same data` (and `app_name` is that app; reasons carry no formatted numbers, the app writes the size from `shared_bytes` in its own locale); if the clone's partner is
 elsewhere, `Frees nothing: another copy on this Mac uses the same space`; if it is not a full clone,
 `Frees nothing: its space is shared with other files`. `shared_bytes` is its allocated size and `frees_bytes` is 0. Rows
 sort by what they free, or share. Tests use fixture libraries, `clonefile` pairs and an injected probe
 (`ElsewhereRoots`, `AppProbe`).
+
+## Browsers
+
+[`tiny-ffi/src/browsers.rs`](../../crates/tiny-ffi/src/browsers.rs) is the read side of the app's Browsers page, built on
+[`tiny-core/src/browsers.rs`](../../crates/tiny-core/src/browsers.rs). `browsers_scan(token, progress)` takes the Browsers
+scan slot and returns `FfiBrowsersReport`: a `generation` and each installed browser (`kind`, `name`, `bundle_id`,
+`running` from Clean's `pgrep` check, `None` when it cannot answer) with its profiles (`id`, `name`, `user_name`,
+`avatar`, `highlight_color`), each profile's `space`, privacy counts (`FfiProfilePrivacy`) and extensions. A refused or
+broken file never fails the call: it is an `FfiBrowserIssue` on the browser, the profile's privacy or its extensions,
+and `PermissionDenied` is the app's cue for its Full Disk Access guide.
+
+**Space (B12).** `FfiProfileSpace` holds the bytes of the profile's folders that `browser-caches` and
+`browser-offline-data` offer, listed by the same
+[`profile_space_folders`](../../crates/tiny-core/src/clean/providers/browser_caches.rs) the two providers use and sized
+with Clean's `dir_size_checked`: `cache_bytes`, `code_cache_bytes`, `other_bytes` (`Storage`, `GPUCache`) and
+`offline_bytes` (`Service Worker/CacheStorage`). No category offers, and Space does not count, `Service Worker/ScriptCache`
+or `Service Worker/Database`: removing a worker's scripts while its registration stays can drop the site's push
+subscription (B33). It is measured for a running browser too, whose folders Clean
+leaves out at discovery, so the page can show what an open browser holds. It is for display only: a Clean button
+takes Clean's items, whose `FfiEvidence::BrowserProfile` carries the same `kind` and `profile_id`.
+
+**Privacy consent.** The cookie keys and history rows a privacy write would delete never cross to Swift. Each scan keeps
+every profile's full `ProfilePrivacy` in the session under its `generation`, replacing the previous scan; a cancelled
+scan keeps the old one. `browsers_clean_privacy(generation, kind, profile_id)` consents to exactly that profile's
+stored `cookies_to_remove` and `history_to_remove` (`BrowsersState::consented`); core then takes only what a fresh scan
+of the same folder still lists, and reports the rest as skipped (`now_kept`, `not_found`). A replaced generation, or a
+profile already cleaned under it, is `PreviewInvalid`. A refusal before anything changed (the browser runs, a file
+changed, the backup or the Undo store failed) leaves the consent usable, so the user can quit the browser and press
+Clean again without a new scan.
+
+**Write ([`remove_privacy`](../../crates/tiny-core/src/browsers/privacy/write.rs)).** Holds the write gate, so it never
+overlaps a Browsers scan. Refuses Safari (B18, B20) and a running browser: Clean's `pgrep -x` names
+(`BrowserKind::app_names`; case counts, so Firefox's include its process name `firefox`), or any live process whose
+outermost `.app` has a bundle id the browser owns, which catches helpers and, for Firefox, Developer Edition and Nightly,
+which share its profiles ([`running.rs`](../../crates/tiny-core/src/browsers/privacy/running.rs)); an unknown answer refuses too. Every file it
+may touch (each database with its `-journal`, `-wal`, `-shm`, and Chromium's `Visited Links`) is copied into a backup
+folder that moves to the Trash through `NativeTrash` and is checked there before one transaction edits the databases.
+Chromium loses the listed `cookies` rows, the `urls` rows with their `visits`, and their `icon_mapping`, `top_sites`
+and `omni_box_shortcuts` rows (only when no kept row has the URL); `Visited Links` moves to the Trash and Chrome rebuilds
+it. Firefox loses `moz_cookies` rows (per container) and `moz_places` rows with their `moz_historyvisits`, never a row a
+bookmark or keyword points at (`foreign_count > 0`). Refusals map to `FfiError::BrowserPrivacyRefused` with an
+`FfiBrowserPrivacyRefusal` (`Running` is the app's cue for the quit line). An edit that fails before its commit
+(opening, locking or `BEGIN EXCLUSIVE` fails, e.g. a browser that started holds the database past the busy timeout)
+committed nothing: the unfinished Undo record is dropped (the backup stays in the Trash), the write is refused as
+`Running` when the browser now runs, else `Changed`, and the consent stays usable. Only a failed commit, which may have
+changed a file, is `BrowserPrivacyFailed`, carrying an `undo_id` when a file did change, and spends the consent.
+
+**Schema check.** No browser's schema version is read (not Chromium's or Firefox's `meta` table, not
+`PRAGMA user_version`). What is checked is table and column names, found through `PRAGMA table_info`: the scan
+([`stores.rs`](../../crates/tiny-core/src/browsers/privacy/stores.rs)) needs the tables and columns it reads, and a
+missing one, or a value of another type, makes that profile's privacy report-only (`supported` false with an
+`UnknownSchema` issue); the write ([`schema.rs`](../../crates/tiny-core/src/browsers/privacy/schema.rs)) checks the
+columns its deletes key on, on copies before the backup and again inside the transaction, and refuses as `Unsupported`.
+A browser update that keeps those names but changes what they mean is not detected.
+
+**Undo (B10, B25, [`undo.rs`](../../crates/tiny-core/src/browsers/privacy/undo.rs)).**
+`browsers_undo_privacy(kind, profile_id, undo_id)` holds the write gate, refuses a running browser, and puts the
+recorded files back byte for byte from the backup in the Trash, which stays there. Every copy is written beside its
+file and checked before the first one is renamed into place, so a full disk stops it with nothing changed; an Undo that
+stopped partway can be run again, since a file that already hashes as its original counts as put back. It applies only to the profile's
+latest clean, only until its next scan (every `browsers_scan` runs `scan_profile_recorded`, which raises the profile's
+generation first, so a later Undo is `Expired`), and only while every file is still exactly what the clean left
+(`ChangedSinceClean` otherwise). The app must not rescan while it offers Undo. The store is one owner-only file,
+`~/Library/Application Support/Tiny/browser-privacy/undo.json`, with an exclusive `flock` for each write, Undo and scan
+raise ([`undo_store.rs`](../../crates/tiny-core/src/browsers/privacy/undo_store.rs)); a store that cannot record a scan
+makes that profile's privacy an `Unreadable` issue rather than leave an old Undo valid over a newer scan.
+
+**Not cleaned.** Privacy leaves these in place, so a removed site can still show there: Chromium `keyword_search_terms`,
+`segments` and `visit_source` in `History`, history annotations, and favicons no mapping points at any longer;
+Firefox `moz_origins`, `favicons.sqlite` and `moz_annos`. Safari history is never edited (it syncs through iCloud),
+and Safari cookies are not scanned in this build. Edits stay on this Mac: a browser's sync account keeps its copy.
 
 ## Desktop persistent protection
 
@@ -602,11 +743,18 @@ Always keep is a policy owned by Rust; only the desktop app edits it. A
 covers exactly that path, `Directory` also everything inside it. A candidate is held when it
 equals the rule path, lies inside a `Directory` rule, or is a strict ancestor of the rule path,
 because moving it would carry the kept path along, found by discovery or not. Components are
-compared one by one, never as string prefixes. Symlinks are never replaced by their targets
-and renames are not tracked, so a rule for a path that is missing today applies again if that
-path returns. Equivalent spellings on a volume that folds case or Unicode are decided from the
-real directory entries; anything that cannot be decided (unreadable parent, several entries
-for one inode) counts as held, not as free. Tiny's own store, lock and staging paths are
+compared one by one, never as string prefixes. A scan spells a path as its provider found it
+and a person picks one as the system shows it, so one item can arrive under two spellings that
+differ by a symlink in the folders above it (`/var/folders/…` and `/private/var/folders/…`).
+Each path is therefore compared twice, as spelled and at its real location (the folder
+holding it with every symlink resolved, then its own name), and a rule holds a candidate when
+any spelling of one relates to any spelling of the other. The last name is never followed: a
+link to a kept item is its own entry, and moving the link moves nothing kept. A candidate
+whose folder is there but cannot be resolved counts as held; a rule whose folder is gone or
+cannot be resolved keeps its spelling alone. Renames are not tracked, so a rule for a path
+that is missing today applies again if that path returns. Equivalent spellings on a volume
+that folds case or Unicode are decided from the real directory entries; anything that cannot
+be decided (unreadable parent, several entries for one inode) counts as held, not as free. Tiny's own store, lock and staging paths are
 internal rules, so cleanup never moves them or an ancestor that holds them. A tool item that
 names no file (Homebrew's cleanup) is held at run time when a rule touches a path its tool
 deletes or deletes inside ([`tool_touches`](../../crates/tiny-core/src/clean/providers/homebrew.rs):
@@ -614,9 +762,19 @@ the download cache and logs folders, and every old version the dry run lists): t
 `Kept` and `brew` never starts. When the dry run fails, those paths cannot be told and the run
 skips as `KeepUncertain`. The preview still lists it.
 
-Swift never writes rules and never sends a path: it names a discovered candidate ID to
-keep, or a rule ID to remove, with the revision it last read
-([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The
+Swift never writes rules: it names a discovered candidate ID to keep, or a rule ID to
+remove, with the revision it last read
+([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The one
+path Swift sends is a file or folder the user picked to keep outside a scan
+(`clean_keep_path`, same file): it can only add a rule, never select or move anything. Rust
+saves the rule where the item really is (the folders above it resolved, its own name as the
+volume spells it, and the short spelling of the data volume, `/Users/…` for
+`/System/Volumes/Data/Users/…`), takes the scope from the item's own metadata and refuses, as
+`InvalidInput` with words the app shows after naming the path itself, a path that is not
+absolute and normalized, is missing, is a symlink or a special file, is already kept under
+any spelling, or is the home folder or a folder holding it under either spelling of the data
+volume, since that rule would hold every candidate. Paths outside the home folder are
+allowed. The matcher does not map the data volume's long spelling, which no scan produces. The
 [CLI executor](../../crates/tiny-core/src/clean/execute.rs) takes the same exclusive lease before
 acting, reports every item the rules do not allow as kept, and refuses the whole run when they
 cannot be read.

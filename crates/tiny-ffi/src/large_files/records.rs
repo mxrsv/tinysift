@@ -30,8 +30,10 @@ pub struct FfiLargeFile {
     /// The app bundle the file was matched to, for its icon. Group 5: the
     /// app that owns the item, when it is installed.
     pub matched_app_path: Option<String>,
-    /// Group 5 only (OW1, FN1): what the item is ("Virtual machine",
-    /// "Screen recording"; "Installer" or "File" for one that frees nothing).
+    /// Group 5 only (OW1, FN1, LV-L6): what the item is ("Virtual machine",
+    /// "Virtual machine disk", "Screen recording", "Disk image", "Device
+    /// backup", "Cloud-synced copy"; "Installer" or "File" for one that frees
+    /// nothing).
     #[uniffi(default = None)]
     pub kind: Option<String>,
     /// Group 5: the owning app's name, and for a file that frees nothing the
@@ -76,6 +78,54 @@ pub struct FfiLargeFile {
     pub height: Option<u32>,
     #[uniffi(default = None)]
     pub audio_tracks: Option<u32>,
+    /// What the page's lens chips filter by (LV-L5), whatever the group:
+    /// "video", "installer" (an installer or a disk image), "archive",
+    /// "virtual_machine", "audio" or "other".
+    #[uniffi(default = "other")]
+    pub lens: String,
+    /// Groups 3 and 4: the site the file was downloaded from (its where-from
+    /// attribute, host only); the reason already names it.
+    #[uniffi(default = None)]
+    pub downloaded_from: Option<String>,
+    /// Group 1, an archive: the unpacked folder (or single file) beside it
+    /// that holds every file it lists, at the same sizes.
+    #[uniffi(default = None)]
+    pub extracted_path: Option<String>,
+    /// With `extracted_path`: how many files, folders and links it lists.
+    #[uniffi(default = None)]
+    pub extracted_entries: Option<u64>,
+    /// True for a row the size filter for groups 3 and 4 hides under its
+    /// minimum (LV-L5): every group 3 and 4 row, by `frees_bytes`, and a
+    /// group 5 file that frees nothing found by the home walk, by
+    /// `shared_bytes` (FN1). False for every other row; an installer that
+    /// frees nothing keeps group 2's 100 MB.
+    #[uniffi(default = false)]
+    pub follows_size_filter: bool,
+}
+
+/// What a Large Files scan lists (`large_files_scan_with`).
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiLargeFilesScanOptions {
+    /// A folder inside the home to list, as `large_files_scan_in`; `None`
+    /// lists the whole home.
+    #[uniffi(default = None)]
+    pub root: Option<String>,
+    /// Groups 3 and 4 list files that free at least this much (the size
+    /// filter, LV-L5). At least `FfiLargeFilesSizeFilters::floor_bytes`,
+    /// else `InvalidInput`. Other groups keep their own floors.
+    #[uniffi(default = 500000000)]
+    pub groups_3_4_min_bytes: u64,
+}
+
+/// The sizes the Large Files page offers (LV-L5), so the app types none.
+#[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
+pub struct FfiLargeFilesSizeFilters {
+    /// Nothing smaller is listed by any group; groups 1 and 2 list from it.
+    pub floor_bytes: u64,
+    /// The filter's choices for groups 3 and 4, smallest first.
+    pub choices_bytes: Vec<u64>,
+    /// The choice groups 3 and 4 use until the user picks another.
+    pub default_bytes: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, uniffi::Record)]
@@ -206,6 +256,14 @@ pub(super) fn file_record(id: &str, file: &LargeFile) -> FfiLargeFile {
         width: copy.map(|c| c.facts.width),
         height: copy.map(|c| c.facts.height),
         audio_tracks: copy.map(|c| c.facts.audio_tracks),
+        lens: file.lens.id().to_string(),
+        downloaded_from: file.downloaded_from.clone(),
+        extracted_path: file
+            .extracted
+            .as_ref()
+            .map(|e| e.beside.to_string_lossy().into_owned()),
+        extracted_entries: file.extracted.as_ref().map(|e| e.entries),
+        follows_size_filter: file.follows_size_filter(),
     }
 }
 

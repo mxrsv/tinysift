@@ -1,0 +1,34 @@
+  Clean   Uninstall   Scan   Processes   System                                                             0.3 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  Large 4,210   Old 1,203,884                                              │ Highlighted
+ 100 MB and up · Downloads, Desktop, Documents                             │
+                                                                           │ ~/Documents/Virtual Machines.localized/
+ ❯   412.7 GB 2,911d  ~/Documents/Virtu…mage Primary Auxiliary Storage.img │ macOS 27 beta 4 clean install with a very
+      88.2 GB     0d  ~/Downloads/x.dmg                                    │ long descriptive name.bundle/Disk Image
+       100 MB     1d  ~/Desktop/a.mov                                      │ Primary Auxiliary Storage.img
+       100 MB    93d  ~/Documents/archive/file-3.bin                       │
+       100 MB    94d  ~/Documents/archive/file-4.bin                       │ Size      412.7 GB
+       100 MB    95d  ~/Documents/archive/file-5.bin                       │ Modified  2,911 days ago
+       100 MB    96d  ~/Documents/archive/file-6.bin                       │
+       100 MB    97d  ~/Documents/archive/file-7.bin                       │ Scan only reads. It never deletes or moves
+       100 MB    98d  ~/Documents/archive/file-8.bin                       │ a file.
+       100 MB    99d  ~/Documents/archive/file-9.bin                       │
+       100 MB   100d  ~/Documents/archive/file-10.bin                      │
+       100 MB   101d  ~/Documents/archive/file-11.bin                      │
+       100 MB   102d  ~/Documents/archive/file-12.bin                      │
+       100 MB   103d  ~/Documents/archive/file-13.bin                      │
+       100 MB   104d  ~/Documents/archive/file-14.bin                      │
+       100 MB   105d  ~/Documents/archive/file-15.bin                      │
+       100 MB   106d  ~/Documents/archive/file-16.bin                      │
+       100 MB   107d  ~/Documents/archive/file-17.bin                      │
+       100 MB   108d  ~/Documents/archive/file-18.bin                      │
+       100 MB   109d  ~/Documents/archive/file-19.bin                      │
+       100 MB   110d  ~/Documents/archive/file-20.bin                      │
+       100 MB   111d  ~/Documents/archive/file-21.bin                      │
+       100 MB   112d  ~/Documents/archive/file-22.bin                      │
+       100 MB   113d  ~/Documents/archive/file-23.bin                      │
+       100 MB   114d  ~/Documents/archive/file-24.bin                      │
+       100 MB   115d  ~/Documents/archive/file-25.bin                      │
+     … 4,184 more ↓                                                        │
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · v large/old · o show in Finder · r scan again · tab page · q quit

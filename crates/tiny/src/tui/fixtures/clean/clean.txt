@@ -1,0 +1,124 @@
+
+##### {"size":"std","icons":"uni","data":"normal","state":"ok","screen":"clean"}
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ Xcode DerivedData                       ━━━━━━━━━━━━     6.2 GB
+   ◉ Crash reports / DiagnosticReports       ━━━━━━━━━━━━      89 MB
+   ◉ User logs                               ━━━━━━━━━━━━      50 KB
+
+     v also lists what is worth a look first
+
+
+
+
+
+
+
+
+
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Xcode DerivedData  6.2 GB · 43 items
+ Goes to     Trash  Finder › Put Back    comes back when you build again
+ Listed      Xcode rebuilds it
+
+ 6.3 GB picked in 3 categories    ● Trash 6.3 GB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v review · p paths · enter clean · tab page · q quit
+
+##### {"size":"wide","icons":"uni","data":"normal","state":"ok","screen":"clean"}
+  Clean   Uninstall   Scan   Processes   System                                                            28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ Xcode DerivedData                  ━━━━━━━━━━━━     6.2 GB            │ Highlighted
+   ◉ Crash reports / DiagnosticReports  ━━━━━━━━━━━━      89 MB            │
+   ◉ User logs                          ━━━━━━━━━━━━      50 KB            │ Xcode DerivedData
+                                                                           │ 6.2 GB · 43 items
+     v also lists what is worth a look first                               │
+                                                                           │ Goes to     Trash  Finder › Put Back
+                                                                           │ Comes back  when you build again
+                                                                           │ Listed      Xcode rebuilds it
+                                                                           │
+                                                                           │ ~/Library/Deve…Data/TinySift-fmzkqpelrbdvxn
+                                                                           │ ~/Library/Deve…ivedData/ModuleCache.noindex
+                                                                           │ … 41 more · p lists them
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ 6.3 GB picked in 3 categories    ● Trash 6.3 GB
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v review · p paths · enter clean · tab page · q quit
+
+##### {"size":"std","icons":"nerd","data":"normal","state":"ok","screen":"clean"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System          28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ 󰀵 Xcode DerivedData                     ━━━━━━━━━━━━     6.2 GB
+   ◉ 󰨰 Crash reports / DiagnosticReports     ━━━━━━━━━━━━      89 MB
+   ◉ 󰧭 User logs                             ━━━━━━━━━━━━      50 KB
+
+     v also lists what is worth a look first
+
+
+
+
+
+
+
+
+
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Xcode DerivedData  6.2 GB · 43 items
+ Goes to     Trash  Finder › Put Back    comes back when you build again
+ Listed      Xcode rebuilds it
+
+ 6.3 GB picked in 3 categories    ● Trash 6.3 GB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v review · p paths · enter clean · tab page · q quit
+
+##### {"size":"wide","icons":"nerd","data":"normal","state":"ok","screen":"clean"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                  28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ 󰀵 Xcode DerivedData                ━━━━━━━━━━━━     6.2 GB            │ Highlighted
+   ◉ 󰨰 Crash reports / DiagnosticRepor… ━━━━━━━━━━━━      89 MB            │
+   ◉ 󰧭 User logs                        ━━━━━━━━━━━━      50 KB            │ Xcode DerivedData
+                                                                           │ 6.2 GB · 43 items
+     v also lists what is worth a look first                               │
+                                                                           │ Goes to     Trash  Finder › Put Back
+                                                                           │ Comes back  when you build again
+                                                                           │ Listed      Xcode rebuilds it
+                                                                           │
+                                                                           │ ~/Library/Deve…Data/TinySift-fmzkqpelrbdvxn
+                                                                           │ ~/Library/Deve…ivedData/ModuleCache.noindex
+                                                                           │ … 41 more · p lists them
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ 6.3 GB picked in 3 categories    ● Trash 6.3 GB
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v review · p paths · enter clean · tab page · q quit

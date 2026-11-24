@@ -1,37 +1,299 @@
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::browsers::{discover, Browser, BrowserFamily, BrowserKind, BrowserProfile};
 use crate::error::Result;
 
+use super::browser_offline_data::CACHE_STORAGE;
 use super::{execute_per_item, root_as_item, CleanProvider};
 use crate::clean::fs_safe::{is_dir_safe, list_children};
 use crate::clean::scan_context::ScanContext;
-use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
+use crate::clean::types::{CleanItem, Evidence, ExecAction, ExecReport, RiskLevel};
 
 const ID: &str = "browser-caches";
 const LABEL: &str = "Browser caches";
 
-/// Cache-only paths. NEVER include Cookies, Login Data, Preferences,
-/// History — those carry user state that's not "cache". Test below pins
-/// this invariant.
-const BROWSER_CACHE_PATHS: &[(&str, &str)] = &[
-    ("Library/Caches/com.apple.Safari", "Safari"),
-    (
-        "Library/Application Support/Google/Chrome/Default/Cache",
-        "Google Chrome",
-    ),
-    (
-        "Library/Application Support/Arc/User Data/Default/Cache",
-        "Arc",
-    ),
+/// Cache-only folders. NEVER include Cookies, Login Data, Preferences,
+/// Secure Preferences, History, Local State, Extensions, Local Storage,
+/// IndexedDB or anything under `Service Worker`: those carry user state
+/// that is not cache. `Service Worker/CacheStorage` is
+/// `browser-offline-data`'s; `ScriptCache` and `Database` are offered by
+/// no category, since a worker's registration without its scripts can
+/// lose the site's push subscription (B33). Tests below pin this.
+///
+/// Inside a Chromium profile's cache folder
+/// (`~/Library/Caches/<vendor>/<browser>/<profile>`).
+const CHROMIUM_CACHE_FOLDERS: &[&str] = &["Cache", "Code Cache", "Storage"];
+/// Inside a Chromium profile's data folder (`Application Support`).
+const CHROMIUM_DATA_FOLDERS: &[&str] = &["Cache", "Code Cache", "GPUCache"];
+const SAFARI_CACHE: &str = "Library/Caches/com.apple.Safari";
+/// Firefox keeps its disk cache at `<profile>/cache2`, the profile under
+/// either root (`Caches` on current versions).
+const FIREFOX_CACHE: &str = "cache2";
+const FIREFOX_PROFILES_ROOTS: &[&str] = &[
+    "Library/Application Support/Firefox/Profiles",
+    "Library/Caches/Firefox/Profiles",
 ];
-
-/// Firefox cache lives at `Profiles/<random>/cache2`. Resolved at
-/// discover via read_dir.
-const FIREFOX_PROFILES_ROOT: &str = "Library/Application Support/Firefox/Profiles";
-const FIREFOX_APP: &str = "Firefox";
+const APPLICATION_SUPPORT: &str = "Library/Application Support";
+const CACHES: &str = "Library/Caches";
 
 fn home() -> Option<PathBuf> {
     std::env::var_os("HOME").map(PathBuf::from)
+}
+
+/// One folder a browser category offers, with the browser and profile it
+/// belongs to.
+pub(super) struct ProfileFolder {
+    pub path: PathBuf,
+    pub kind: BrowserKind,
+    pub profile_id: String,
+    pub profile_name: String,
+}
+
+/// Where `kind` keeps its disk caches, relative to the home folder: its
+/// data root moved from `Application Support` to `Caches` (Chromium and
+/// Firefox), or Safari's `com.apple.Safari`.
+fn cache_root(kind: BrowserKind) -> String {
+    match kind.family() {
+        BrowserFamily::WebKit => SAFARI_CACHE.to_string(),
+        _ => match kind.data_root().strip_prefix(APPLICATION_SUPPORT) {
+            Some(rest) => format!("{CACHES}{rest}"),
+            None => kind.data_root().to_string(),
+        },
+    }
+}
+
+/// The browser whose folders hold `path`, by its data root or cache root.
+pub(super) fn browser_of(home: &Path, path: &Path) -> Option<BrowserKind> {
+    BrowserKind::ALL.into_iter().find(|&kind| {
+        path.starts_with(home.join(kind.data_root()))
+            || path.starts_with(home.join(cache_root(kind)))
+    })
+}
+
+/// Process names that must not run while `path` is acted on: its
+/// browser's, or every browser's for a path no browser claims.
+pub(super) fn gate_apps(path: &Path) -> Vec<String> {
+    let names: Vec<&str> = match home().and_then(|h| browser_of(&h, path)) {
+        Some(kind) => kind.app_names().to_vec(),
+        None => BrowserKind::ALL
+            .iter()
+            .flat_map(|kind| kind.app_names().iter().copied())
+            .collect(),
+    };
+    names.into_iter().map(String::from).collect()
+}
+
+/// Every folder `browser-caches` offers under `home`, a running browser's
+/// too. `user-caches` offers what is left of `~/Library/Caches` around
+/// them, so one byte is never offered by both and none is left to neither.
+pub(super) fn claimed_folders(ctx: &ScanContext<'_>, home: &Path) -> Vec<PathBuf> {
+    cache_folders(ctx, home)
+        .into_iter()
+        .map(|folder| folder.path)
+        .collect()
+}
+
+/// Items for `folders`, leaving out the folders of a running browser.
+pub(super) fn offer(
+    ctx: &ScanContext<'_>,
+    folders: Vec<ProfileFolder>,
+    id: &str,
+    label: &str,
+) -> Vec<CleanItem> {
+    let mut items = Vec::new();
+    for folder in folders {
+        if folder.kind.app_names().iter().any(|a| ctx.known_running(a)) {
+            continue;
+        }
+        let evidence = Evidence::BrowserProfile {
+            browser: folder.kind.display_name().to_string(),
+            browser_kind: folder.kind,
+            profile_id: folder.profile_id,
+            profile_name: folder.profile_name,
+        };
+        items.extend(
+            root_as_item(ctx, &folder.path, id, label, RiskLevel::Review)
+                .into_iter()
+                .map(|item| CleanItem {
+                    evidence: vec![evidence.clone()],
+                    ..item
+                }),
+        );
+    }
+    items
+}
+
+/// `base/relative` when it and every folder on the way are real folders,
+/// so a symlinked `Service Worker` is not followed.
+pub(super) fn real_folder(base: &Path, relative: &str) -> Option<PathBuf> {
+    let mut path = base.to_path_buf();
+    for part in relative.split('/') {
+        path.push(part);
+        if !is_dir_safe(&path) {
+            return None;
+        }
+    }
+    Some(path)
+}
+
+/// Which part of a profile's space a folder is, as the Browsers page
+/// splits it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SpacePart {
+    /// Chromium's `Cache`, Safari's cache, Firefox's `cache2`.
+    Cache,
+    /// Chromium's `Code Cache`.
+    CodeCache,
+    /// Chromium's `Storage` and `GPUCache`.
+    Other,
+    /// `Service Worker/CacheStorage`, the `browser-offline-data` category.
+    Offline,
+}
+
+/// One folder of a profile that `browser-caches` or `browser-offline-data`
+/// offers (when its browser is not running).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SpaceFolder {
+    pub part: SpacePart,
+    pub path: PathBuf,
+}
+
+fn chromium_part(folder: &str) -> SpacePart {
+    match folder {
+        "Cache" => SpacePart::Cache,
+        "Code Cache" => SpacePart::CodeCache,
+        _ => SpacePart::Other,
+    }
+}
+
+/// The folders of `profile`, a profile [`discover`] found under `home`,
+/// that the two browser categories offer, by the same path rules, each
+/// once: the cache folder's names, then the data folder's, then the
+/// offline data. A running browser's folders are listed too; the
+/// categories leave those out at discovery, the Browsers page measures
+/// them for display.
+pub fn profile_space_folders(
+    home: &Path,
+    kind: BrowserKind,
+    profile: &BrowserProfile,
+) -> Vec<SpaceFolder> {
+    let mut out: Vec<SpaceFolder> = Vec::new();
+    let mut push = |part, path: Option<PathBuf>| {
+        if let Some(path) = path.filter(|p| out.iter().all(|f| &f.path != p)) {
+            out.push(SpaceFolder { part, path });
+        }
+    };
+    match kind.family() {
+        BrowserFamily::Chromium => {
+            if let Some(dir) = &profile.cache_dir {
+                for folder in CHROMIUM_CACHE_FOLDERS {
+                    push(chromium_part(folder), real_folder(dir, folder));
+                }
+            }
+            for folder in CHROMIUM_DATA_FOLDERS {
+                push(
+                    chromium_part(folder),
+                    real_folder(&profile.data_dir, folder),
+                );
+            }
+            push(
+                SpacePart::Offline,
+                real_folder(&profile.data_dir, CACHE_STORAGE),
+            );
+        }
+        BrowserFamily::WebKit => push(SpacePart::Cache, real_folder(home, SAFARI_CACHE)),
+        BrowserFamily::Gecko => {
+            // `firefox_cache_dirs`' rule: `cache2` in a profile folder
+            // that sits directly in one of the two roots.
+            let roots: Vec<PathBuf> = FIREFOX_PROFILES_ROOTS
+                .iter()
+                .map(|root| home.join(root))
+                .collect();
+            for dir in std::iter::once(&profile.data_dir).chain(&profile.cache_dir) {
+                if dir.parent().is_some_and(|p| roots.iter().any(|r| r == p)) && is_dir_safe(dir) {
+                    push(SpacePart::Cache, real_folder(dir, FIREFOX_CACHE));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Every cache folder of every installed browser and profile under `home`.
+/// A Chromium browser or Firefox counts only when [`discover`] read its
+/// profile list: one it cannot read (`Local State` or `profiles.ini`
+/// missing, unreadable or malformed) offers nothing, and its folders stay
+/// `user-caches`' as ordinary caches.
+pub(super) fn cache_folders(ctx: &ScanContext<'_>, home: &Path) -> Vec<ProfileFolder> {
+    let browsers: Vec<Browser> = discover(home)
+        .into_iter()
+        .filter(|b| b.issue.is_none())
+        .collect();
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut out = Vec::new();
+    let mut push = |path: Option<PathBuf>, kind, id: &str, name: &str| {
+        let Some(path) = path else { return };
+        if seen.insert(path.clone()) {
+            out.push(ProfileFolder {
+                path,
+                kind,
+                profile_id: id.to_string(),
+                profile_name: name.to_string(),
+            });
+        }
+    };
+    for browser in browsers
+        .iter()
+        .filter(|b| b.family == BrowserFamily::Chromium)
+    {
+        for profile in &browser.profiles {
+            for folder in profile_space_folders(home, browser.kind, profile)
+                .into_iter()
+                .filter(|f| f.part != SpacePart::Offline)
+            {
+                push(Some(folder.path), browser.kind, &profile.id, &profile.name);
+            }
+        }
+    }
+    let safari = BrowserKind::Safari;
+    push(
+        real_folder(home, SAFARI_CACHE),
+        safari,
+        "",
+        safari.display_name(),
+    );
+    let firefox = browsers.iter().any(|b| b.kind == BrowserKind::Firefox);
+    for cache2 in FIREFOX_PROFILES_ROOTS
+        .iter()
+        .filter(|_| firefox)
+        .flat_map(|root| firefox_cache_dirs(ctx, &home.join(root)))
+    {
+        let (id, name) = firefox_profile(&browsers, &cache2);
+        push(Some(cache2), BrowserKind::Firefox, &id, &name);
+    }
+    out
+}
+
+/// The Firefox profile a `cache2` folder belongs to: the discovered one
+/// whose data or cache folder holds it, else its folder name.
+fn firefox_profile(browsers: &[Browser], cache2: &Path) -> (String, String) {
+    let folder = cache2.parent();
+    let found = browsers
+        .iter()
+        .filter(|b| b.kind == BrowserKind::Firefox)
+        .flat_map(|b| b.profiles.iter())
+        .find(|p| Some(p.data_dir.as_path()) == folder || p.cache_dir.as_deref() == folder);
+    match found {
+        Some(profile) => (profile.id.clone(), profile.name.clone()),
+        None => {
+            let name = folder
+                .and_then(Path::file_name)
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
+            (name.clone(), name)
+        }
+    }
 }
 
 pub struct BrowserCaches;
@@ -39,6 +301,10 @@ pub struct BrowserCaches;
 impl BrowserCaches {
     pub fn new() -> Self {
         Self
+    }
+
+    fn discover_in(&self, ctx: &ScanContext<'_>, home: &Path) -> Vec<CleanItem> {
+        offer(ctx, cache_folders(ctx, home), ID, LABEL)
     }
 }
 
@@ -65,50 +331,13 @@ impl CleanProvider for BrowserCaches {
         true
     }
     fn item_apps(&self, path: &Path) -> Vec<String> {
-        let owner = home().and_then(|h| {
-            if path.starts_with(h.join(FIREFOX_PROFILES_ROOT)) {
-                return Some(FIREFOX_APP);
-            }
-            BROWSER_CACHE_PATHS
-                .iter()
-                .find(|(rel, _)| path == h.join(rel))
-                .map(|(_, app)| *app)
-        });
-        // An unrecognised path is gated on every browser rather than none.
-        owner.map(|app| vec![app.to_string()]).unwrap_or_else(|| {
-            BROWSER_CACHE_PATHS
-                .iter()
-                .map(|(_, app)| *app)
-                .chain([FIREFOX_APP])
-                .map(String::from)
-                .collect()
-        })
+        gate_apps(path)
     }
     fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
-        let h = match home() {
-            Some(h) => h,
-            None => return Ok(Vec::new()),
-        };
-        let mut items = Vec::new();
-        for (rel, app) in BROWSER_CACHE_PATHS {
-            let path = h.join(rel);
-            if !is_dir_safe(&path) {
-                continue;
-            }
-            if ctx.known_running(app) {
-                continue;
-            }
-            items.extend(root_as_item(ctx, &path, ID, LABEL, RiskLevel::Review));
-        }
-        // Firefox glob.
-        let firefox_running = ctx.known_running(FIREFOX_APP);
-        for cache2 in firefox_cache_dirs(ctx, &h.join(FIREFOX_PROFILES_ROOT)) {
-            if firefox_running {
-                continue;
-            }
-            items.extend(root_as_item(ctx, &cache2, ID, LABEL, RiskLevel::Review));
-        }
-        Ok(items)
+        Ok(match home() {
+            Some(h) => self.discover_in(ctx, &h),
+            None => Vec::new(),
+        })
     }
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
         execute_per_item(items, action, ID)
@@ -117,13 +346,13 @@ impl CleanProvider for BrowserCaches {
 
 /// Resolves `<profiles_root>/<profile>/cache2` for every direct child
 /// profile directory.
-pub fn firefox_cache_dirs(ctx: &ScanContext<'_>, profiles_root: &std::path::Path) -> Vec<PathBuf> {
+pub fn firefox_cache_dirs(ctx: &ScanContext<'_>, profiles_root: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     for p in list_children(profiles_root, ctx) {
         if !is_dir_safe(&p) {
             continue;
         }
-        let cache2 = p.join("cache2");
+        let cache2 = p.join(FIREFOX_CACHE);
         if is_dir_safe(&cache2) {
             out.push(cache2);
         }
@@ -132,78 +361,4 @@ pub fn firefox_cache_dirs(ctx: &ScanContext<'_>, profiles_root: &std::path::Path
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::clean::process::test_support::MockChecker;
-    use crate::clean::providers::known_category_ids;
-    use std::fs;
-
-    fn tempdir(label: &str) -> PathBuf {
-        let mut base = std::env::temp_dir();
-        base.push(format!(
-            "tiny-clean-br-{}-{}",
-            label,
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        fs::create_dir_all(&base).unwrap();
-        base
-    }
-
-    #[test]
-    fn browser_id_in_known_categories() {
-        assert!(known_category_ids().contains(&ID));
-    }
-
-    #[test]
-    fn browser_does_not_touch_cookies_or_login() {
-        // Iron law: cache-only. If a future maintainer adds a path with
-        // these tokens, this test must fail loudly.
-        for (rel, _) in BROWSER_CACHE_PATHS {
-            let lower = rel.to_lowercase();
-            for forbidden in [
-                "cookies",
-                "login data",
-                "history",
-                "preferences",
-                "passwords",
-                "bookmarks",
-            ] {
-                assert!(
-                    !lower.contains(forbidden),
-                    "browser provider must not touch {}: {}",
-                    forbidden,
-                    rel
-                );
-            }
-        }
-    }
-
-    #[test]
-    fn browser_paths_skip_running_apps() {
-        let mock = MockChecker::with_running(["Safari", "Google Chrome", "Arc", "Firefox"]);
-        let ctx = ScanContext::new(None, &mock);
-        let items = BrowserCaches::new().discover(&ctx).unwrap();
-        for item in &items {
-            let s = item.path.to_string_lossy();
-            assert!(!s.contains("com.apple.Safari"), "Safari leaked: {}", s);
-            assert!(!s.contains("/Google/Chrome/"), "Chrome leaked: {}", s);
-            assert!(!s.contains("/Arc/"), "Arc leaked: {}", s);
-            assert!(!s.contains("Firefox/Profiles"), "Firefox leaked: {}", s);
-        }
-    }
-
-    #[test]
-    fn firefox_cache_dirs_resolves_profiles_glob() {
-        let root = tempdir("ff");
-        // Two profiles, one with cache2, one without.
-        fs::create_dir_all(root.join("abcd1234.default/cache2")).unwrap();
-        fs::create_dir_all(root.join("efgh5678.dev-edition")).unwrap();
-        let found = firefox_cache_dirs(&ScanContext::unchecked(), &root);
-        assert_eq!(found.len(), 1);
-        assert!(found[0].ends_with("abcd1234.default/cache2"));
-        let _ = crate::clean::fs_safe::remove_recursive_safe(&root);
-    }
-}
+mod tests;

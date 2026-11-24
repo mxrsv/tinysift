@@ -15,6 +15,7 @@ pub mod ai_models;
 pub mod android_sdk;
 pub mod app_orphans;
 pub mod browser_caches;
+pub mod browser_offline_data;
 pub mod build_folders;
 pub mod chat_caches;
 pub mod codex_releases;
@@ -103,6 +104,7 @@ pub fn category_family(category_id: &str) -> Family {
         // UserStorage family
         "downloads-old" | "screenshots-old" | "mail-attachments" => Family::UserStorage,
         "streaming-caches" | "chat-caches" | "browser-caches" => Family::UserStorage,
+        "browser-offline-data" => Family::UserStorage,
         // System family
         "user-logs" | "user-caches" | "trash" => Family::System,
         "quarantine" | "crash-reports" | "font-quicklook-caches" => Family::System,
@@ -147,6 +149,9 @@ pub fn comes_back(category_id: &str) -> Option<ComesBack> {
             Some(ComesBack::TrashOnly)
         }
         "app-orphans" => Some(ComesBack::TrashOnly),
+        // Sites download their offline copies again, but files a user
+        // saved for offline reading are gone: only the Trash restores them.
+        "browser-offline-data" => Some(ComesBack::TrashOnly),
         "time-machine-local" | "trash" | "docker-volumes" => Some(ComesBack::NotRecoverable),
         _ => None,
     }
@@ -331,7 +336,7 @@ pub trait CleanProvider {
 }
 
 /// Why the CLI refuses a category that `needs_admin`.
-pub(crate) const NEEDS_ADMIN: &str = "needs administrator rights; the tiny CLI never runs sudo";
+pub(crate) const NEEDS_ADMIN: &str = "needs administrator rights; the sift CLI never runs sudo";
 
 /// Why the desktop only reports a category instead of moving its items.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -446,6 +451,7 @@ pub fn all_providers_with(
         Box::new(streaming_caches::StreamingCaches::new()),
         Box::new(chat_caches::ChatCaches::new()),
         Box::new(browser_caches::BrowserCaches::new()),
+        Box::new(browser_offline_data::BrowserOfflineData),
         Box::new(quarantine::Quarantine),
         Box::new(crash_reports::CrashReports),
         Box::new(app_orphans::AppOrphans::with_runner(runner.clone())),
@@ -504,6 +510,7 @@ pub fn known_category_ids() -> &'static [&'static str] {
         "streaming-caches",
         "chat-caches",
         "browser-caches",
+        "browser-offline-data",
         "quarantine",
         "crash-reports",
         "app-orphans",
@@ -513,19 +520,51 @@ pub fn known_category_ids() -> &'static [&'static str] {
     ]
 }
 
+/// Project folders under the home folder that the walking providers search.
+const PROJECT_ROOTS: &[&str] = &["Documents", "Projects", "Code", "Developer", "Workspace"];
+
+/// Where coding agents keep their copies of a project: a scratch folder and
+/// the worktree folders of agent apps (Conductor, Orca, the Codex app,
+/// Superset). Their build output is offered by the same rules as a
+/// project's.
+const AGENT_ROOTS: &[&str] = &[
+    "scratch",
+    "conductor/workspaces",
+    "orca/workspaces",
+    ".codex/worktrees",
+    ".superset/worktrees",
+];
+
 /// Canonical set of dev project roots scanned by walking providers
-/// (`node_modules`, `rust_targets`, `python_caches`). Only roots that exist
-/// are returned. Order is stable so test discovery is deterministic.
+/// (`node_modules`, `rust_targets`, `python_caches`, `build_folders`). Only
+/// roots that exist are returned. Order is stable so test discovery is
+/// deterministic.
 pub(crate) fn dev_search_roots() -> Vec<std::path::PathBuf> {
-    let h = match std::env::var_os("HOME") {
-        Some(h) => std::path::PathBuf::from(h),
-        None => return Vec::new(),
-    };
-    const ROOTS: &[&str] = &["Documents", "Projects", "Code", "Developer", "Workspace"];
-    ROOTS
+    match std::env::var_os("HOME") {
+        Some(h) => dev_search_roots_in(Path::new(&h)),
+        None => Vec::new(),
+    }
+}
+
+/// `dev_search_roots` for the home folder `home`: the roots that are real
+/// folders, reached from `home` through real folders only. A symlinked root
+/// is never walked (`project_walk`), and an item below a symlinked folder is
+/// refused at clean time (`checked_execute::same_file`), so such a root
+/// would only list what Clean cannot take. With no symlink below `home`, two
+/// roots cannot be the same folder or overlap.
+fn dev_search_roots_in(home: &Path) -> Vec<std::path::PathBuf> {
+    let real_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir());
+    PROJECT_ROOTS
         .iter()
-        .map(|r| h.join(r))
-        .filter(|p| p.is_dir())
+        .chain(AGENT_ROOTS)
+        .filter(|rel| {
+            let mut path = home.to_path_buf();
+            Path::new(rel).components().all(|part| {
+                path.push(part);
+                real_dir(&path)
+            })
+        })
+        .map(|rel| home.join(rel))
         .collect()
 }
 

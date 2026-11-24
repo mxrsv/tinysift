@@ -77,6 +77,17 @@ pub enum Evidence {
     },
     /// The Trash's other top-level items, after the listed `TrashEntry`s.
     TrashRest { count: u64, bytes: u64 },
+    /// The browser and profile a browser category's folder belongs to: the
+    /// browser's name and kind, the profile's key (`Default`, `Profile 1`,
+    /// Firefox's `Path`; empty for Safari) and its name as the browser shows
+    /// it. Kind plus key is how the app files the item under the profile
+    /// the Browsers scan lists.
+    BrowserProfile {
+        browser: String,
+        browser_kind: crate::browsers::BrowserKind,
+        profile_id: String,
+        profile_name: String,
+    },
     /// Every name of one Ollama model (`llama3.2:latest`, `llama3.2:3b`):
     /// the tags whose manifests name exactly the same layers, so one row
     /// stands for all of them.

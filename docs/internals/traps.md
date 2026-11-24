@@ -111,8 +111,8 @@ Things that are not obvious from reading one file.
 
 ## Desktop protection
 
-- **A rule write needs a prior read in the same session.** `clean_keep` and `clean_unkeep`
-  fail with `ProtectionChanged` unless the stored rules equal what the last `clean_protection`
+- **A rule write needs a prior read in the same session.** `clean_keep`, `clean_keep_path` and
+  `clean_unkeep` fail with `ProtectionChanged` unless the stored rules equal what the last `clean_protection`
   or successful write returned, in revision and content; a write that fails after taking the
   lock clears that memory, so Swift reads again before the next one
   ([`change_rules`](../../crates/tiny-ffi/src/clean/protection.rs)). A new caller cannot pass a
@@ -123,8 +123,8 @@ Things that are not obvious from reading one file.
 - **Spelling depends on the volume.** Revalidate native case and Unicode matching on both
   case-sensitive and case-insensitive volumes; in-memory checks alone do not verify the
   host filesystem's behavior ([tests](../../crates/tiny-core/src/clean/protection.rs)).
-- **The CLI obeys the rules and holds the store's lock.** `tiny clean`
-  ([`execute.rs`](../../crates/tiny-core/src/clean/execute.rs)) and `tiny uninstall`
+- **The CLI obeys the rules and holds the store's lock.** `sift clean`
+  ([`execute.rs`](../../crates/tiny-core/src/clean/execute.rs)) and `sift uninstall`
   ([`uninstall.rs`](../../crates/tiny-core/src/uninstall.rs)) take the exclusive lease before
   acting, so an unreadable store stops them and a running app Clean makes them fail as busy.
 - **An unreadable store is not an empty one.** Do not "repair" it by writing empty rules: moving,
@@ -171,6 +171,22 @@ Things that are not obvious from reading one file.
   `depth_limited` (a folder past the depth limit was not walked) both make `bytes` a lower
   bound and set `incomplete`; `omitted_*` only hides entries that are still in the totals.
   An entry that vanishes mid-scan is ignored, not reported.
+
+## Disk breakdown
+
+- **`statfs` does not give an APFS volume's own used space.** Every volume of a container reports the
+  container's size in `f_blocks` and its free space in both `f_bavail` and `f_bfree`, so
+  `f_blocks - f_bfree` is the container's use, the same for each volume.
+  [`volumes.rs`](../../crates/tiny-core/src/disk_breakdown/volumes.rs) reads each volume's
+  `ATTR_VOL_SPACEUSED` instead, the figure `df` and `diskutil apfs list` show.
+- **`EPERM` means Full Disk Access only inside the home.** Outside it (`/.Spotlight-V100`,
+  `/Library/Application Support/com.apple.TCC`) the refusal is System Integrity Protection, which
+  Full Disk Access does not lift; [`walk.rs`](../../crates/tiny-core/src/disk_breakdown/walk.rs) files
+  those under `Refusal::System` so the app never promises that granting access will measure them.
+- **Private bytes summed over a volume lose clone families.** A full clone's private size is 0 in
+  every member, so summing `private_size` over the whole volume would drop the family's blocks. The
+  walk counts a full clone family, and a hard-linked inode, once at the end, in the first group of
+  `DiskGroup::ALL` that holds a member.
 
 ## Process readings
 

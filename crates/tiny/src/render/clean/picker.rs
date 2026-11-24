@@ -55,7 +55,7 @@ pub fn pick_categories_grouped(groups: &[CategoryGroup]) -> Result<Vec<usize>> {
                 format_bytes(g.total_size),
                 g.risk.badge()
             ));
-            defaults.push(matches!(g.risk, RiskLevel::Safe));
+            defaults.push(ticked_by_default(g));
             origin.push(Some(*idx));
         }
     }
@@ -80,6 +80,19 @@ pub fn pick_categories_grouped(groups: &[CategoryGroup]) -> Result<Vec<usize>> {
 
 /// Group group indices by family in canonical order: Dev, UserStorage, System.
 /// Empty families are omitted.
+/// The picker starts with Safe categories ticked and the rest unticked.
+fn ticked_by_default(group: &CategoryGroup) -> bool {
+    matches!(group.risk, RiskLevel::Safe)
+}
+
+/// Indices into `groups` of the categories the picker starts ticked.
+#[cfg(test)]
+pub(crate) fn default_ticks(groups: &[CategoryGroup]) -> Vec<usize> {
+    (0..groups.len())
+        .filter(|&i| ticked_by_default(&groups[i]))
+        .collect()
+}
+
 pub(crate) fn group_by_family(groups: &[CategoryGroup]) -> Vec<(Family, Vec<usize>)> {
     let order = [Family::Dev, Family::UserStorage, Family::System];
     let mut out: Vec<(Family, Vec<usize>)> = Vec::new();
@@ -126,7 +139,7 @@ pub enum ActionChoice {
     Cancel,
 }
 
-/// Action menu shown after the plan is printed. Mirrors `tiny uninstall`.
+/// Action menu shown after the plan is printed. Mirrors `sift uninstall`.
 /// Returns `CleanAction` (UI choice `ReviewPaths` not exposed by this entry —
 /// see `pick_action_with_review`).
 #[allow(dead_code)]

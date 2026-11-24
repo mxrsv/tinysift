@@ -1,0 +1,40 @@
+name: A folder TinySift missed
+description: A cache, log or leftover that takes space and that Clean or Uninstall does not find.
+title: "Clean: "
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        New categories start here. Write your home folder as `~` and leave out project or client names.
+  - type: input
+    id: path
+    attributes:
+      label: Where is it?
+      placeholder: ~/Library/Caches/com.example.tool
+    validations:
+      required: true
+  - type: input
+    id: owner
+    attributes:
+      label: Which app or tool creates it?
+      description: Name and version if you know them.
+    validations:
+      required: true
+  - type: input
+    id: size
+    attributes:
+      label: How large is it on your Mac?
+      placeholder: 3.2 GB (du -sh)
+  - type: textarea
+    id: comes-back
+    attributes:
+      label: What happens after it is removed?
+      description: Does the tool create it again by itself, download it again, or is something lost for good? Link the tool's own documentation if it says.
+    validations:
+      required: true
+  - type: textarea
+    id: in-use
+    attributes:
+      label: When must it be left alone?
+      description: For example while the app is open, or while a build runs.

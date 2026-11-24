@@ -8,7 +8,7 @@ fn scan_json_preserves_cli_schema_and_never_follows_symlinks() {
     std::fs::write(fixture.path().join("keep.txt"), b"abc").unwrap();
     std::fs::write(outside.path().join("secret.txt"), b"private").unwrap();
     std::os::unix::fs::symlink(outside.path(), fixture.path().join("linked")).unwrap();
-    let output = Command::new(assert_cmd::cargo::cargo_bin!("tiny"))
+    let output = Command::new(assert_cmd::cargo::cargo_bin!("tinysift"))
         .args([
             "scan",
             "--json",
@@ -33,7 +33,7 @@ fn scan_json_preserves_cli_schema_and_never_follows_symlinks() {
 }
 
 fn scan_json(paths: &[&std::path::Path], without_home: bool) -> serde_json::Value {
-    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("tiny"));
+    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("tinysift"));
     command.args([
         "scan",
         "--json",
@@ -91,7 +91,7 @@ fn invalid_requested_roots_fail_without_a_success_payload() {
         link,
         fixture.path().join("../"),
     ] {
-        Command::new(assert_cmd::cargo::cargo_bin!("tiny"))
+        Command::new(assert_cmd::cargo::cargo_bin!("tinysift"))
             .args(["scan", "--json", "--path"])
             .arg(path)
             .assert()
@@ -115,7 +115,7 @@ fn explicit_nested_build_root_remains_scannable() {
 
 #[test]
 fn focus_zero_minutes_is_an_input_error() {
-    Command::new(assert_cmd::cargo::cargo_bin!("tiny"))
+    Command::new(assert_cmd::cargo::cargo_bin!("tinysift"))
         .args(["focus", "--minutes", "0"])
         .assert()
         .failure()
@@ -139,7 +139,7 @@ fn unreadable_subtree_fails_without_reporting_a_complete_scan() {
     let outputs: Vec<_> = [fixture.path(), locked.as_path()]
         .iter()
         .map(|path| {
-            Command::new(assert_cmd::cargo::cargo_bin!("tiny"))
+            Command::new(assert_cmd::cargo::cargo_bin!("tinysift"))
                 .args(["scan", "--json", "--path"])
                 .arg(path)
                 .output()

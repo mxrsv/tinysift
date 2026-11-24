@@ -1,25 +1,25 @@
 # Cleaning caches
 
-`tiny clean` finds caches and leftovers you can remove, shows how much space each category
+`sift clean` finds caches and leftovers you can remove, shows how much space each category
 takes, lets you pick, and asks what to do before touching anything. It needs macOS. The
 [desktop app](https://tinysift.app/docs) lists the same categories with its own review
 and consent steps.
 
 ```bash
-tiny clean                              # picker → plan → action menu
-tiny clean --dry-run                    # show the plan and exit
-tiny clean --include-review             # also list categories worth a look first
-tiny clean --include-destructive        # also list the permanent ones
-tiny clean --review-paths               # untick individual paths before acting
-tiny clean --category node-modules      # only this category (repeatable)
-tiny clean --category trash --hard      # Hard delete preselected: empties the Trash
+sift clean                              # picker → plan → action menu
+sift clean --dry-run                    # show the plan and exit
+sift clean --include-review             # also list categories worth a look first
+sift clean --include-destructive        # also list the permanent ones
+sift clean --review-paths               # untick individual paths before acting
+sift clean --category node-modules      # only this category (repeatable)
+sift clean --category trash --hard      # Hard delete preselected: empties the Trash
 ```
 
 Run `--dry-run` first on a new machine.
 
 ## Categories
 
-48 categories in three families. Each has a risk level that decides whether you see it by
+49 categories in three families. Each has a risk level that decides whether you see it by
 default.
 
 **Dev caches** — `cargo`, `npm`, `pnpm`, `yarn`, `uv`, `bun-cache`, `pip-cache`, `puppeteer`,
@@ -31,7 +31,7 @@ default.
 `xcode-derived`, `xcode-archives`, `xcode-devicesupport`, `xcode-previews`.
 
 **User storage** — `downloads-old`, `screenshots-old`, `mail-attachments`,
-`streaming-caches`, `chat-caches`, `browser-caches`.
+`streaming-caches`, `chat-caches`, `browser-caches`, `browser-offline-data`.
 
 **System leftovers** — `user-logs`, `user-caches`, `trash`, `quarantine`, `crash-reports`,
 `app-orphans`, `time-machine-local`, `font-quicklook-caches`.
@@ -43,8 +43,8 @@ default.
 | Destructive | with `--include-destructive` | `trash`, `time-machine-local`, `docker-volumes`                                                 |
 
 Naming a category with `--category` shows it whatever its risk; the `--include-*` flags are
-then ignored. `system-simulator-caches` is Safe but needs administrator rights, which `tiny`
-never asks for: plain `tiny clean` leaves it out, and naming it lists it and then refuses it.
+then ignored. `system-simulator-caches` is Safe but needs administrator rights, which `sift`
+never asks for: plain `sift clean` leaves it out, and naming it lists it and then refuses it.
 The [desktop app](https://tinysift.app/docs) only shows its size: macOS refuses
 to let an app delete it, even after an administrator's password.
 
@@ -60,7 +60,7 @@ to let an app delete it, even after an administrator's password.
    - **Hard delete (NOT recoverable)** — asks you to confirm once more.
    - **Cancel**.
 
-At the end `tiny` prints how many paths it removed and lists any it could not.
+At the end `sift` prints how many paths it removed and lists any it could not.
 
 Unticking a path keeps it, its contents, and any selected parent folder that would carry it
 along. Those overlapping selections are retained and explained in the final report by the
@@ -76,7 +76,11 @@ along. Those overlapping selections are retained and explained in the final repo
   neither modified nor opened for `N` days, `screenshots-old` lists screenshots not modified
   for `N` days, and `android-sdk` uses it for emulator system images.
 - Project caches are searched under `~/Documents`, `~/Projects`, `~/Code`, `~/Developer` and
-  `~/Workspace`. Nothing inside a `node_modules` folder is listed on its own: `python-caches`
+  `~/Workspace`, and where coding agents keep copies of a project: `~/scratch`,
+  `~/conductor/workspaces`, `~/orca/workspaces`, `~/.codex/worktrees` and `~/.superset/worktrees`
+  ([`dev_search_roots`](../../crates/tiny-core/src/clean/providers/mod.rs)). A root that is a
+  symlink, or is reached through a symlinked folder in your home folder, is not searched: Clean
+  could not move what it found there. Nothing inside a `node_modules` folder is listed on its own: `python-caches`
   and `rust-targets` do not look inside one, and `node-modules` lists it whole
   ([`is_node_modules`](../../crates/tiny-core/src/clean/providers/mod.rs)).
 - `build-folders` lists only folders a manifest beside them proves are generated: `.next` beside
@@ -89,7 +93,7 @@ along. Those overlapping selections are retained and explained in the final repo
 - A `node_modules`, `target/` or build folder that holds a file git tracks is never listed or
   removed, and neither is one whose tracked files git cannot list (for example without the
   Command Line Tools).
-- Some categories are skipped while their app is open, and `tiny` tells you which app to quit:
+- Some categories are skipped while their app is open, and `sift` tells you which app to quit:
   the Xcode categories (Xcode; `xcode-derived` also `xcodebuild`), `ios-simulators`, `simulator-devices` and
   `simulator-runtimes` (Xcode, Simulator or `xcodebuild`), `cargo` (cargo or rustc), `gradle-maven` (a Gradle daemon,
   client or wrapper, checked right before the move), `mail-attachments` (Mail), `vscode` (VS Code), `android-sdk`
@@ -107,20 +111,45 @@ along. Those overlapping selections are retained and explained in the final repo
   ([`user_logs.rs`](../../crates/tiny-core/src/clean/providers/user_logs.rs)).
 - `puppeteer` leaves out just the builds of a browser that is running (Chrome for Testing or
   `chrome-headless-shell`), without a message.
-- `browser-caches`, `chat-caches`, `streaming-caches` and `user-caches` instead leave out
+- `browser-caches`, `browser-offline-data`, `chat-caches`, `streaming-caches` and `user-caches` instead leave out
   just the folders of apps that are running, without a message. Quit the app and run again
   to see them.
+- `browser-caches` lists every profile of Safari, Chrome, Arc, Brave, Edge, Vivaldi, Opera and Firefox: a
+  Chromium profile's `Cache`, `Code Cache` and `Storage` under `~/Library/Caches`, and its `Cache`, `Code Cache`
+  and `GPUCache`; Safari's `com.apple.Safari` cache; Firefox's `cache2`. Never cookies, logins, preferences,
+  history, extensions, site storage or a service worker's scripts and registrations (`Service Worker/ScriptCache`,
+  `Service Worker/Database`), which no category offers. A browser counts only when its profile list (`Local State`,
+  Firefox's `profiles.ini`) can be read; otherwise `browser-caches` offers none of its folders. `user-caches`
+  offers the rest of `~/Library/Caches` around what `browser-caches` offers: a vendor folder (`Google`,
+  `BraveSoftware`, ...) whole when no folder in it is offered, else its other parts, such as a deleted profile's
+  folder, so nothing is counted twice
+  ([`browser_caches.rs`](../../crates/tiny-core/src/clean/providers/browser_caches.rs)).
+- `browser-offline-data` (Offline site data) lists each Chromium profile's `Service Worker/CacheStorage`: copies
+  sites keep for offline use. Sites download them again, but a page or file saved for offline reading goes with
+  them, so it only moves to the Trash.
+
+## Browser privacy in the desktop app
+
+The desktop app's Browsers page also cleans each Chrome, Arc, Brave, Edge, Vivaldi, Opera and Firefox profile's
+Privacy: cookies unused for 90 days whose site is not in the profile's history (trackers) or was not visited in
+90 days, and history entries older than 90 days, with their icons, top sites and shortcuts. Cookies of a site you
+visited in the last 90 days stay, so you stay signed in there. It runs only while the browser is quit;
+TinySift never quits it for you. The change is on this Mac only: a browser's sync account keeps its own copy.
+Safari history is never edited. Before anything changes, a backup of the browser's files goes to the Trash;
+Undo puts them back until the profile is scanned again, as long as the browser has not changed them since, and
+the backup stays in the Trash after that. The
+[internals](../internals/clean.md#browsers) list what Privacy leaves in place. `sift clean` has no Privacy step.
 
 ## Scanning in the desktop app
 
 The desktop app can scan some categories without the rest. A scan replaces the results of the
 categories it covers and leaves every other category's results, and a plan already built from
-them, as they were. A scan that is stopped or fails changes nothing. `tiny clean` always scans
+them, as they were. A scan that is stopped or fails changes nothing. `sift clean` always scans
 afresh. How the app presents this is in the [desktop guide](https://tinysift.app/docs).
 
 ## Your own files
 
-`downloads-old`, `screenshots-old` and `mail-attachments` hold files nothing recreates; once
+`downloads-old`, `screenshots-old`, `mail-attachments` and `browser-offline-data` hold files nothing recreates; once
 removed, only the Trash brings them back. Selecting one of these categories selects every
 file it lists, including ones that look private such as keys or recovery codes. Read the
 plan, and untick what you want to keep with `--review-paths`. The desktop app flags
@@ -130,13 +159,13 @@ private-looking downloads and never ticks them for you.
 
 - **Move to Trash is the default.** It goes through Finder, so Put Back works.
 - **Hard delete is permanent** and asks you to confirm. `--hard` only preselects it in the
-  menu. With `-y` there is no prompt, so `tiny` also requires `TINY_CONFIRM_HARD=1`:
-  `TINY_CONFIRM_HARD=1 tiny clean --category cargo --hard -y`.
+  menu. With `-y` there is no prompt, so `sift` also requires `TINY_CONFIRM_HARD=1`:
+  `TINY_CONFIRM_HARD=1 sift clean --category cargo --hard -y`.
 - **`-y` needs `--category`**, so an unattended run always names its scope.
 - **The Trash can only be emptied**, with Hard delete. With `trash` selected, Move to Trash
   is refused and nothing is changed.
 - **Some cleanup has no Trash.** `homebrew` runs `brew cleanup --prune=30` (old versions and
-  downloads older than 30 days; never a formula, since `tiny` turns off Homebrew's autoremove),
+  downloads older than 30 days; never a formula, since `sift` turns off Homebrew's autoremove),
   and its size is what that command's dry run lists, measured on disk, leaving out
   `~/Library/Caches`, which `user-caches` already counts;
   `docker` prunes unused images and build cache, and its size is
@@ -153,10 +182,10 @@ private-looking downloads and never ticks them for you.
   `bun pm cache rm` and `pip-cache` runs `pip3 cache purge`, which empty the whole cache
   (`pip-cache` only through a Homebrew or Command Line Tools `pip3`, and only when
   `~/Library/Caches/pip` exists; otherwise that folder is part of `user-caches`). These are permanent
-  whichever action you choose, and `tiny` warns you when you pick Move to Trash. These are
-  Review for that reason, so plain `tiny clean` leaves them unticked. `pnpm` used to move its
+  whichever action you choose, and `sift` warns you when you pick Move to Trash. These are
+  Review for that reason, so plain `sift clean` leaves them unticked. `pnpm` used to move its
   store to the Trash, so a script with `--category pnpm` now prunes instead.
-- **`simulator-runtime-images` is report only.** Without Xcode, `tiny` lists the simulator
+- **`simulator-runtime-images` is report only.** Without Xcode, `sift` lists the simulator
   runtimes it finds but refuses to remove them; use System Settings → General → Storage.
 - **Local AI models are listed one per model.** `huggingface` lists each downloaded
   repository in `~/.cache/huggingface/hub` (the whole hub when its folders share stored
@@ -167,7 +196,7 @@ private-looking downloads and never ticks them for you.
 - **`ollama-models` is report only.** It lists each model with the bytes only that model
   uses; layers several models share are counted in none. Remove one with `ollama rm`.
 - **`app-orphans` is report only.** It lists Application Support folders that match no
-  installed app, but a folder name does not prove the app is gone, so `tiny` never moves
+  installed app, but a folder name does not prove the app is gone, so `sift` never moves
   them. Check them in Finder.
 - **Symlinks are never followed**, so nothing outside the listed paths can be removed.
 - **Always keep rules from the [desktop app](https://tinysift.app/docs)

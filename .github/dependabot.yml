@@ -1,0 +1,26 @@
+# Patch updates arrive as one grouped pull request a week. Minor and major updates each get their
+# own, because a 0.x crate may break its API in a minor version (sysinfo 0.32 to 0.40 did) and one
+# such bump must not hold the safe ones back. Security updates arrive outside this schedule.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: build
+      include: scope
+    groups:
+      cargo-patches:
+        patterns: ["*"]
+        update-types: [patch]
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: ci
+      include: scope
+    groups:
+      actions:
+        patterns: ["*"]

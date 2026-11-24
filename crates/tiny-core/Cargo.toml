@@ -15,6 +15,10 @@ thiserror = "2"
 rayon = "1.11"
 matroska = "0.30"
 mp4 = "0.14"
+# Browser privacy: reads copies of cookie and history databases, and finds
+# each cookie's site (eTLD+1) with the Public Suffix List compiled in.
+rusqlite = { version = "0.43", default-features = false, features = ["bundled"] }
+psl = "2.1"
 
 # Clean's moves to the Trash: NSFileManager's trashItemAtURL, so no Finder
 # Automation permission is needed.

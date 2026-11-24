@@ -1,0 +1,124 @@
+
+##### {"size":"std","icons":"uni","data":"normal","state":"ok","screen":"review"}
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ Xcode DerivedData                       ━━━━━━━━━━━━     6.2 GB
+   ◉ node_modules (idle)                     ━━━━━━━━━━━━     3.8 GB  review
+   ◯ npm cache                               ━━━━━━━━━━━━     1.1 GB  review
+   ◉ pnpm store                              ━━━━━━━━━━━━     840 MB  review
+   ◯ Homebrew cleanup                        ━━━━━━━━━━━━     310 MB  review
+   ◉ Crash reports / DiagnosticReports       ━━━━━━━━━━━━      89 MB
+   ◉ User logs                               ━━━━━━━━━━━━      50 KB
+
+
+
+
+
+
+
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Xcode DerivedData  6.2 GB · 43 items
+ Goes to     Trash  Finder › Put Back    comes back when you build again
+ Listed      Xcode rebuilds it
+
+ 10.9 GB picked in 5 categories    ● Trash 10.1 GB    ● for good 840 MB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v safe only · p paths · enter clean · tab page · q quit
+
+##### {"size":"wide","icons":"uni","data":"normal","state":"ok","screen":"review"}
+  Clean   Uninstall   Scan   Processes   System                                                            28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ Xcode DerivedData                  ━━━━━━━━━━━━     6.2 GB            │ Highlighted
+   ◉ node_modules (idle)                ━━━━━━━━━━━━     3.8 GB  review    │
+   ◯ npm cache                          ━━━━━━━━━━━━     1.1 GB  review    │ Xcode DerivedData
+   ◉ pnpm store                         ━━━━━━━━━━━━     840 MB  review    │ 6.2 GB · 43 items
+   ◯ Homebrew cleanup                   ━━━━━━━━━━━━     310 MB  review    │
+   ◉ Crash reports / DiagnosticReports  ━━━━━━━━━━━━      89 MB            │ Goes to     Trash  Finder › Put Back
+   ◉ User logs                          ━━━━━━━━━━━━      50 KB            │ Comes back  when you build again
+                                                                           │ Listed      Xcode rebuilds it
+                                                                           │
+                                                                           │ ~/Library/Deve…Data/TinySift-fmzkqpelrbdvxn
+                                                                           │ ~/Library/Deve…ivedData/ModuleCache.noindex
+                                                                           │ … 41 more · p lists them
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ 10.9 GB picked in 5 categories    ● Trash 10.1 GB    ● for good 840 MB
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v safe only · p paths · enter clean · tab page · q quit
+
+##### {"size":"std","icons":"nerd","data":"normal","state":"ok","screen":"review"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System          28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ 󰀵 Xcode DerivedData                     ━━━━━━━━━━━━     6.2 GB
+   ◉ 󰎙 node_modules (idle)                   ━━━━━━━━━━━━     3.8 GB  review
+   ◯ 󰛷 npm cache                             ━━━━━━━━━━━━     1.1 GB  review
+   ◉ 󰏗 pnpm store                            ━━━━━━━━━━━━     840 MB  review
+   ◯ 󱄖 Homebrew cleanup                      ━━━━━━━━━━━━     310 MB  review
+   ◉ 󰨰 Crash reports / DiagnosticReports     ━━━━━━━━━━━━      89 MB
+   ◉ 󰧭 User logs                             ━━━━━━━━━━━━      50 KB
+
+
+
+
+
+
+
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Xcode DerivedData  6.2 GB · 43 items
+ Goes to     Trash  Finder › Put Back    comes back when you build again
+ Listed      Xcode rebuilds it
+
+ 10.9 GB picked in 5 categories    ● Trash 10.1 GB    ● for good 840 MB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v safe only · p paths · enter clean · tab page · q quit
+
+##### {"size":"wide","icons":"nerd","data":"normal","state":"ok","screen":"review"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                  28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ 󰀵 Xcode DerivedData                ━━━━━━━━━━━━     6.2 GB            │ Highlighted
+   ◉ 󰎙 node_modules (idle)              ━━━━━━━━━━━━     3.8 GB  review    │
+   ◯ 󰛷 npm cache                        ━━━━━━━━━━━━     1.1 GB  review    │ Xcode DerivedData
+   ◉ 󰏗 pnpm store                       ━━━━━━━━━━━━     840 MB  review    │ 6.2 GB · 43 items
+   ◯ 󱄖 Homebrew cleanup                 ━━━━━━━━━━━━     310 MB  review    │
+   ◉ 󰨰 Crash reports / DiagnosticRepor… ━━━━━━━━━━━━      89 MB            │ Goes to     Trash  Finder › Put Back
+   ◉ 󰧭 User logs                        ━━━━━━━━━━━━      50 KB            │ Comes back  when you build again
+                                                                           │ Listed      Xcode rebuilds it
+                                                                           │
+                                                                           │ ~/Library/Deve…Data/TinySift-fmzkqpelrbdvxn
+                                                                           │ ~/Library/Deve…ivedData/ModuleCache.noindex
+                                                                           │ … 41 more · p lists them
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ 10.9 GB picked in 5 categories    ● Trash 10.1 GB    ● for good 840 MB
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v safe only · p paths · enter clean · tab page · q quit

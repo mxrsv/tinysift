@@ -8,7 +8,10 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 
 - **TinySift** — The product and desktop app name in UI copy, docs and the landing page; the
   local build is `TinySift Dev.app`. Not: tiny, Tiny, Tinysift, Tiny Sift.
-- **`tiny`** — The command-line tool, always in code formatting. Crate names, the bundle ID
+- **`sift`** — The command-line tool as users type it, always in code formatting. The executable is
+  `tinysift`; `sift` is the same file under a second name, and `tinysift` is the name to use where
+  another `sift` is installed. Docs teach `sift`. Not: `tiny`, the name before 2026-11-21. The
+  `tiny-core` and `tiny-ffi` crates, the `crates/tiny` folder, the bundle ID
   `com.mxrsv.tiny.dev`, `TINY_*` variables and the saved-data folders `~/.tiny-cli` and
   `~/Library/Application Support/Tiny` keep the old name; renaming them would orphan saved
   data. Not: TinySift as a command.
@@ -35,7 +38,8 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   ([`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs)). Not: `du`, Storage's
   Space Lens total, or the logical file length.
 - **Evidence** (`Evidence`) — A checkable fact shown beside an item: modified or last-opened
-  time, manifest and last commit, owning app, `Sensitive`. Empty means the category rule alone
+  time, manifest and last commit, owning app, `Sensitive`, a browser folder's browser and profile
+  (`BrowserProfile`). Empty means the category rule alone
   selected it. Not: reason (the category's `inclusion_reason`).
 - **Group** (`CategoryGroup`) — All items one provider discovered, with their total size, as the
   CLI picker lists them. Not: family, trust section.
@@ -62,8 +66,11 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   work) or **Your
   files**. Derived by `category_section` from `comes_back`; report-only categories are grouped by
   their desktop action instead. Not: family, risk.
-- **Dev search roots** — `~/Documents`, `~/Projects`, `~/Code`, `~/Developer`, `~/Workspace`:
-  the folders the project-cache providers walk.
+- **Dev search roots** — `~/Documents`, `~/Projects`, `~/Code`, `~/Developer`, `~/Workspace`,
+  plus the agent roots `~/scratch`, `~/conductor/workspaces`, `~/orca/workspaces`,
+  `~/.codex/worktrees`, `~/.superset/worktrees`: the folders the project-cache providers walk.
+  A root that is a symlink, or lies below a symlinked folder inside the home folder, is dropped
+  (`dev_search_roots_in`).
 - **App gating** — Not acting while the owning app runs: per category (`quit_apps()`), per path
   in `discover()`, and per path again before each desktop move (`item_apps()`). See
   [clean.md](clean.md#selection-and-discovery).
@@ -73,7 +80,7 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 - **Always keep** — A saved desktop rule: an exact path and a scope, `File` (that path) or
   `Directory` (also everything inside it). It also keeps a containing folder from moving. Not:
   a protected path (`protected_reason`: the root, the home folder and its ancestors, which no
-  cleanup moves). Only the app edits rules; `tiny clean` and `tiny uninstall` obey them too
+  cleanup moves). Only the app edits rules; `sift clean` and `sift uninstall` obey them too
   ([rules](../../crates/tiny-core/src/clean/protection.rs),
   [clean](../../crates/tiny-core/src/clean/execute.rs),
   [uninstall](../../crates/tiny-core/src/uninstall.rs)).
@@ -137,6 +144,36 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
 - **Checked execute** — The app's removal, revalidating each path right before it changes
   ([`checked_execute.rs`](../../crates/tiny-core/src/clean/checked_execute.rs)). Not: execute
   (the CLI's provider path).
+
+## Large Files
+
+- **Large Files group** (`Group`) — One of the five lists of the app's Large Files page, by how
+  sure a removal is: `copies`, `installers`, `only_copy`, `other_large`, `elsewhere` (group 5,
+  listed and never movable). Not: Clean's `CategoryGroup` or section. Rules:
+  [Large Files](clean.md#large-files).
+- **Scan floor** (`SCAN_FLOOR_BYTES`) — 100 MB: nothing smaller is listed by any group.
+- **Size filter** (`SIZE_FILTER_BYTES`, `groups_3_4_min_bytes`) — The minimum, 100 MB, 500 MB
+  (the default) or 1 GB, that groups 3 and 4 list from; no other group follows it.
+- **Lens** (`Lens`, `FfiLargeFile.lens`) — What a row is for the page's chips: `video`,
+  `installer` (an installer or a disk image), `archive`, `virtual_machine`, `audio`, `other`.
+  It comes from the file or its owner, never from the group. Not: kind (group 5's own words).
+- **Known location** (`KNOWN_LOCATIONS`) — A place the walk skips (`~/Library`, a dot-folder)
+  that group 5 still reads to measure an item and name the app that owns it: Docker's disk,
+  Colima, device backups, `CloudStorage`.
+- **Unpacked copy** (`Extracted`) — The folder or file beside a `.zip` that holds every file it
+  lists at the same size; it makes the archive a Copies row.
+
+## Browsers
+
+- **Browsers scan generation** (`FfiBrowsersReport.generation`) — The number of the last
+  `browsers_scan`, under which the session keeps each profile's privacy removal lists.
+  `browsers_clean_privacy` passes it back as consent; a newer scan makes it stale. Rules:
+  [Browsers](clean.md#browsers). Not: a Clean scan or preview ID, nor the Undo store's per-profile
+  generation, which every scan raises to end an earlier clean's Undo.
+- **Privacy clean** (`remove_privacy`, `browsers_clean_privacy`) — Removing a profile's old and
+  tracker cookies and its history older than 90 days, after a backup of every touched file goes
+  to the Trash. Undo (`undo_id`) lasts until the profile's next scan. Not: Clean's
+  `browser-caches` items, which are folders moved to the Trash.
 
 ## Processes
 

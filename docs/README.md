@@ -2,7 +2,8 @@
 
 ## User guides
 
-- [Getting started](user/getting-started.md) — local installation, sys and focus.
+- [Getting started](user/getting-started.md) — installation, sys and focus.
+- [Full-screen view](user/tui.md) — what bare `sift` opens: tabs, keys and icons.
 - [Clean](user/clean.md) — preview, consent and cleanup categories.
 - [Processes](user/processes.md) — inspection and process actions.
 - [Scan](user/scan.md) — read-only filesystem inspection.
@@ -15,7 +16,7 @@
 - [Glossary](internals/glossary.md) — canonical Rust/FFI vocabulary.
 - [Traps](internals/traps.md) — platform and safety constraints.
 - [Development](operations/development.md) — Cargo gates, native bindings and repository names.
-- [Releases](operations/release.md) — tags, DMG assets, notes and checks.
+- [Releases](operations/release.md) — app and CLI tags, assets, notes and checks.
 - [Contributing](../CONTRIBUTING.md) — commit and PR rules.
 
 The private app owns native UI/design/update documentation and cross-repository task records.

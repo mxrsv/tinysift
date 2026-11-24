@@ -1,0 +1,124 @@
+
+##### {"size":"std","icons":"uni","data":"normal","state":"ok","screen":"done"}
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ✓ Xcode DerivedData                       6.2 GB
+ ✓ node_modules (idle)                     3.8 GB
+ ✓ pnpm store                              840 MB
+ ✓ Crash reports / DiagnosticReports        89 MB
+ ✓ User logs                                50 KB
+
+
+
+
+
+
+
+
+
+
+
+ ── Done in 9.4s ──────────────────────────────────────────────────────────────
+ Cleaned    10.9 GB   in Trash 10.1 GB   for good 840 MB
+ Finder › Put Back restores what is in the Trash.
+ Space in the Trash returns when the Trash is emptied.
+────────────────────────────────────────────────────────────────────────────────
+ enter back to Clean, measured again · q quit
+
+##### {"size":"wide","icons":"uni","data":"normal","state":"ok","screen":"done"}
+  Clean   Uninstall   Scan   Processes   System                                                            28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ Xcode DerivedData                       6.2 GB                          │ Done in 9.4s
+ ✓ node_modules (idle)                     3.8 GB                          │
+ ✓ pnpm store                              840 MB                          │ Cleaned    10.9 GB
+ ✓ Crash reports / DiagnosticReports        89 MB                          │ In Trash   10.1 GB  Finder › Put Back
+ ✓ User logs                                50 KB                          │ For good   840 MB
+                                                                           │
+                                                                           │ Space in the Trash returns when the Trash
+                                                                           │ is emptied.
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ enter back to Clean, measured again · q quit
+
+##### {"size":"std","icons":"nerd","data":"normal","state":"ok","screen":"done"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System          28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ✓ 󰀵 Xcode DerivedData                       6.2 GB
+ ✓ 󰎙 node_modules (idle)                     3.8 GB
+ ✓ 󰏗 pnpm store                              840 MB
+ ✓ 󰨰 Crash reports / DiagnosticReports        89 MB
+ ✓ 󰧭 User logs                                50 KB
+
+
+
+
+
+
+
+
+
+
+
+ ── Done in 9.4s ──────────────────────────────────────────────────────────────
+ Cleaned    10.9 GB   in Trash 10.1 GB   for good 840 MB
+ Finder › Put Back restores what is in the Trash.
+ Space in the Trash returns when the Trash is emptied.
+────────────────────────────────────────────────────────────────────────────────
+ enter back to Clean, measured again · q quit
+
+##### {"size":"wide","icons":"nerd","data":"normal","state":"ok","screen":"done"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                  28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ✓ 󰀵 Xcode DerivedData                       6.2 GB                        │ Done in 9.4s
+ ✓ 󰎙 node_modules (idle)                     3.8 GB                        │
+ ✓ 󰏗 pnpm store                              840 MB                        │ Cleaned    10.9 GB
+ ✓ 󰨰 Crash reports / DiagnosticReports        89 MB                        │ In Trash   10.1 GB  Finder › Put Back
+ ✓ 󰧭 User logs                                50 KB                        │ For good   840 MB
+                                                                           │
+                                                                           │ Space in the Trash returns when the Trash
+                                                                           │ is emptied.
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ enter back to Clean, measured again · q quit
