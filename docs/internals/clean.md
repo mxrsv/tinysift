@@ -735,9 +735,15 @@ Always keep is a policy owned by Rust; only the desktop app edits it. A
 covers exactly that path, `Directory` also everything inside it. A candidate is held when it
 equals the rule path, lies inside a `Directory` rule, or is a strict ancestor of the rule path,
 because moving it would carry the kept path along, found by discovery or not. Components are
-compared one by one, never as string prefixes. Symlinks are never replaced by their targets
-and renames are not tracked, so a rule for a path that is missing today applies again if that
-path returns. Equivalent spellings on a volume that folds case or Unicode are decided from the
+compared one by one, never as string prefixes. A scan spells a path as its provider found it
+and a person picks one as the system shows it, so one item can arrive under two spellings that
+differ by a symlink in the folders above it (`/var/folders/…` and `/private/var/folders/…`).
+Each path is therefore compared twice, as spelled and at its real location (the folder
+holding it with every symlink resolved, then its own name), and a rule holds a candidate when
+any spelling of one relates to any spelling of the other. The last name is never followed: a
+link to a kept item is its own entry, and moving the link moves nothing kept. A candidate
+whose folder is there but cannot be resolved counts as held. Renames are not tracked, so a
+rule for a path that is missing today applies again if that path returns. Equivalent spellings on a volume that folds case or Unicode are decided from the
 real directory entries; anything that cannot be decided (unreadable parent, several entries
 for one inode) counts as held, not as free. Tiny's own store, lock and staging paths are
 internal rules, so cleanup never moves them or an ancestor that holds them. A tool item that
@@ -752,12 +758,12 @@ remove, with the revision it last read
 ([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The one
 path Swift sends is a file or folder the user picked to keep outside a scan
 (`clean_keep_path`, same file): it can only add a rule, never select or move anything. Rust
-resolves the folder holding it to its real location (a rule spelled through a symlink would
-hold nothing a scan finds; the picked name itself is never followed), takes the scope from
-the path's own metadata and refuses, as `InvalidInput` with words the
-app shows, a path that is not absolute and normalized, is missing, is a symlink or a special
-file, or is the home folder or a folder holding it, since that rule would hold every
-candidate. Paths outside the home folder are allowed. The
+saves the rule where the item really is (the folder holding it resolved, and the short
+spelling of the data volume, `/Users/…` for `/System/Volumes/Data/Users/…`), takes the scope
+from the item's own metadata and refuses, as `InvalidInput` with words the app shows after
+naming the path itself, a path that is not absolute and normalized, is missing, is a symlink
+or a special file, is already kept, or is the home folder or a folder holding it, since that
+rule would hold every candidate. Paths outside the home folder are allowed. The
 [CLI executor](../../crates/tiny-core/src/clean/execute.rs) takes the same exclusive lease before
 acting, reports every item the rules do not allow as kept, and refuses the whole run when they
 cannot be read.

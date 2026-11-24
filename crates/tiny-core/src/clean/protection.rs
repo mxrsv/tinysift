@@ -25,12 +25,23 @@
 //! entry exactly when the spellings are byte-equal. A name the volume cannot
 //! find is "missing"; a missing name never equals an existing one.
 //!
-//! No string lowercasing or normalisation happens here, symlinks are never
-//! replaced by their targets (an alias path is a different path), and
-//! renames are not tracked. Anything that stops equivalence from being
-//! decided (unreadable directory, several entries for one inode, two
-//! different missing names, a malformed path) is reported as an
-//! [`Uncertainty`], which callers must treat as blocked.
+//! # Real locations
+//!
+//! A scan spells a path as its provider found it and a person picks one as
+//! the system shows it, so one item can arrive under two spellings that
+//! differ by a symlink in the folders above it (`/var/folders/…` and
+//! `/private/var/folders/…`). Each path is therefore compared twice: as
+//! spelled, and at its real location, which is the folder holding it with
+//! every symlink resolved plus its own name. A rule holds a candidate when
+//! any spelling of one relates to any spelling of the other. The last name is
+//! never followed: a link to a kept item is its own entry, and moving the
+//! link moves nothing that is kept.
+//!
+//! No string lowercasing or normalisation happens here and renames are not
+//! tracked. Anything that stops equivalence from being decided (unreadable
+//! directory, a candidate whose folder cannot be resolved, several entries
+//! for one inode, two different missing names, a malformed path) is reported
+//! as an [`Uncertainty`], which callers must treat as blocked.
 //!
 //! Limits: the cache in one [`Matcher`] describes one moment (build a fresh
 //! one before every move); rules guard against Tiny's own cleanup, not against
@@ -300,12 +311,14 @@ impl Evaluation {
     }
 }
 
-/// The two filesystem reads spelling resolution needs.
+/// The filesystem reads spelling resolution needs.
 pub trait DirReader {
     /// Entry names with their inode numbers; `NotFound` when `dir` is absent.
     fn list(&self, dir: &Path) -> io::Result<Vec<(OsString, u64)>>;
     /// Inode of `path` without following a final symlink.
     fn lookup_ino(&self, path: &Path) -> io::Result<u64>;
+    /// `dir` with every symlink in it resolved; `NotFound` when it is absent.
+    fn resolve_dir(&self, dir: &Path) -> io::Result<PathBuf>;
 }
 
 #[derive(Default)]
@@ -321,6 +334,10 @@ impl DirReader for RealFs {
     fn lookup_ino(&self, path: &Path) -> io::Result<u64> {
         std::fs::symlink_metadata(path).map(|m| m.ino())
     }
+
+    fn resolve_dir(&self, dir: &Path) -> io::Result<PathBuf> {
+        std::fs::canonicalize(dir)
+    }
 }
 
 fn is_missing(e: &io::Error) -> bool {
@@ -329,6 +346,8 @@ fn is_missing(e: &io::Error) -> bool {
 
 type Listing = Result<Option<HashMap<OsString, u64>>, io::ErrorKind>;
 type NameResolution = Result<Option<OsString>, Doubt>;
+/// A folder's real location; `None` when nothing is there.
+type RealDir = Result<Option<PathBuf>, io::ErrorKind>;
 
 /// Decides what a rule list says about candidate paths. Caches directory
 /// reads, so it is only valid for one moment: build a new one per check.
@@ -337,6 +356,7 @@ pub struct Matcher<R = RealFs> {
     reader: R,
     listings: RefCell<HashMap<PathBuf, Rc<Listing>>>,
     names: RefCell<HashMap<(PathBuf, OsString), NameResolution>>,
+    real_dirs: RefCell<HashMap<PathBuf, RealDir>>,
 }
 
 impl Matcher {
@@ -351,6 +371,7 @@ impl<R: DirReader> Matcher<R> {
             reader,
             listings: RefCell::default(),
             names: RefCell::default(),
+            real_dirs: RefCell::default(),
         }
     }
 
@@ -373,12 +394,32 @@ impl<R: DirReader> Matcher<R> {
                 return out;
             }
         };
+        if rules.is_empty() {
+            return out;
+        }
+        // The candidate as spelled, then where it really is.
+        let mut spellings = vec![cand];
+        match self.real_location(candidate) {
+            Ok(real) => spellings.extend(real),
+            Err(kind) => out.uncertain.push(Uncertainty {
+                rule_id: None,
+                doubt: Doubt::Unreadable {
+                    dir: candidate.parent().unwrap_or(candidate).to_path_buf(),
+                    kind,
+                },
+            }),
+        }
         for rule in rules {
             let related = path_components(&rule.path)
                 .map_err(Doubt::InvalidPath)
-                .and_then(|names| self.relate(&cand, &names));
+                .and_then(|names| {
+                    let mut rule_spellings = vec![names];
+                    // A rule whose folder is gone or unreadable keeps its
+                    // spelling: it applies again when the path returns.
+                    rule_spellings.extend(self.real_location(&rule.path).ok().flatten());
+                    self.relate_any(&spellings, &rule_spellings, rule.scope)
+                });
             match related {
-                Ok(Some(Relation::InsideRule)) if rule.scope == RuleScope::File => {}
                 Ok(Some(relation)) => out.blocks.push(Block {
                     rule_id: rule.id.clone(),
                     relation,
@@ -391,6 +432,59 @@ impl<R: DirReader> Matcher<R> {
             }
         }
         out
+    }
+
+    /// The first relation any spelling of the candidate has to any spelling
+    /// of the rule. A `File` rule never covers what lies inside its path. A
+    /// doubt counts only when no spelling relates: one sure relation blocks.
+    fn relate_any(
+        &self,
+        candidate: &[Vec<OsString>],
+        rule: &[Vec<OsString>],
+        scope: RuleScope,
+    ) -> Result<Option<Relation>, Doubt> {
+        let mut doubt = None;
+        for cand in candidate {
+            for names in rule {
+                match self.relate(cand, names) {
+                    Ok(Some(Relation::InsideRule)) if scope == RuleScope::File => {}
+                    Ok(Some(relation)) => return Ok(Some(relation)),
+                    Ok(None) => {}
+                    Err(found) => doubt = doubt.or(Some(found)),
+                }
+            }
+        }
+        doubt.map_or(Ok(None), Err)
+    }
+
+    /// Where `path` really is: the folder holding it with every symlink
+    /// resolved, then its own name as spelled (the last name is never
+    /// followed). `None` when that is the spelling given or nothing is at the
+    /// folder; an error when the folder is there and cannot be resolved.
+    fn real_location(&self, path: &Path) -> Result<Option<Vec<OsString>>, io::ErrorKind> {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Ok(None);
+        };
+        let real = match self.real_dir(parent)? {
+            Some(dir) if dir != parent => dir.join(name),
+            _ => return Ok(None),
+        };
+        Ok(path_components(&real).ok())
+    }
+
+    fn real_dir(&self, dir: &Path) -> RealDir {
+        if let Some(hit) = self.real_dirs.borrow().get(dir) {
+            return hit.clone();
+        }
+        let resolved = match self.reader.resolve_dir(dir) {
+            Ok(real) => Ok(Some(real)),
+            Err(e) if is_missing(&e) => Ok(None),
+            Err(e) => Err(e.kind()),
+        };
+        self.real_dirs
+            .borrow_mut()
+            .insert(dir.to_path_buf(), resolved.clone());
+        resolved
     }
 
     fn relate(&self, cand: &[OsString], rule: &[OsString]) -> Result<Option<Relation>, Doubt> {

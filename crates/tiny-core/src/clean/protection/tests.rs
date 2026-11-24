@@ -150,19 +150,62 @@ fn missing_and_renamed_paths_are_kept_but_never_followed() {
 }
 
 #[test]
-fn symlinks_are_identity_not_a_way_to_reach_the_target() {
+fn a_symlink_above_a_path_reaches_the_kept_item_and_the_last_name_is_never_followed() {
     let tmp = tempfile::tempdir().unwrap();
     let root = tmp.path();
-    mkdirs(root, &["real/inner"]);
+    mkdirs(root, &["real/inner/deep"]);
     symlink(root.join("real"), root.join("link2")).unwrap();
     symlink(root.join("link2"), root.join("link1")).unwrap();
+    // A rule spelled through links holds the item under every spelling.
     let chain = [dir_rule(&root.join("link1/inner"))];
-    assert_eq!(rel(&chain, root, "real/inner"), None);
-    assert_eq!(rel(&chain, root, "link2/inner"), None);
+    assert_eq!(rel(&chain, root, "real/inner"), Some(Equal));
+    assert_eq!(rel(&chain, root, "link2/inner"), Some(Equal));
     assert_eq!(rel(&chain, root, "link1/inner"), Some(Equal));
+    assert_eq!(rel(&chain, root, "link2/inner/deep"), Some(InsideRule));
+    assert_eq!(rel(&chain, root, "real"), Some(CarriesRule));
     assert_eq!(rel(&chain, root, "link1"), Some(CarriesRule));
-    let real = [dir_rule(&root.join("real"))];
-    assert_eq!(rel(&real, root, "link1"), None);
+    // A rule at the real location holds what a scan spells through a link.
+    let real = [dir_rule(&root.join("real/inner"))];
+    assert_eq!(rel(&real, root, "link1/inner"), Some(Equal));
+    assert_eq!(rel(&real, root, "link1/inner/deep"), Some(InsideRule));
+    let file = [rule(&root.join("real/inner"), RuleScope::File)];
+    assert_eq!(rel(&file, root, "link1/inner"), Some(Equal));
+    assert_eq!(rel(&file, root, "link1/inner/deep"), None, "no descendants");
+    // The last name is never followed: a link to a kept folder is its own
+    // entry, and moving it moves nothing that is kept.
+    let whole = [dir_rule(&root.join("real"))];
+    assert_eq!(rel(&whole, root, "link1"), None);
+    assert_eq!(rel(&whole, root, "link2"), None);
+    assert_eq!(rel(&whole, root, "link1/inner"), Some(InsideRule));
+}
+
+#[test]
+fn a_candidate_whose_folder_cannot_be_resolved_is_doubtful() {
+    use std::os::unix::fs::PermissionsExt;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path();
+    mkdirs(root, &["locked/inner", "kept"]);
+    let rules = [dir_rule(&root.join("kept"))];
+    let locked = root.join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let eval = Matcher::new().evaluate(&rules, &locked.join("inner/item"));
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    assert!(eval.blocks.is_empty(), "{:?}", eval.blocks);
+    assert!(
+        matches!(
+            eval.uncertain.as_slice(),
+            [Uncertainty {
+                rule_id: None,
+                doubt: Doubt::Unreadable { .. }
+            }]
+        ),
+        "where it really is cannot be told, so it does not move: {:?}",
+        eval.uncertain
+    );
+    // With no rule there is nothing it could be, and nothing is resolved.
+    assert!(Matcher::new()
+        .evaluate(&[], &locked.join("inner/item"))
+        .allows_move());
 }
 
 #[test]
@@ -243,6 +286,11 @@ impl DirReader for FakeFs {
         let found = parent.and_then(|dir| self.find(&dir, path.file_name().unwrap()));
         found
             .map(|(_, ino)| ino)
+            .ok_or_else(|| io::ErrorKind::NotFound.into())
+    }
+
+    fn resolve_dir(&self, dir: &Path) -> io::Result<PathBuf> {
+        self.real_dir(dir)
             .ok_or_else(|| io::ErrorKind::NotFound.into())
     }
 }
