@@ -104,11 +104,17 @@ fn the_figure_is_the_handed_sum_for_every_selection() {
         }
         let plan = listing.plan(CleanAction::Trash);
         let handed: u64 = plan.handed().map(|i| i.size).sum();
-        let foot = list_view::foot(&listing).text();
+        let foot = list_view::foot(&listing, 200).text();
         assert!(
             foot.starts_with(&format!("{} picked", format_size(handed))),
             "{foot}"
         );
+        // At the 60-column minimum the words go, the Trash and for-good figures stay.
+        let narrow = list_view::foot(&listing, 59).text();
+        assert!(narrow.chars().count() <= 59, "{narrow}");
+        for figure in foot.split("● ").skip(1) {
+            assert!(narrow.contains(figure.trim()), "{narrow} lost {figure}");
+        }
     }
 }
 

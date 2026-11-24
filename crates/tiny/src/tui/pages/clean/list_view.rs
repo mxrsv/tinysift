@@ -106,7 +106,7 @@ impl ListScreen<'_> {
             };
         }
         PageView {
-            foot: Some(foot(listing)),
+            foot: Some(foot(listing, ctx.width.saturating_sub(1))),
             keys: [
                 KeyHint::new("↑↓", "move"),
                 KeyHint::new("space", "tick"),
@@ -277,27 +277,38 @@ fn row(entry: &Entry, highlighted: bool, max: u64, ctx: &ViewCtx) -> StyledLine 
 }
 
 /// The foot: what enter cleans, split into what goes to the Trash and what a tool removes for good.
-pub fn foot(listing: &Listing) -> StyledLine {
+pub fn foot(listing: &Listing, room: usize) -> StyledLine {
     let total = listing
         .plan(tiny_core::clean::types::CleanAction::Trash)
         .bytes();
     let gone = listing.for_good_bytes();
-    let count = listing.picked().count();
-    let line = StyledLine::new()
-        .hi(format_size(total))
-        .dim(format!(
-            " picked in {}    ",
-            plural(count, "category", "categories")
-        ))
-        .ok("● ")
-        .dim(format!("Trash {}", format_size(total - gone)));
-    if gone > 0 {
-        line.dim("    ")
-            .bad("● ")
-            .dim(format!("for good {}", format_size(gone)))
-    } else {
-        line
-    }
+    let count = plural(listing.picked().count(), "category", "categories");
+    // The Trash and for-good figures are what `enter` does, so a narrow
+    // window drops words around them, never the figures.
+    let forms = [
+        (format!(" picked in {count}"), "    "),
+        (format!(" in {count}"), "  "),
+        (String::new(), "  "),
+    ];
+    let line = |(said, gap): &(String, &str)| {
+        let line = StyledLine::new()
+            .hi(format_size(total))
+            .dim(format!("{said}{gap}"))
+            .ok("● ")
+            .dim(format!("Trash {}", format_size(total - gone)));
+        if gone > 0 {
+            line.dim(*gap)
+                .bad("● ")
+                .dim(format!("for good {}", format_size(gone)))
+        } else {
+            line
+        }
+    };
+    forms
+        .iter()
+        .map(line)
+        .find(|line| line.width() <= room)
+        .unwrap_or_else(|| line(&forms[forms.len() - 1]))
 }
 
 fn category_detail(entry: &Entry, listing: &Listing, width: usize) -> Detail {
