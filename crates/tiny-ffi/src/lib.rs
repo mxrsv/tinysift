@@ -13,6 +13,7 @@ uniffi::setup_scaffolding!();
 pub mod browsers;
 pub mod cask;
 pub mod clean;
+pub mod disk_breakdown;
 pub mod large_files;
 pub mod processes;
 pub mod session;
