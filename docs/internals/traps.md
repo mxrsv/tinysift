@@ -172,6 +172,22 @@ Things that are not obvious from reading one file.
   bound and set `incomplete`; `omitted_*` only hides entries that are still in the totals.
   An entry that vanishes mid-scan is ignored, not reported.
 
+## Disk breakdown
+
+- **`statfs` does not give an APFS volume's own used space.** Every volume of a container reports the
+  container's size in `f_blocks` and its free space in both `f_bavail` and `f_bfree`, so
+  `f_blocks - f_bfree` is the container's use, the same for each volume.
+  [`volumes.rs`](../../crates/tiny-core/src/disk_breakdown/volumes.rs) reads each volume's
+  `ATTR_VOL_SPACEUSED` instead, the figure `df` and `diskutil apfs list` show.
+- **`EPERM` means Full Disk Access only inside the home.** Outside it (`/.Spotlight-V100`,
+  `/Library/Application Support/com.apple.TCC`) the refusal is System Integrity Protection, which
+  Full Disk Access does not lift; [`walk.rs`](../../crates/tiny-core/src/disk_breakdown/walk.rs) files
+  those under `Refusal::System` so the app never promises that granting access will measure them.
+- **Private bytes summed over a volume lose clone families.** A full clone's private size is 0 in
+  every member, so summing `private_size` over the whole volume would drop the family's blocks. The
+  walk counts a full clone family, and a hard-linked inode, once at the end, in the first group of
+  `DiskGroup::ALL` that holds a member.
+
 ## Process readings
 
 - **`proc_pid_rusage` times are Mach ticks, not nanoseconds.** `ri_user_time`,
