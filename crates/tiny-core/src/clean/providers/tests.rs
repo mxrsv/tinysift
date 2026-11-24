@@ -445,3 +445,90 @@ fn tool_ids_are_owned_by_exactly_the_expected_provider() {
         }
     }
 }
+
+/// A temporary home folder holding `dirs`, removed when dropped. Its path is
+/// resolved (`/var` is a symlink on macOS), as a real home folder is.
+fn home_with(dirs: &[&str]) -> (tempfile::TempDir, std::path::PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let home = std::fs::canonicalize(tmp.path()).unwrap();
+    for dir in dirs {
+        std::fs::create_dir_all(home.join(dir)).unwrap();
+    }
+    (tmp, home)
+}
+
+#[test]
+fn search_roots_cover_project_and_agent_folders_that_exist() {
+    let (_tmp, home) = home_with(&[
+        "Documents",
+        "Code",
+        "scratch",
+        "conductor/workspaces",
+        "orca/workspaces",
+        ".codex/worktrees",
+        ".superset/worktrees",
+    ]);
+    let rel: Vec<_> = dev_search_roots_in(&home)
+        .into_iter()
+        .map(|r| r.strip_prefix(&home).unwrap().to_path_buf())
+        .collect();
+    let expected: Vec<std::path::PathBuf> = [
+        "Documents",
+        "Code",
+        "scratch",
+        "conductor/workspaces",
+        "orca/workspaces",
+        ".codex/worktrees",
+        ".superset/worktrees",
+    ]
+    .iter()
+    .map(Into::into)
+    .collect();
+    assert_eq!(rel, expected);
+}
+
+#[test]
+fn search_roots_skip_files_and_missing_folders() {
+    let (_tmp, home) = home_with(&["Documents", "conductor"]);
+    std::fs::write(home.join("scratch"), b"not a folder").unwrap();
+    assert_eq!(dev_search_roots_in(&home), [home.join("Documents")]);
+}
+
+/// A symlinked root is never walked, so it must not hide the real folder it
+/// points at, wherever that folder sits in the list.
+#[test]
+fn a_symlinked_root_is_left_out_and_its_target_kept() {
+    let (_tmp, home) = home_with(&["Code", "Documents/scratch"]);
+    let link = |target: &str, name: &str| {
+        std::os::unix::fs::symlink(home.join(target), home.join(name)).unwrap()
+    };
+    link("Code", "Projects");
+    link("Documents/scratch", "scratch");
+    link(".", "Workspace");
+    assert_eq!(
+        dev_search_roots_in(&home),
+        [home.join("Documents"), home.join("Code")]
+    );
+}
+
+/// Clean refuses an item below a symlinked folder, so a root reached through
+/// one is not searched.
+#[test]
+fn an_agent_root_under_a_symlinked_folder_is_left_out() {
+    let (_tmp, home) = home_with(&["Documents", "dotfiles/codex/worktrees"]);
+    std::os::unix::fs::symlink(home.join("dotfiles/codex"), home.join(".codex")).unwrap();
+    assert!(home.join(".codex/worktrees").is_dir());
+    assert_eq!(dev_search_roots_in(&home), [home.join("Documents")]);
+}
+
+/// Only folders below the home folder are checked: a home path that passes
+/// through a symlink (`/var` on macOS) keeps its roots, as before.
+#[test]
+fn a_home_reached_through_a_symlink_keeps_its_roots() {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::create_dir_all(tmp.path().join("scratch")).unwrap();
+    assert_eq!(
+        dev_search_roots_in(tmp.path()),
+        [tmp.path().join("scratch")]
+    );
+}

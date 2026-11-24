@@ -66,8 +66,11 @@ Canonical engine, CLI and FFI vocabulary. Native presentation vocabulary belongs
   work) or **Your
   files**. Derived by `category_section` from `comes_back`; report-only categories are grouped by
   their desktop action instead. Not: family, risk.
-- **Dev search roots** — `~/Documents`, `~/Projects`, `~/Code`, `~/Developer`, `~/Workspace`:
-  the folders the project-cache providers walk.
+- **Dev search roots** — `~/Documents`, `~/Projects`, `~/Code`, `~/Developer`, `~/Workspace`,
+  plus the agent roots `~/scratch`, `~/conductor/workspaces`, `~/orca/workspaces`,
+  `~/.codex/worktrees`, `~/.superset/worktrees`: the folders the project-cache providers walk.
+  A root that is a symlink, or lies below a symlinked folder inside the home folder, is dropped
+  (`dev_search_roots_in`).
 - **App gating** — Not acting while the owning app runs: per category (`quit_apps()`), per path
   in `discover()`, and per path again before each desktop move (`item_apps()`). See
   [clean.md](clean.md#selection-and-discovery).
