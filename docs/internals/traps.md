@@ -111,8 +111,8 @@ Things that are not obvious from reading one file.
 
 ## Desktop protection
 
-- **A rule write needs a prior read in the same session.** `clean_keep` and `clean_unkeep`
-  fail with `ProtectionChanged` unless the stored rules equal what the last `clean_protection`
+- **A rule write needs a prior read in the same session.** `clean_keep`, `clean_keep_path` and
+  `clean_unkeep` fail with `ProtectionChanged` unless the stored rules equal what the last `clean_protection`
   or successful write returned, in revision and content; a write that fails after taking the
   lock clears that memory, so Swift reads again before the next one
   ([`change_rules`](../../crates/tiny-ffi/src/clean/protection.rs)). A new caller cannot pass a

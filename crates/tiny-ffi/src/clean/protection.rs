@@ -1,21 +1,29 @@
 //! Desktop "Always keep": what the saved rules say about the discovered
-//! candidates, the preview exclusions they cause, and the only two writes
-//! (keep a discovered candidate, remove a saved rule by ID). Rust owns the
-//! rules and their storage; neither write takes a path from Swift.
+//! candidates, the preview exclusions they cause, and the only three writes
+//! (keep a discovered candidate, keep a path the user picked, remove a saved
+//! rule by ID). Rust owns the rules and their storage. A picked path is the
+//! one thing Swift sends, and it is only ever kept, never moved: Rust checks
+//! it, reads its kind from disk and refuses a folder that holds the home.
 //!
 //! Locking: session gate, then the store lock, then a short clean-state lock.
 //! Reads (`clean_protection`, the preview) use the shared store lock and never
 //! create files; only a write or an execution takes the exclusive lease.
 
 use std::fs;
+use std::io;
+use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 
 use tiny_core::clean::protection::{
     validate_rule_path, Evaluation, Matcher, PolicySnapshot, ProtectionRule, Relation, RuleScope,
     INTERNAL_ID_PREFIX,
 };
+
+/// Where macOS shows the data volume a second time: `/System/Volumes/Data/Users`
+/// is `/Users`.
+const DATA_VOLUME: &str = "/System/Volumes/Data";
 use tiny_core::clean::protection_store::StoreError;
-use tiny_core::clean::trash_plan::PlannedItem;
+use tiny_core::clean::trash_plan::{protected_reason, PlannedItem};
 
 use super::{FfiDesktopAction, FfiExclusionReason, FfiPreviewExclusion};
 use crate::{FfiError, TinySession};
@@ -191,8 +199,8 @@ fn write_error(error: StoreError) -> FfiError {
         StoreError::Stale { .. } | StoreError::Changed | StoreError::StoreLost => {
             FfiError::ProtectionChanged
         }
-        StoreError::Duplicate(id) => FfiError::InvalidInput {
-            detail: format!("this path is already kept by saved rule {id}"),
+        StoreError::Duplicate(_) => FfiError::InvalidInput {
+            detail: "this path is already kept".into(),
         },
         StoreError::UnknownRule(id) => FfiError::InvalidInput {
             detail: format!("there is no saved rule {id}"),
@@ -214,15 +222,19 @@ struct CandidateView {
     keep_scope: Option<RuleScope>,
 }
 
-/// The candidate a keep resolved, re-checked against disk before the write.
+/// What a keep resolved, re-checked against disk before the write.
 struct KeepTarget {
     path: PathBuf,
     scope: RuleScope,
+    /// A path the user picked, not a scan's candidate: its refusals name no
+    /// path and no scan.
+    picked: bool,
 }
 
-/// A rule write as the caller named it: only IDs, never a path.
+/// A rule write as the caller named it: an ID, or the path a user picked.
 enum Change {
     Keep(String),
+    KeepPath(String),
     Unkeep(String),
 }
 
@@ -230,14 +242,22 @@ impl KeepTarget {
     /// The path must still be what the user saw: a folder swapped for a file
     /// (or the reverse) would silently change what the rule covers.
     fn revalidate(&self) -> Result<(), FfiError> {
-        let shown = self.path.display();
-        let invalid = |why: String| FfiError::InvalidInput {
-            detail: format!("{shown} {why}; scan again"),
+        let invalid = |scanned: &str, picked: &str| FfiError::InvalidInput {
+            detail: match self.picked {
+                true => format!("it {picked}; choose it again"),
+                false => format!("{} {scanned}; scan again", self.path.display()),
+            },
         };
         match fs::symlink_metadata(&self.path) {
             Ok(meta) if scope_of(&meta) == Some(self.scope) => Ok(()),
-            Ok(_) => Err(invalid("changed kind since the scan".into())),
-            Err(e) => Err(invalid(format!("cannot be inspected now ({e})"))),
+            Ok(_) => Err(invalid(
+                "changed kind since the scan",
+                "changed while it was being saved",
+            )),
+            Err(e) => {
+                let why = format!("cannot be inspected now ({e})");
+                Err(invalid(&why, &why))
+            }
         }
     }
 }
@@ -287,6 +307,22 @@ impl TinySession {
         expected_revision: u64,
     ) -> Result<FfiProtection, FfiError> {
         self.change_rules(expected_revision, Change::Keep(candidate_id))
+    }
+
+    /// Saves a rule for a path the user picked, in a scan or not: that file,
+    /// or that folder and everything inside, at its real location (a
+    /// symlink in the folders above it is resolved). Refuses a path that is not
+    /// absolute and normalized, is missing, is a symlink or a special file,
+    /// or is the home folder or a folder holding it (`InvalidInput`, with
+    /// words the app can show). Otherwise as `clean_keep`: the gate, the
+    /// store lock, `expected_revision`, and the stored preview dropped.
+    /// Selects and moves nothing.
+    pub fn clean_keep_path(
+        &self,
+        path: String,
+        expected_revision: u64,
+    ) -> Result<FfiProtection, FfiError> {
+        self.change_rules(expected_revision, Change::KeepPath(path))
     }
 
     /// Removes a saved rule by ID, under the same conditions as `clean_keep`.
@@ -382,7 +418,55 @@ impl TinySession {
         let scope = candidate.keep_scope.ok_or_else(|| FfiError::InvalidInput {
             detail: format!("{} cannot be kept", path.display()),
         })?;
-        Ok(KeepTarget { path, scope })
+        Ok(KeepTarget {
+            path,
+            scope,
+            picked: false,
+        })
+    }
+
+    /// What a rule for a picked path would cover, read from disk. The rule is
+    /// saved where the item really is (the folders above it resolved, its own
+    /// name as the volume spells it, the short spelling of the data volume),
+    /// so the list shows one honest path and a second pick of the same item
+    /// is seen as the same. The picked item itself is never followed: a link
+    /// is refused. A rule on the home folder or above it, under either
+    /// spelling of the data volume, would hold every candidate, so it is
+    /// refused rather than saved. The refusals name no path: the app says
+    /// which one was asked.
+    fn picked_target(picked: &str, home: &Path) -> Result<KeepTarget, FfiError> {
+        let invalid = |detail: String| FfiError::InvalidInput { detail };
+        let unnamed = |e| invalid(format!("it cannot be kept: {e}"));
+        let unread = |e: io::Error| match e.kind() {
+            io::ErrorKind::NotFound => invalid("nothing is at this path".into()),
+            _ => invalid(format!("it cannot be inspected now ({e})")),
+        };
+        let spelled = Path::new(picked);
+        validate_rule_path(spelled).map_err(unnamed)?;
+        let (Some(parent), Some(name)) = (spelled.parent(), spelled.file_name()) else {
+            return Err(invalid("it cannot be kept".into()));
+        };
+        let found = fs::canonicalize(parent).map_err(unread)?.join(name);
+        let meta = fs::symlink_metadata(&found).map_err(unread)?;
+        let scope = scope_of(&meta).ok_or_else(|| {
+            invalid("it is a link or a special file; choose the item itself".into())
+        })?;
+        // Not a link, so this only gives its name the spelling the volume holds.
+        let path = short_spelling(fs::canonicalize(&found).map_err(unread)?);
+        validate_rule_path(&path).map_err(unnamed)?;
+        let long_home = Path::new(DATA_VOLUME).join(home.strip_prefix("/").unwrap_or(home));
+        let holds_home = protected_reason(&path, Some(home), false)
+            .or_else(|| protected_reason(&path, Some(&long_home), false));
+        if let Some(reason) = holds_home {
+            return Err(invalid(format!(
+                "it is {reason}, which holds everything Clean looks at; choose something inside it"
+            )));
+        }
+        Ok(KeepTarget {
+            path,
+            scope,
+            picked: true,
+        })
     }
 
     /// One rule write under the gate and the exclusive store lock. The rules
@@ -394,6 +478,7 @@ impl TinySession {
         // After the gate: no scan is replacing the discovery meanwhile.
         let target = match &change {
             Change::Keep(candidate_id) => Some(self.keep_target(candidate_id)?),
+            Change::KeepPath(path) => Some(Self::picked_target(path, &home)?),
             Change::Unkeep(_) => None,
         };
         let store = self.protection_store(&home);
@@ -405,8 +490,13 @@ impl TinySession {
             return Err(FfiError::ProtectionChanged);
         }
         let written = match (&change, &target) {
-            (Change::Keep(_), Some(target)) => {
+            (Change::Keep(_) | Change::KeepPath(_), Some(target)) => {
                 target.revalidate()?;
+                if already_kept(lease.snapshot(), &target.path) {
+                    return Err(FfiError::InvalidInput {
+                        detail: "this path is already kept".into(),
+                    });
+                }
                 self.drop_preview();
                 lease.add(expected, &target.path, target.scope).map(drop)
             }
@@ -414,7 +504,9 @@ impl TinySession {
                 self.drop_preview();
                 lease.remove(expected, id)
             }
-            (Change::Keep(_), None) => unreachable!("a keep always resolves its candidate"),
+            (Change::Keep(_) | Change::KeepPath(_), None) => {
+                unreachable!("a keep always resolves its target")
+            }
         };
         match written {
             Ok(()) => {
@@ -435,6 +527,30 @@ impl TinySession {
     /// A stored preview was built for the old rules.
     fn drop_preview(&self) {
         self.clean_state().preview = None;
+    }
+}
+
+/// Whether a saved rule already names `path`, under any spelling: two rules
+/// for one item would leave it kept after the user removed one.
+fn already_kept(policy: &PolicySnapshot, path: &Path) -> bool {
+    let matcher = Matcher::new();
+    policy.rules.iter().any(|rule| {
+        let found = matcher.evaluate([rule], path);
+        found.blocks.iter().any(|b| b.relation == Relation::Equal)
+    })
+}
+
+/// Resolving links leaves the long spelling of the data volume alone, so it
+/// is shortened here when both spellings name one item.
+fn short_spelling(path: PathBuf) -> PathBuf {
+    let Ok(rest) = path.strip_prefix(DATA_VOLUME) else {
+        return path;
+    };
+    let short = Path::new("/").join(rest);
+    let item = |p: &Path| fs::symlink_metadata(p).ok().map(|m| (m.dev(), m.ino()));
+    match (item(&path), item(&short)) {
+        (Some(long), Some(same)) if long == same => short,
+        _ => path,
     }
 }
 

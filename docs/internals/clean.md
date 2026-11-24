@@ -735,11 +735,18 @@ Always keep is a policy owned by Rust; only the desktop app edits it. A
 covers exactly that path, `Directory` also everything inside it. A candidate is held when it
 equals the rule path, lies inside a `Directory` rule, or is a strict ancestor of the rule path,
 because moving it would carry the kept path along, found by discovery or not. Components are
-compared one by one, never as string prefixes. Symlinks are never replaced by their targets
-and renames are not tracked, so a rule for a path that is missing today applies again if that
-path returns. Equivalent spellings on a volume that folds case or Unicode are decided from the
-real directory entries; anything that cannot be decided (unreadable parent, several entries
-for one inode) counts as held, not as free. Tiny's own store, lock and staging paths are
+compared one by one, never as string prefixes. A scan spells a path as its provider found it
+and a person picks one as the system shows it, so one item can arrive under two spellings that
+differ by a symlink in the folders above it (`/var/folders/…` and `/private/var/folders/…`).
+Each path is therefore compared twice, as spelled and at its real location (the folder
+holding it with every symlink resolved, then its own name), and a rule holds a candidate when
+any spelling of one relates to any spelling of the other. The last name is never followed: a
+link to a kept item is its own entry, and moving the link moves nothing kept. A candidate
+whose folder is there but cannot be resolved counts as held; a rule whose folder is gone or
+cannot be resolved keeps its spelling alone. Renames are not tracked, so a rule for a path
+that is missing today applies again if that path returns. Equivalent spellings on a volume
+that folds case or Unicode are decided from the real directory entries; anything that cannot
+be decided (unreadable parent, several entries for one inode) counts as held, not as free. Tiny's own store, lock and staging paths are
 internal rules, so cleanup never moves them or an ancestor that holds them. A tool item that
 names no file (Homebrew's cleanup) is held at run time when a rule touches a path its tool
 deletes or deletes inside ([`tool_touches`](../../crates/tiny-core/src/clean/providers/homebrew.rs):
@@ -747,9 +754,19 @@ the download cache and logs folders, and every old version the dry run lists): t
 `Kept` and `brew` never starts. When the dry run fails, those paths cannot be told and the run
 skips as `KeepUncertain`. The preview still lists it.
 
-Swift never writes rules and never sends a path: it names a discovered candidate ID to
-keep, or a rule ID to remove, with the revision it last read
-([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The
+Swift never writes rules: it names a discovered candidate ID to keep, or a rule ID to
+remove, with the revision it last read
+([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The one
+path Swift sends is a file or folder the user picked to keep outside a scan
+(`clean_keep_path`, same file): it can only add a rule, never select or move anything. Rust
+saves the rule where the item really is (the folders above it resolved, its own name as the
+volume spells it, and the short spelling of the data volume, `/Users/…` for
+`/System/Volumes/Data/Users/…`), takes the scope from the item's own metadata and refuses, as
+`InvalidInput` with words the app shows after naming the path itself, a path that is not
+absolute and normalized, is missing, is a symlink or a special file, is already kept under
+any spelling, or is the home folder or a folder holding it under either spelling of the data
+volume, since that rule would hold every candidate. Paths outside the home folder are
+allowed. The matcher does not map the data volume's long spelling, which no scan produces. The
 [CLI executor](../../crates/tiny-core/src/clean/execute.rs) takes the same exclusive lease before
 acting, reports every item the rules do not allow as kept, and refuses the whole run when they
 cannot be read.
