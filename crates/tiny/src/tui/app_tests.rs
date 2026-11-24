@@ -253,6 +253,26 @@ fn question_mark_lists_the_keys_and_esc_closes_it() {
 }
 
 #[test]
+fn the_keys_list_keeps_a_page_key_that_quits_something_else() {
+    let page_keys = [
+        KeyHint::new("x", "quit"),
+        KeyHint::new("X", "force quit"),
+        KeyHint::new("tab", "page"),
+        KeyHint::new("q", "quit"),
+    ];
+    let rows: Vec<String> = super::help_overlay(&page_keys)
+        .lines
+        .iter()
+        .map(StyledLine::text)
+        .collect();
+    let keys: Vec<&str> = rows
+        .iter()
+        .filter_map(|row| row.split_whitespace().next())
+        .collect();
+    assert_eq!(keys, ["x", "X", "tab", "1", "esc", "q", "?"], "{rows:#?}");
+}
+
+#[test]
 fn messages_reach_their_page_while_another_tab_is_shown() {
     let mut s = session(false);
     s.screen

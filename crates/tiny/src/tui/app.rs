@@ -342,10 +342,16 @@ fn help_overlay(page_keys: &[KeyHint]) -> Overlay {
         KeyHint::new("q / ctrl-c", "quit"),
         KeyHint::new("?", "this list"),
     ];
-    let own: Vec<&KeyHint> = page_keys
-        .iter()
-        .filter(|hint| !globals.iter().any(|g| g.action == hint.action) && hint.key != "tab")
-        .collect();
+    // The frame's own `tab` and `q` are listed below as globals, and so is a
+    // page hint that repeats a global row; `x quit` is the page's own key.
+    let global = |hint: &KeyHint| {
+        hint.key == "tab"
+            || hint.key == "q"
+            || globals
+                .iter()
+                .any(|g| g.key == hint.key && g.action == hint.action)
+    };
+    let own: Vec<&KeyHint> = page_keys.iter().filter(|hint| !global(hint)).collect();
     let key_width = own
         .iter()
         .copied()
