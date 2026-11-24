@@ -75,7 +75,11 @@ along. Those overlapping selections are retained and explained in the final repo
   neither modified nor opened for `N` days, `screenshots-old` lists screenshots not modified
   for `N` days, and `android-sdk` uses it for emulator system images.
 - Project caches are searched under `~/Documents`, `~/Projects`, `~/Code`, `~/Developer` and
-  `~/Workspace`. Nothing inside a `node_modules` folder is listed on its own: `python-caches`
+  `~/Workspace`, and where coding agents keep copies of a project: `~/scratch`,
+  `~/conductor/workspaces`, `~/orca/workspaces`, `~/.codex/worktrees` and `~/.superset/worktrees`
+  ([`dev_search_roots`](../../crates/tiny-core/src/clean/providers/mod.rs)). A root that is a
+  symlink, or is reached through a symlinked folder in your home folder, is not searched: Clean
+  could not move what it found there. Nothing inside a `node_modules` folder is listed on its own: `python-caches`
   and `rust-targets` do not look inside one, and `node-modules` lists it whole
   ([`is_node_modules`](../../crates/tiny-core/src/clean/providers/mod.rs)).
 - `build-folders` lists only folders a manifest beside them proves are generated: `.next` beside

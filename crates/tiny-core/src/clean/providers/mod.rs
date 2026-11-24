@@ -495,19 +495,51 @@ pub fn known_category_ids() -> &'static [&'static str] {
     ]
 }
 
+/// Project folders under the home folder that the walking providers search.
+const PROJECT_ROOTS: &[&str] = &["Documents", "Projects", "Code", "Developer", "Workspace"];
+
+/// Where coding agents keep their copies of a project: a scratch folder and
+/// the worktree folders of agent apps (Conductor, Orca, the Codex app,
+/// Superset). Their build output is offered by the same rules as a
+/// project's.
+const AGENT_ROOTS: &[&str] = &[
+    "scratch",
+    "conductor/workspaces",
+    "orca/workspaces",
+    ".codex/worktrees",
+    ".superset/worktrees",
+];
+
 /// Canonical set of dev project roots scanned by walking providers
-/// (`node_modules`, `rust_targets`, `python_caches`). Only roots that exist
-/// are returned. Order is stable so test discovery is deterministic.
+/// (`node_modules`, `rust_targets`, `python_caches`, `build_folders`). Only
+/// roots that exist are returned. Order is stable so test discovery is
+/// deterministic.
 pub(crate) fn dev_search_roots() -> Vec<std::path::PathBuf> {
-    let h = match std::env::var_os("HOME") {
-        Some(h) => std::path::PathBuf::from(h),
-        None => return Vec::new(),
-    };
-    const ROOTS: &[&str] = &["Documents", "Projects", "Code", "Developer", "Workspace"];
-    ROOTS
+    match std::env::var_os("HOME") {
+        Some(h) => dev_search_roots_in(Path::new(&h)),
+        None => Vec::new(),
+    }
+}
+
+/// `dev_search_roots` for the home folder `home`: the roots that are real
+/// folders, reached from `home` through real folders only. A symlinked root
+/// is never walked (`project_walk`), and an item below a symlinked folder is
+/// refused at clean time (`checked_execute::same_file`), so such a root
+/// would only list what Clean cannot take. With no symlink below `home`, two
+/// roots cannot be the same folder or overlap.
+fn dev_search_roots_in(home: &Path) -> Vec<std::path::PathBuf> {
+    let real_dir = |p: &Path| std::fs::symlink_metadata(p).is_ok_and(|m| m.file_type().is_dir());
+    PROJECT_ROOTS
         .iter()
-        .map(|r| h.join(r))
-        .filter(|p| p.is_dir())
+        .chain(AGENT_ROOTS)
+        .filter(|rel| {
+            let mut path = home.to_path_buf();
+            Path::new(rel).components().all(|part| {
+                path.push(part);
+                real_dir(&path)
+            })
+        })
+        .map(|rel| home.join(rel))
         .collect()
 }
 
