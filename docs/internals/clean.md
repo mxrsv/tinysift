@@ -747,9 +747,17 @@ the download cache and logs folders, and every old version the dry run lists): t
 `Kept` and `brew` never starts. When the dry run fails, those paths cannot be told and the run
 skips as `KeepUncertain`. The preview still lists it.
 
-Swift never writes rules and never sends a path: it names a discovered candidate ID to
-keep, or a rule ID to remove, with the revision it last read
-([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The
+Swift never writes rules: it names a discovered candidate ID to keep, or a rule ID to
+remove, with the revision it last read
+([`clean_keep` and `clean_unkeep`](../../crates/tiny-ffi/src/clean/protection.rs)). The one
+path Swift sends is a file or folder the user picked to keep outside a scan
+(`clean_keep_path`, same file): it can only add a rule, never select or move anything. Rust
+resolves the folder holding it to its real location (a rule spelled through a symlink would
+hold nothing a scan finds; the picked name itself is never followed), takes the scope from
+the path's own metadata and refuses, as `InvalidInput` with words the
+app shows, a path that is not absolute and normalized, is missing, is a symlink or a special
+file, or is the home folder or a folder holding it, since that rule would hold every
+candidate. Paths outside the home folder are allowed. The
 [CLI executor](../../crates/tiny-core/src/clean/execute.rs) takes the same exclusive lease before
 acting, reports every item the rules do not allow as kept, and refuses the whole run when they
 cannot be read.

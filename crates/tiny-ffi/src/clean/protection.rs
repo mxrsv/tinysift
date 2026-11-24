@@ -1,7 +1,9 @@
 //! Desktop "Always keep": what the saved rules say about the discovered
-//! candidates, the preview exclusions they cause, and the only two writes
-//! (keep a discovered candidate, remove a saved rule by ID). Rust owns the
-//! rules and their storage; neither write takes a path from Swift.
+//! candidates, the preview exclusions they cause, and the only three writes
+//! (keep a discovered candidate, keep a path the user picked, remove a saved
+//! rule by ID). Rust owns the rules and their storage. A picked path is the
+//! one thing Swift sends, and it is only ever kept, never moved: Rust checks
+//! it, reads its kind from disk and refuses a folder that holds the home.
 //!
 //! Locking: session gate, then the store lock, then a short clean-state lock.
 //! Reads (`clean_protection`, the preview) use the shared store lock and never
@@ -15,7 +17,7 @@ use tiny_core::clean::protection::{
     INTERNAL_ID_PREFIX,
 };
 use tiny_core::clean::protection_store::StoreError;
-use tiny_core::clean::trash_plan::PlannedItem;
+use tiny_core::clean::trash_plan::{protected_reason, PlannedItem};
 
 use super::{FfiDesktopAction, FfiExclusionReason, FfiPreviewExclusion};
 use crate::{FfiError, TinySession};
@@ -220,9 +222,10 @@ struct KeepTarget {
     scope: RuleScope,
 }
 
-/// A rule write as the caller named it: only IDs, never a path.
+/// A rule write as the caller named it: an ID, or the path a user picked.
 enum Change {
     Keep(String),
+    KeepPath(String),
     Unkeep(String),
 }
 
@@ -287,6 +290,22 @@ impl TinySession {
         expected_revision: u64,
     ) -> Result<FfiProtection, FfiError> {
         self.change_rules(expected_revision, Change::Keep(candidate_id))
+    }
+
+    /// Saves a rule for a path the user picked, in a scan or not: that file,
+    /// or that folder and everything inside, at its real location (a
+    /// symlink in the folders above it is resolved). Refuses a path that is not
+    /// absolute and normalized, is missing, is a symlink or a special file,
+    /// or is the home folder or a folder holding it (`InvalidInput`, with
+    /// words the app can show). Otherwise as `clean_keep`: the gate, the
+    /// store lock, `expected_revision`, and the stored preview dropped.
+    /// Selects and moves nothing.
+    pub fn clean_keep_path(
+        &self,
+        path: String,
+        expected_revision: u64,
+    ) -> Result<FfiProtection, FfiError> {
+        self.change_rules(expected_revision, Change::KeepPath(path))
     }
 
     /// Removes a saved rule by ID, under the same conditions as `clean_keep`.
@@ -385,6 +404,38 @@ impl TinySession {
         Ok(KeepTarget { path, scope })
     }
 
+    /// What a rule for a picked `path` would cover, read from disk. The folder
+    /// holding it is resolved to its real location, because rules compare
+    /// components and a scan never walks through a symlink: a rule spelled
+    /// through one would hold nothing. The picked name itself is never
+    /// followed. A rule on the home folder or above it would hold every
+    /// candidate, so it is refused rather than saved.
+    fn picked_target(picked: &str, home: &Path) -> Result<KeepTarget, FfiError> {
+        let invalid = |why: String| FfiError::InvalidInput {
+            detail: format!("{picked} {why}"),
+        };
+        let unnamed = |e| invalid(format!("cannot be kept: {e}"));
+        let spelled = Path::new(picked);
+        validate_rule_path(spelled).map_err(unnamed)?;
+        let (Some(parent), Some(name)) = (spelled.parent(), spelled.file_name()) else {
+            return Err(invalid("cannot be kept".into()));
+        };
+        let path = fs::canonicalize(parent)
+            .map_err(|e| invalid(format!("cannot be inspected now ({e})")))?
+            .join(name);
+        validate_rule_path(&path).map_err(unnamed)?;
+        if let Some(reason) = protected_reason(&path, Some(home), false) {
+            return Err(invalid(format!(
+                "is {reason}, which holds everything Clean looks at; choose something inside it"
+            )));
+        }
+        let meta = fs::symlink_metadata(&path)
+            .map_err(|e| invalid(format!("cannot be inspected now ({e})")))?;
+        let scope = scope_of(&meta)
+            .ok_or_else(|| invalid("is a link or a special file and cannot be kept".into()))?;
+        Ok(KeepTarget { path, scope })
+    }
+
     /// One rule write under the gate and the exclusive store lock. The rules
     /// must be exactly what the caller last loaded, in revision and content,
     /// so an edit by another session or process is never overwritten.
@@ -394,6 +445,7 @@ impl TinySession {
         // After the gate: no scan is replacing the discovery meanwhile.
         let target = match &change {
             Change::Keep(candidate_id) => Some(self.keep_target(candidate_id)?),
+            Change::KeepPath(path) => Some(Self::picked_target(path, &home)?),
             Change::Unkeep(_) => None,
         };
         let store = self.protection_store(&home);
@@ -405,7 +457,7 @@ impl TinySession {
             return Err(FfiError::ProtectionChanged);
         }
         let written = match (&change, &target) {
-            (Change::Keep(_), Some(target)) => {
+            (Change::Keep(_) | Change::KeepPath(_), Some(target)) => {
                 target.revalidate()?;
                 self.drop_preview();
                 lease.add(expected, &target.path, target.scope).map(drop)
@@ -414,7 +466,9 @@ impl TinySession {
                 self.drop_preview();
                 lease.remove(expected, id)
             }
-            (Change::Keep(_), None) => unreachable!("a keep always resolves its candidate"),
+            (Change::Keep(_) | Change::KeepPath(_), None) => {
+                unreachable!("a keep always resolves its target")
+            }
         };
         match written {
             Ok(()) => {

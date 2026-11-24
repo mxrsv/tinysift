@@ -17,6 +17,7 @@ mod build_output;
 mod execute_protection;
 mod places;
 mod protection;
+mod protection_picked_path;
 mod protection_writes;
 mod removal;
 mod selection;
