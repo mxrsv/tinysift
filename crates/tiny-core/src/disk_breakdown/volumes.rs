@@ -67,7 +67,8 @@ pub(crate) fn startup_container() -> std::io::Result<Container> {
         from: String,
         total: u64,
         available: u64,
-        used: u64,
+        /// `None` when macOS would not say: never read as zero.
+        used: Option<u64>,
         files: u64,
     }
     let mut buffer: *mut libc::statfs = std::ptr::null_mut();
@@ -95,7 +96,7 @@ pub(crate) fn startup_container() -> std::io::Result<Container> {
                 from: text(&record.f_mntfromname),
                 total: record.f_blocks.saturating_mul(block),
                 available: record.f_bavail.saturating_mul(block),
-                used: space_used(&record.f_mntonname).unwrap_or(0),
+                used: space_used(&record.f_mntonname),
                 files: record.f_files.saturating_sub(record.f_ffree),
             }
         })
@@ -109,6 +110,11 @@ pub(crate) fn startup_container() -> std::io::Result<Container> {
                 "The startup disk's Data volume is not mounted.",
             )
         })?;
+    // The Data volume's own figure decides the gap; without it nothing honest can be said. Another volume that does not answer
+    // is left out, so its bytes land in `Recovery and other volumes` instead of vanishing.
+    let data_used = data
+        .used
+        .ok_or_else(|| Error::other("macOS did not report the Data volume's used space."))?;
     let container = container_of(&data.from).map(str::to_owned);
     let others = mounts
         .iter()
@@ -117,9 +123,11 @@ pub(crate) fn startup_container() -> std::io::Result<Container> {
                 && container.is_some()
                 && container_of(&mount.from) == container.as_deref()
         })
-        .map(|mount| Volume {
-            mount: mount.on.clone(),
-            used: mount.used,
+        .filter_map(|mount| {
+            mount.used.map(|used| Volume {
+                mount: mount.on.clone(),
+                used,
+            })
         })
         .collect();
     Ok(Container {
@@ -127,7 +135,7 @@ pub(crate) fn startup_container() -> std::io::Result<Container> {
         available: data.available,
         data: Volume {
             mount: data.on.clone(),
-            used: data.used,
+            used: data_used,
         },
         data_files: data.files,
         others,

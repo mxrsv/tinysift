@@ -21,7 +21,7 @@ use volumes::Container;
 
 /// Most items a group keeps; the rest are summed in `smaller_*`. Generous, so the app can fold an app's containers
 /// together before it picks the ten it shows.
-const MAX_ITEMS: usize = 300;
+const MAX_ITEMS: usize = 2_000;
 /// Most paths kept per refusal reason; the count covers all.
 const MAX_REFUSED_PATHS: usize = 8;
 const WALK_THREADS: usize = 4;
