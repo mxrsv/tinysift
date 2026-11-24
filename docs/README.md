@@ -3,6 +3,7 @@
 ## User guides
 
 - [Getting started](user/getting-started.md) — installation, sys and focus.
+- [Full-screen view](user/tui.md) — what bare `sift` opens: tabs, keys and icons.
 - [Clean](user/clean.md) — preview, consent and cleanup categories.
 - [Processes](user/processes.md) — inspection and process actions.
 - [Scan](user/scan.md) — read-only filesystem inspection.

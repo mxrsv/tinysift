@@ -1,0 +1,24 @@
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+  Large 85   Old 15,882
+ 100 MB and up · Downloads, Desktop, Documents
+
+ ❯     7.9 GB   211d  ~/Downloads/Windows11_Client_arm64_en-us.iso
+       3.1 GB    96d  ~/Downloads/Xcode_27_beta_4.xip
+       1.6 GB   133d  ~/Documents/Recordings/2026-07-13 11-57-38.mp4
+       1.3 GB    12d  ~/Documents/Recordings/day48-source-1080p.mp4
+       1.1 GB     4d  ~/Desktop/export-final.mov
+       640 MB   301d  ~/Downloads/dataset-images.zip
+       576 MB    96d  ~/Documents/archive/file-6.bin
+       518 MB    97d  ~/Documents/archive/file-7.bin
+       467 MB    98d  ~/Documents/archive/file-8.bin
+       420 MB    99d  ~/Documents/archive/file-9.bin
+       378 MB   100d  ~/Documents/archive/file-10.bin
+       340 MB   101d  ~/Documents/archive/file-11.bin
+     … 73 more ↓
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ ~/Downloads/Windows11_Client_arm64_en-us.iso
+ Size 7.9 GB   modified 211 days ago
+ Scan only reads. It never deletes or moves a file.
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · v large/old · o show in Finder · r scan again · tab page · q quit

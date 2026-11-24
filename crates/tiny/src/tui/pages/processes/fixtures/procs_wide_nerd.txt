@@ -1,0 +1,34 @@
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                  28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+      PID  CPU                     MEMORY  NAME                            │ Highlighted
+ ❯  17703  ━━━━━━━━━━━━   39.0%    559 MB  Google Chrome Helper (Renderer) │
+    43154  ━━━━━━━━━━━━   19.6%     89 MB  AltTab                          │ Google Chrome Helper (Renderer)
+      934  ━━━━━━━━━━━━   17.4%    111 MB  cfprefsd                        │ PID 17703 · yours
+     1548  ━━━━━━━━━━━━   13.9%    191 MB  Google Chrome Helper            │
+     1240  ━━━━━━━━━━━━    8.1%    519 MB  Google Chrome                   │ Parent      Google Chrome (1240)
+    92184  ━━━━━━━━━━━━    7.1%    601 MB  node (claude)                   │ Children    0
+                                                                           │ Memory      559 MB
+                                                                           │ Listens on  :3000 :9229
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ CPU is per core, so one process can pass 100%.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · s sort · r read again · x quit · X force quit · tab page · q quit

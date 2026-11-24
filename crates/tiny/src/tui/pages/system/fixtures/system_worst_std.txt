@@ -1,0 +1,24 @@
+  Clean   Uninstall   Scan   Processes   System                     0.3 GB free
+────────────────────────────────────────────────────────────────────────────────
+ MEMORY
+ In use                      ━━━━━━━━━━━━━━━━━━━     127.6 of 128 GB      100%
+
+ DISKS
+ Macintosh HD                ━━━━━━━━━━━━━━━━━━━   1,998.9 of 2,000.2 GB  100%
+ An external volume with a … ━━━━━━━━━━━━━━━━━━━   7,811.2 of 8,000 GB     98%
+ Vol 1                       ━━━━━━━━━━━━━━━━━━━         0 of 64 GB         0%
+ Vol 2                       ━━━━━━━━━━━━━━━━━━━       3.1 of 64 GB         5%
+ Vol 3                       ━━━━━━━━━━━━━━━━━━━       6.2 of 64 GB        10%
+ Vol 4                       ━━━━━━━━━━━━━━━━━━━       9.3 of 64 GB        15%
+ Vol 5                       ━━━━━━━━━━━━━━━━━━━      12.4 of 64 GB        19%
+ Vol 6                       ━━━━━━━━━━━━━━━━━━━      15.5 of 64 GB        24%
+ Vol 7                       ━━━━━━━━━━━━━━━━━━━      18.6 of 64 GB        29%
+ Vol 8                       ━━━━━━━━━━━━━━━━━━━      21.7 of 64 GB        34%
+ Vol 9                       ━━━━━━━━━━━━━━━━━━━      24.8 of 64 GB        39%
+     … 3 more ↓
+ ── This Mac ──────────────────────────────────────────────────────────────────
+ Host a-very-long-host-name-given-by-the-office-network.corp.example.internal
+ Uptime 412d 23h 59m
+ Chip Apple M4 Ultra   cores 32
+────────────────────────────────────────────────────────────────────────────────
+ r read again · tab page · q quit

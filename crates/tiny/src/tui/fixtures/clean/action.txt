@@ -1,0 +1,124 @@
+
+##### {"size":"std","icons":"uni","data":"normal","state":"ok","screen":"action"}
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ Xcode DerivedData                       ━━━━━━━━━━━━     6.2 GB
+   ◉ node_modules (idle)                     ━━━━━━━━━━━━     3.8 GB  review
+   ◯ npm cache                               ━━━━━━━━━━━━     1.1 GB  review
+   ◉ pnpm store                              ━━━━━━━━━━━━     840 MB  review
+   ◯ Homebr╭─ Clean 5 categories · 10.9 GB ─────────────────────────╮ review
+   ◉ Crash │                                                        │
+   ◉ User l│ ❯ Move to Trash  Put Back works in Finder              │
+           │   Dry-run        change nothing, list the paths        │
+           │   Review paths   untick single paths first             │
+           │   Hard delete    skips the Trash, cannot be undone     │
+           │                                                        │
+           │ ● pnpm store: no Trash, removed for good by any        │
+           │   choice.                                              │
+           │                                                        │
+ ── Highlig╰────────────────────────────────────────────────────────╯──────────
+ Xcode DerivedData  6.2 GB · 43 items
+ Goes to     Trash  Finder › Put Back    comes back when you build again
+ Listed      Xcode rebuilds it
+
+ 10.9 GB picked in 5 categories    ● Trash 10.1 GB    ● for good 840 MB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · enter choose · esc cancel
+
+##### {"size":"wide","icons":"uni","data":"normal","state":"ok","screen":"action"}
+  Clean   Uninstall   Scan   Processes   System                                                            28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ Xcode DerivedData                  ━━━━━━━━━━━━     6.2 GB            │ Highlighted
+   ◉ node_modules (idle)                ━━━━━━━━━━━━     3.8 GB  review    │
+   ◯ npm cache                          ━━━━━━━━━━━━     1.1 GB  review    │ Xcode DerivedData
+   ◉ pnpm store                         ━━━━━━━━━━━━     840 MB  review    │ 6.2 GB · 43 items
+   ◯ Homebrew cleanup                   ━━━━━━━━━━━━     310 MB  review    │
+   ◉ Crash reports / DiagnosticReports  ━━━━━━━━━━━━      89 MB            │ Goes to     Trash  Finder › Put Back
+   ◉ User logs                          ━━━━━━━━━━━━      50 KB            │ Comes back  when you build again
+                                                                           │ Listed      Xcode rebuilds it
+                                                                           │
+                               ╭─ Clean 5 categories · 10.9 GB ─────────────────────────╮ve…Data/TinySift-fmzkqpelrbdvxn
+                               │                                                        │ve…ivedData/ModuleCache.noindex
+                               │ ❯ Move to Trash  Put Back works in Finder              │p lists them
+                               │   Dry-run        change nothing, list the paths        │
+                               │   Review paths   untick single paths first             │
+                               │   Hard delete    skips the Trash, cannot be undone     │
+                               │                                                        │
+                               │ ● pnpm store: no Trash, removed for good by any        │
+                               │   choice.                                              │
+                               │                                                        │
+                               ╰────────────────────────────────────────────────────────╯
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ 10.9 GB picked in 5 categories    ● Trash 10.1 GB    ● for good 840 MB
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · enter choose · esc cancel
+
+##### {"size":"std","icons":"nerd","data":"normal","state":"ok","screen":"action"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System          28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ 󰀵 Xcode DerivedData                     ━━━━━━━━━━━━     6.2 GB
+   ◉ 󰎙 node_modules (idle)                   ━━━━━━━━━━━━     3.8 GB  review
+   ◯ 󰛷 npm cache                             ━━━━━━━━━━━━     1.1 GB  review
+   ◉ 󰏗 pnpm store                            ━━━━━━━━━━━━     840 MB  review
+   ◯ 󱄖 Home╭─ Clean 5 categories · 10.9 GB ─────────────────────────╮ review
+   ◉ 󰨰 Cras│                                                        │
+   ◉ 󰧭 User│ ❯ Move to Trash  Put Back works in Finder              │
+           │   Dry-run        change nothing, list the paths        │
+           │   Review paths   untick single paths first             │
+           │   Hard delete    skips the Trash, cannot be undone     │
+           │                                                        │
+           │ ● pnpm store: no Trash, removed for good by any        │
+           │   choice.                                              │
+           │                                                        │
+ ── Highlig╰────────────────────────────────────────────────────────╯──────────
+ Xcode DerivedData  6.2 GB · 43 items
+ Goes to     Trash  Finder › Put Back    comes back when you build again
+ Listed      Xcode rebuilds it
+
+ 10.9 GB picked in 5 categories    ● Trash 10.1 GB    ● for good 840 MB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · enter choose · esc cancel
+
+##### {"size":"wide","icons":"nerd","data":"normal","state":"ok","screen":"action"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                  28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ 󰀵 Xcode DerivedData                ━━━━━━━━━━━━     6.2 GB            │ Highlighted
+   ◉ 󰎙 node_modules (idle)              ━━━━━━━━━━━━     3.8 GB  review    │
+   ◯ 󰛷 npm cache                        ━━━━━━━━━━━━     1.1 GB  review    │ Xcode DerivedData
+   ◉ 󰏗 pnpm store                       ━━━━━━━━━━━━     840 MB  review    │ 6.2 GB · 43 items
+   ◯ 󱄖 Homebrew cleanup                 ━━━━━━━━━━━━     310 MB  review    │
+   ◉ 󰨰 Crash reports / DiagnosticRepor… ━━━━━━━━━━━━      89 MB            │ Goes to     Trash  Finder › Put Back
+   ◉ 󰧭 User logs                        ━━━━━━━━━━━━      50 KB            │ Comes back  when you build again
+                                                                           │ Listed      Xcode rebuilds it
+                                                                           │
+                               ╭─ Clean 5 categories · 10.9 GB ─────────────────────────╮ve…Data/TinySift-fmzkqpelrbdvxn
+                               │                                                        │ve…ivedData/ModuleCache.noindex
+                               │ ❯ Move to Trash  Put Back works in Finder              │p lists them
+                               │   Dry-run        change nothing, list the paths        │
+                               │   Review paths   untick single paths first             │
+                               │   Hard delete    skips the Trash, cannot be undone     │
+                               │                                                        │
+                               │ ● pnpm store: no Trash, removed for good by any        │
+                               │   choice.                                              │
+                               │                                                        │
+                               ╰────────────────────────────────────────────────────────╯
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ 10.9 GB picked in 5 categories    ● Trash 10.1 GB    ● for good 840 MB
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · enter choose · esc cancel

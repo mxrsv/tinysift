@@ -114,8 +114,12 @@ Cleanup candidates
 
 ### Commands
 
+`sift` on its own opens a [full-screen view](docs/user/tui.md) with Clean, Uninstall, Scan,
+Processes and System tabs; in a pipe or a script it prints the help, as before.
+
 | Command | Guide |
 | --- | --- |
+| `sift` | [Full-screen view](docs/user/tui.md) |
 | `sift sys`, `sift focus` | [Getting started](docs/user/getting-started.md) |
 | `sift scan` | [Scanning files](docs/user/scan.md) |
 | `sift clean` | [Cleaning caches](docs/user/clean.md) |

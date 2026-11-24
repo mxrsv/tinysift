@@ -1,0 +1,124 @@
+
+##### {"size":"std","icons":"uni","data":"worst","state":"ok","screen":"review"}
+  Clean   Uninstall   Scan   Processes   System                     0.3 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ – Simulator runtime images of every inst… ━━━━━━━━━━━━   812.0 GB  report
+   ◉ node_modules (idle)                     ━━━━━━━━━━━━   196.4 GB  review
+   – Xcode DerivedData                       ━━━━━━━━━━━━             in use
+   ◉ Docker images/build cache               ━━━━━━━━━━━━     5.4 GB  review
+   ◉ Crash reports / DiagnosticReports       ━━━━━━━━━━━━ under 1 KB
+   ◉ User logs                               ━━━━━━━━━━━━        0 B
+   ◯ Cargo cache                             ━━━━━━━━━━━━     187 MB  review
+   ◯ Old screenshots                         ━━━━━━━━━━━━     176 MB  review
+   ◯ Mail attachments                        ━━━━━━━━━━━━     165 MB  review
+   ◯ Browser caches                          ━━━━━━━━━━━━     154 MB  review
+   ◯ User caches                             ━━━━━━━━━━━━     143 MB  review
+   ◯ Xcode Archives                          ━━━━━━━━━━━━     132 MB  review
+   ◯ Xcode iOS DeviceSupport                 ━━━━━━━━━━━━     121 MB  review
+     … 10 more ↓
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Simulator runtime images of every installed Xco…  812.0 GB · 14 items
+ Goes to     nowhere    comes back never
+ Listed      report only: remove it in System Settings › General › Storage
+
+ 201.8 GB picked in 4 categories    ● Trash 196.4 GB    ● for good 5.4 GB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v safe only · p paths · enter clean · tab page · q quit
+
+##### {"size":"wide","icons":"uni","data":"worst","state":"ok","screen":"review"}
+  Clean   Uninstall   Scan   Processes   System                                                             0.3 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯ – Simulator runtime images of every… ━━━━━━━━━━━━   812.0 GB  report    │ Highlighted
+   ◉ node_modules (idle)                ━━━━━━━━━━━━   196.4 GB  review    │
+   – Xcode DerivedData                  ━━━━━━━━━━━━             in use    │ Simulator runtime images of every installed
+   ◉ Docker images/build cache          ━━━━━━━━━━━━     5.4 GB  review    │ Xcode beta and release
+   ◉ Crash reports / DiagnosticReports  ━━━━━━━━━━━━ under 1 KB            │ 812.0 GB · 14 items
+   ◉ User logs                          ━━━━━━━━━━━━        0 B            │
+   ◯ Cargo cache                        ━━━━━━━━━━━━     187 MB  review    │ Goes to     nowhere
+   ◯ Old screenshots                    ━━━━━━━━━━━━     176 MB  review    │ Comes back  never
+   ◯ Mail attachments                   ━━━━━━━━━━━━     165 MB  review    │ Listed      report only: remove it in
+   ◯ Browser caches                     ━━━━━━━━━━━━     154 MB  review    │             System Settings › General ›
+   ◯ User caches                        ━━━━━━━━━━━━     143 MB  review    │             Storage
+   ◯ Xcode Archives                     ━━━━━━━━━━━━     132 MB  review    │
+   ◯ Xcode iOS DeviceSupport            ━━━━━━━━━━━━     121 MB  review    │
+   ◯ Simulator Devices                  ━━━━━━━━━━━━     110 MB  review    │
+   ◯ Old Codex releases                 ━━━━━━━━━━━━      99 MB  review    │
+   ◯ Gradle caches                      ━━━━━━━━━━━━      88 MB  review    │
+   ◯ JetBrains caches                   ━━━━━━━━━━━━      77 MB  review    │
+   ◯ VS Code caches                     ━━━━━━━━━━━━      66 MB  review    │
+   ◯ Go build cache                     ━━━━━━━━━━━━      55 MB  review    │
+   ◯ uv cache                           ━━━━━━━━━━━━      44 MB  review    │
+   ◯ Yarn cache                         ━━━━━━━━━━━━      33 MB  review    │
+   ◯ Old downloads                      ━━━━━━━━━━━━      22 MB  review    │
+   ◯ Streaming caches                   ━━━━━━━━━━━━      11 MB  review    │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ 201.8 GB picked in 4 categories    ● Trash 196.4 GB    ● for good 5.4 GB
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v safe only · p paths · enter clean · tab page · q quit
+
+##### {"size":"std","icons":"nerd","data":"worst","state":"ok","screen":"review"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System           0.3 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ – 󰄜 Simulator runtime images of every in… ━━━━━━━━━━━━   812.0 GB  report
+   ◉ 󰎙 node_modules (idle)                   ━━━━━━━━━━━━   196.4 GB  review
+   – 󰀵 Xcode DerivedData                     ━━━━━━━━━━━━             in use
+   ◉ 󰡨 Docker images/build cache             ━━━━━━━━━━━━     5.4 GB  review
+   ◉ 󰨰 Crash reports / DiagnosticReports     ━━━━━━━━━━━━ under 1 KB
+   ◉ 󰧭 User logs                             ━━━━━━━━━━━━        0 B
+   ◯ 󰉖 Cargo cache                           ━━━━━━━━━━━━     187 MB  review
+   ◯ 󰉖 Old screenshots                       ━━━━━━━━━━━━     176 MB  review
+   ◯ 󰉖 Mail attachments                      ━━━━━━━━━━━━     165 MB  review
+   ◯ 󰉖 Browser caches                        ━━━━━━━━━━━━     154 MB  review
+   ◯ 󰉖 User caches                           ━━━━━━━━━━━━     143 MB  review
+   ◯ 󰉖 Xcode Archives                        ━━━━━━━━━━━━     132 MB  review
+   ◯ 󰉖 Xcode iOS DeviceSupport               ━━━━━━━━━━━━     121 MB  review
+     … 10 more ↓
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Simulator runtime images of every installed Xco…  812.0 GB · 14 items
+ Goes to     nowhere    comes back never
+ Listed      report only: remove it in System Settings › General › Storage
+
+ 201.8 GB picked in 4 categories    ● Trash 196.4 GB    ● for good 5.4 GB
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v safe only · p paths · enter clean · tab page · q quit
+
+##### {"size":"wide","icons":"nerd","data":"worst","state":"ok","screen":"review"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                   0.3 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯ – 󰄜 Simulator runtime images of eve… ━━━━━━━━━━━━   812.0 GB  report    │ Highlighted
+   ◉ 󰎙 node_modules (idle)              ━━━━━━━━━━━━   196.4 GB  review    │
+   – 󰀵 Xcode DerivedData                ━━━━━━━━━━━━             in use    │ Simulator runtime images of every installed
+   ◉ 󰡨 Docker images/build cache        ━━━━━━━━━━━━     5.4 GB  review    │ Xcode beta and release
+   ◉ 󰨰 Crash reports / DiagnosticRepor… ━━━━━━━━━━━━ under 1 KB            │ 812.0 GB · 14 items
+   ◉ 󰧭 User logs                        ━━━━━━━━━━━━        0 B            │
+   ◯ 󰉖 Cargo cache                      ━━━━━━━━━━━━     187 MB  review    │ Goes to     nowhere
+   ◯ 󰉖 Old screenshots                  ━━━━━━━━━━━━     176 MB  review    │ Comes back  never
+   ◯ 󰉖 Mail attachments                 ━━━━━━━━━━━━     165 MB  review    │ Listed      report only: remove it in
+   ◯ 󰉖 Browser caches                   ━━━━━━━━━━━━     154 MB  review    │             System Settings › General ›
+   ◯ 󰉖 User caches                      ━━━━━━━━━━━━     143 MB  review    │             Storage
+   ◯ 󰉖 Xcode Archives                   ━━━━━━━━━━━━     132 MB  review    │
+   ◯ 󰉖 Xcode iOS DeviceSupport          ━━━━━━━━━━━━     121 MB  review    │
+   ◯ 󰉖 Simulator Devices                ━━━━━━━━━━━━     110 MB  review    │
+   ◯ 󰉖 Old Codex releases               ━━━━━━━━━━━━      99 MB  review    │
+   ◯ 󰉖 Gradle caches                    ━━━━━━━━━━━━      88 MB  review    │
+   ◯ 󰉖 JetBrains caches                 ━━━━━━━━━━━━      77 MB  review    │
+   ◯ 󰉖 VS Code caches                   ━━━━━━━━━━━━      66 MB  review    │
+   ◯ 󰉖 Go build cache                   ━━━━━━━━━━━━      55 MB  review    │
+   ◯ 󰉖 uv cache                         ━━━━━━━━━━━━      44 MB  review    │
+   ◯ 󰉖 Yarn cache                       ━━━━━━━━━━━━      33 MB  review    │
+   ◯ 󰉖 Old downloads                    ━━━━━━━━━━━━      22 MB  review    │
+   ◯ 󰉖 Streaming caches                 ━━━━━━━━━━━━      11 MB  review    │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ 201.8 GB picked in 4 categories    ● Trash 196.4 GB    ● for good 5.4 GB
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · v safe only · p paths · enter clean · tab page · q quit

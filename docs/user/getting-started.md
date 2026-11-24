@@ -40,6 +40,10 @@ ask you to allow your terminal to control Finder.
 
 ## Commands
 
+`sift` on its own, in a terminal of at least 60×18, opens a [full-screen view](tui.md) with
+Clean, Uninstall, Scan, Processes and System tabs. Every command below works as before, and
+bare `sift` in a pipe or a script still prints the help.
+
 The [command table](../../README.md#commands) links each command to its guide.
 `sift --help` and `sift <command> --help` list every flag.
 

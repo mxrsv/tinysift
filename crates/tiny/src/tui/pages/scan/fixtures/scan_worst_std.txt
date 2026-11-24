@@ -1,0 +1,24 @@
+  Clean   Uninstall   Scan   Processes   System                     0.3 GB free
+────────────────────────────────────────────────────────────────────────────────
+  Large 4,210   Old 1,203,884
+ 100 MB and up · Downloads, Desktop, Documents
+
+ ❯   412.7 GB 2,911d  ~/Documents/Virtual…k Image Primary Auxiliary Storage.img
+      88.2 GB     0d  ~/Downloads/x.dmg
+       100 MB     1d  ~/Desktop/a.mov
+       100 MB    93d  ~/Documents/archive/file-3.bin
+       100 MB    94d  ~/Documents/archive/file-4.bin
+       100 MB    95d  ~/Documents/archive/file-5.bin
+       100 MB    96d  ~/Documents/archive/file-6.bin
+       100 MB    97d  ~/Documents/archive/file-7.bin
+       100 MB    98d  ~/Documents/archive/file-8.bin
+       100 MB    99d  ~/Documents/archive/file-9.bin
+       100 MB   100d  ~/Documents/archive/file-10.bin
+       100 MB   101d  ~/Documents/archive/file-11.bin
+     … 4,198 more ↓
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ ~/Documents/Virtual Machin…ame.bundle/Disk Image Primary Auxiliary Storage.img
+ Size 412.7 GB   modified 2,911 days ago
+ Scan only reads. It never deletes or moves a file.
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · v large/old · o show in Finder · r scan again · tab page · q quit

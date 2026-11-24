@@ -1,0 +1,124 @@
+
+##### {"size":"std","icons":"uni","data":"normal","state":"error","screen":"clean"}
+  Clean   Uninstall   Scan   Processes   System                    28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ Xcode DerivedData                       ━━━━━━━━━━━━     6.2 GB
+   ◉ Crash reports / DiagnosticReports       ━━━━━━━━━━━━      89 MB
+   ◉ User logs                               ━━━━━━━━━━━━      50 KB
+ ●   Xcode Previews   not read: Full Disk Access is off
+
+
+
+
+
+
+
+
+
+
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Xcode DerivedData  6.2 GB · 43 items
+ Goes to     Trash  Finder › Put Back    comes back when you build again
+ Listed      Xcode rebuilds it
+
+ ● Nothing is cleaned until every listed category is read.
+────────────────────────────────────────────────────────────────────────────────
+ r read again · tab page · q quit
+
+##### {"size":"wide","icons":"uni","data":"normal","state":"error","screen":"clean"}
+  Clean   Uninstall   Scan   Processes   System                                                            28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ Xcode DerivedData                  ━━━━━━━━━━━━     6.2 GB            │ Highlighted
+   ◉ Crash reports / DiagnosticReports  ━━━━━━━━━━━━      89 MB            │
+   ◉ User logs                          ━━━━━━━━━━━━      50 KB            │ Xcode DerivedData
+ ●   Xcode Previews   not read: Full Disk Access is off                    │ 6.2 GB · 43 items
+                                                                           │
+                                                                           │ Goes to     Trash  Finder › Put Back
+                                                                           │ Comes back  when you build again
+                                                                           │ Listed      Xcode rebuilds it
+                                                                           │
+                                                                           │ ~/Library/Deve…Data/TinySift-fmzkqpelrbdvxn
+                                                                           │ ~/Library/Deve…ivedData/ModuleCache.noindex
+                                                                           │ … 41 more · p lists them
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ ● Nothing is cleaned until every listed category is read.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ r read again · tab page · q quit
+
+##### {"size":"std","icons":"nerd","data":"normal","state":"error","screen":"clean"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System          28.8 GB free
+────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ 󰀵 Xcode DerivedData                     ━━━━━━━━━━━━     6.2 GB
+   ◉ 󰨰 Crash reports / DiagnosticReports     ━━━━━━━━━━━━      89 MB
+   ◉ 󰧭 User logs                             ━━━━━━━━━━━━      50 KB
+ ●   󰉖 Xcode Previews   not read: Full Disk Access is off
+
+
+
+
+
+
+
+
+
+
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Xcode DerivedData  6.2 GB · 43 items
+ Goes to     Trash  Finder › Put Back    comes back when you build again
+ Listed      Xcode rebuilds it
+
+ ● Nothing is cleaned until every listed category is read.
+────────────────────────────────────────────────────────────────────────────────
+ r read again · tab page · q quit
+
+##### {"size":"wide","icons":"nerd","data":"normal","state":"error","screen":"clean"}
+  󰃢 Clean   󰩺 Uninstall   󰍉 Scan   󰘚 Processes   󰌢 System                                                  28.8 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ❯ ◉ 󰀵 Xcode DerivedData                ━━━━━━━━━━━━     6.2 GB            │ Highlighted
+   ◉ 󰨰 Crash reports / DiagnosticRepor… ━━━━━━━━━━━━      89 MB            │
+   ◉ 󰧭 User logs                        ━━━━━━━━━━━━      50 KB            │ Xcode DerivedData
+ ●   󰉖 Xcode Previews   not read: Full Disk Access is off                  │ 6.2 GB · 43 items
+                                                                           │
+                                                                           │ Goes to     Trash  Finder › Put Back
+                                                                           │ Comes back  when you build again
+                                                                           │ Listed      Xcode rebuilds it
+                                                                           │
+                                                                           │ ~/Library/Deve…Data/TinySift-fmzkqpelrbdvxn
+                                                                           │ ~/Library/Deve…ivedData/ModuleCache.noindex
+                                                                           │ … 41 more · p lists them
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+                                                                           │
+
+ ● Nothing is cleaned until every listed category is read.
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ r read again · tab page · q quit

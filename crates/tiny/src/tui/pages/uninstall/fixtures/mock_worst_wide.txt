@@ -1,0 +1,34 @@
+  Clean   Uninstall   Scan   Processes   System                                                             0.3 GB free
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+     NAME                                      SIZE  LAST USED             │ Highlighted
+ ❯ ◯ Adobe Photoshop 2027 (Beta) – Crea…    48.2 GB  never                 │
+   ◯ x                                       200 KB  2,911d ago            │ Adobe Photoshop 2027 (Beta) – Creative
+   ◯ Unsigned Tool                            88 MB  700d ago              │ Cloud Edition for Apple silicon
+   ◯ Helper App 1                             40 MB  600d ago              │ com.adobe.Photoshop.beta
+   ◯ Helper App 2                             41 MB  599d ago              │
+   ◯ Helper App 3                             42 MB  598d ago              │ app    48.2 GB /Applications/Adobe Photosh…
+   ◯ Helper App 4                             43 MB  597d ago              │ cache   9.1 GB Caches/com.adobe.Photoshop.…
+   ◯ Helper App 5                             44 MB  596d ago              │ data   31.0 GB Application Support/com.ado…
+   ◯ Helper App 6                             45 MB  595d ago              │ kept  LaunchAgents: a helper plist under
+   ◯ Helper App 7                             46 MB  594d ago              │       another name
+   ◯ Helper App 8                             47 MB  593d ago              │ kept  Group Containers: shared between apps
+   ◯ Helper App 9                             48 MB  592d ago              │
+   ◯ Helper App 10                            49 MB  591d ago              │ Removable  88.4 GB
+   ◯ Helper App 11                            50 MB  590d ago              │
+   ◯ Helper App 12                            51 MB  589d ago              │
+   ◯ Helper App 13                            52 MB  588d ago              │
+   ◯ Helper App 14                            53 MB  587d ago              │
+   ◯ Helper App 15                            54 MB  586d ago              │
+   ◯ Helper App 16                            55 MB  585d ago              │
+   ◯ Helper App 17                            56 MB  584d ago              │
+   ◯ Helper App 18                            57 MB  583d ago              │
+   ◯ Helper App 19                            58 MB  582d ago              │
+   ◯ Helper App 20                            59 MB  581d ago              │
+   ◯ Helper App 21                            60 MB  580d ago              │
+   ◯ Helper App 22                            61 MB  579d ago              │
+   ◯ Helper App 23                            62 MB  578d ago              │
+     … 214 more ↓                                                          │
+
+ 0 apps picked
+────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · s sort · enter uninstall · tab page · q quit

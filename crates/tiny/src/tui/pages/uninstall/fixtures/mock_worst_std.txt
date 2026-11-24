@@ -1,0 +1,24 @@
+  Clean   Uninstall   Scan   Processes   System                     0.3 GB free
+────────────────────────────────────────────────────────────────────────────────
+     NAME                                           SIZE  LAST USED
+ ❯ ◯ Adobe Photoshop 2027 (Beta) – Creative …    48.2 GB  never
+   ◯ x                                            200 KB  2,911d ago
+   ◯ Unsigned Tool                                 88 MB  700d ago
+   ◯ Helper App 1                                  40 MB  600d ago
+   ◯ Helper App 2                                  41 MB  599d ago
+   ◯ Helper App 3                                  42 MB  598d ago
+   ◯ Helper App 4                                  43 MB  597d ago
+   ◯ Helper App 5                                  44 MB  596d ago
+   ◯ Helper App 6                                  45 MB  595d ago
+   ◯ Helper App 7                                  46 MB  594d ago
+   ◯ Helper App 8                                  47 MB  593d ago
+   ◯ Helper App 9                                  48 MB  592d ago
+     … 228 more ↓
+ ── Highlighted ───────────────────────────────────────────────────────────────
+ Adobe Photoshop 2027 (Beta) – Creative Clou…  com.adobe.Photoshop.beta
+ app 48.2 GB   cache 9.1 GB   data 31.0 GB   2 entries kept
+ Removable  88.4 GB
+
+ 0 apps picked
+────────────────────────────────────────────────────────────────────────────────
+ ↑↓ move · space tick · s sort · enter uninstall · tab page · q quit

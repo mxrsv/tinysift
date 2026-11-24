@@ -9,7 +9,7 @@ use crate::util::format_bytes;
 mod cli_validate;
 mod discover;
 mod execute;
-mod picker;
+pub(crate) mod picker;
 mod picker_drill;
 pub mod providers;
 mod report;
