@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use super::home;
 
 use crate::error::Result;
 
@@ -27,10 +27,6 @@ const STREAMING_PATHS: &[(&str, &str)] = &[
         "Music",
     ),
 ];
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct StreamingCaches;
 

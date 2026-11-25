@@ -12,11 +12,11 @@
 //! `CoreSimulatorService` or `SimLaunchHost`: they run without Xcode, so the
 //! caches would never be offered.
 
+use super::refuse_every_item;
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 
-use crate::engine_error;
 use crate::error::Result;
 
 use super::simulator_devices::{simctl_lookup, Simctl, XCRUN};
@@ -171,16 +171,7 @@ impl CleanProvider for SystemSimulatorCaches {
     /// Refuses every item: removing them needs administrator rights, and
     /// Finder would ask for them itself.
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
-        if matches!(action, ExecAction::EmptyTrash) {
-            return Err(engine_error!("{} provider does not accept EmptyTrash", ID));
-        }
-        Ok(ExecReport {
-            failed: items
-                .iter()
-                .map(|item| (item.path.clone(), NEEDS_ADMIN.to_string()))
-                .collect(),
-            ..ExecReport::default()
-        })
+        refuse_every_item(items, action, ID, NEEDS_ADMIN)
     }
 }
 

@@ -5,7 +5,8 @@
 //! cache is this category's only when a real `pip3` can empty it
 //! ([`real_pip`]); otherwise it stays one of `user-caches`' folders.
 
-use std::path::{Path, PathBuf};
+use super::home;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::error::Result;
@@ -17,10 +18,6 @@ use crate::clean::fs_safe::is_dir_safe;
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 use crate::runner::CommandRunner;
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 // ---------- Bun ----------
 

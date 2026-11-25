@@ -1,3 +1,4 @@
+use super::home;
 use crate::error::Result;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -12,10 +13,6 @@ use crate::clean::process::command_line_running;
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 use crate::runner::CommandRunner;
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 /// Cache directory printed by a package manager. A tool that cannot run is
 /// an error; a non-zero exit or empty output means "no cache".

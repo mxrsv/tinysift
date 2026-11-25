@@ -22,7 +22,7 @@ use super::{
 };
 use crate::clean::PREVIEW_TTL;
 use crate::session::{CancellationToken, ScanSlot};
-use crate::TinySession;
+use crate::{unix_seconds, TinySession};
 
 /// The `brew` to run, or the failure that says there is none.
 fn brew_path(seams: &Seams<'_>) -> Result<PathBuf, FfiCaskError> {
@@ -337,11 +337,4 @@ fn report(
             })
             .collect(),
     }
-}
-
-fn unix_seconds(time: SystemTime) -> i64 {
-    time.duration_since(SystemTime::UNIX_EPOCH)
-        .ok()
-        .and_then(|since| i64::try_from(since.as_secs()).ok())
-        .unwrap_or(i64::MAX)
 }

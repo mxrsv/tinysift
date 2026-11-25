@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use super::home;
+use std::path::Path;
 use std::sync::Arc;
 
 use crate::error::Result;
@@ -19,10 +20,6 @@ const GRADLE_SUBDIRS: &[&str] = &[".gradle/caches", ".gradle/daemon"];
 /// wrapper all run as `java` with one of these classes. A daemon outlives
 /// its build (three idle hours by default) and holds the caches open.
 const GRADLE_COMMAND_LINE: &str = r"org\.gradle\.(launcher|wrapper)\.";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct GradleMaven {
     runner: Arc<dyn CommandRunner>,

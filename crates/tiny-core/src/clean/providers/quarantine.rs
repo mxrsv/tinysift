@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use super::home;
 
 use crate::error::Result;
 
@@ -13,10 +13,6 @@ const LABEL: &str = "Gatekeeper quarantine events";
 /// prompt history. Risk is Review because deleting clears the recorded
 /// approvals (user may re-prompt next time).
 const QUARANTINE_FILE: &str = "Library/Preferences/com.apple.LaunchServices.QuarantineEventsV2";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct Quarantine;
 

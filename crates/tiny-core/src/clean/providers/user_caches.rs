@@ -1,3 +1,4 @@
+use super::home;
 use crate::error::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -354,10 +355,6 @@ impl CleanProvider for UserCaches {
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
         execute_per_item(items, action, ID)
     }
-}
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 /// An IDE's system directory, or a vendor folder with one in it, is never

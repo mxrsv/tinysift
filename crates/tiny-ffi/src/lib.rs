@@ -23,6 +23,20 @@ pub mod worktrees;
 
 pub use session::{CancellationToken, TinySession};
 
+/// A path as Swift receives it: lossy UTF-8.
+pub(crate) fn lossy(path: &std::path::Path) -> String {
+    path.to_string_lossy().into_owned()
+}
+
+/// Whole seconds since the epoch; `i64::MAX` for a time before it or past
+/// `i64`.
+pub(crate) fn unix_seconds(time: std::time::SystemTime) -> i64 {
+    time.duration_since(std::time::SystemTime::UNIX_EPOCH)
+        .ok()
+        .and_then(|since| i64::try_from(since.as_secs()).ok())
+        .unwrap_or(i64::MAX)
+}
+
 /// Typed adapter error. Cases are stable; `detail` is diagnostic text, while
 /// user-facing copy lives in Swift.
 #[derive(Debug, thiserror::Error, uniffi::Error)]

@@ -1,3 +1,4 @@
+use super::home;
 use std::path::PathBuf;
 
 use crate::error::Result;
@@ -24,10 +25,6 @@ const CHAT_PATHS: &[(&str, &str)] = &[
 /// read_dir at discover time. Locked by "Telegram".
 const TELEGRAM_GROUP_CONTAINERS: &str = "Library/Group Containers";
 const TELEGRAM_APP: &str = "Telegram";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct ChatCaches;
 

@@ -16,6 +16,7 @@
 //! Homebrew's download cache whole, so counting them here would count them
 //! twice.
 
+use super::home;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock, Mutex};
@@ -42,10 +43,6 @@ const DRY_RUN: &[&str] = &["cleanup", "--prune=30", "--dry-run"];
 const WOULD_REMOVE: &str = "Would remove: ";
 /// `user-caches` lists everything here, Homebrew's download cache included.
 const USER_CACHES: &str = "Library/Caches";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 /// How long a dry run's list stands for a Clean: a preview's lifetime, so a
 /// Clean confirmed from a scan reuses the scan's list.

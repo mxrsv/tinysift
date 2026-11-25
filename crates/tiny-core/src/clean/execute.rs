@@ -339,14 +339,5 @@ pub fn map_action(action: CleanAction, provider_id: &str) -> Result<ExecAction> 
     }
 }
 
-#[allow(dead_code)]
-fn ensure_provider_exists(providers: &[Box<dyn CleanProvider>], id: &str) -> Result<()> {
-    if providers.iter().any(|p| p.id() == id) {
-        Ok(())
-    } else {
-        Err(engine_error!("no provider for '{}'", id))
-    }
-}
-
 #[cfg(test)]
 mod tests;

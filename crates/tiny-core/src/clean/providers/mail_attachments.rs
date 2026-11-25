@@ -1,3 +1,4 @@
+use super::home;
 use std::path::PathBuf;
 
 use crate::error::Result;
@@ -10,10 +11,6 @@ use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 const ID: &str = "mail-attachments";
 const LABEL: &str = "Mail attachments";
 const APP: &str = "Mail";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct MailAttachments;
 

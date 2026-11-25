@@ -8,6 +8,7 @@
 //! (`trash_in_every_mode`): a model imported or built on this Mac does not
 //! download again.
 
+use super::home;
 use std::path::{Component, Path, PathBuf};
 
 use crate::error::Result;
@@ -16,10 +17,6 @@ use super::{execute_per_item, root_as_item, CleanProvider};
 use crate::clean::fs_safe::{is_dir_safe, list_children, read_entries};
 use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 fn file_name(path: &Path) -> Option<&str> {
     path.file_name().and_then(|name| name.to_str())

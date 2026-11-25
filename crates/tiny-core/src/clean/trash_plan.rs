@@ -170,6 +170,13 @@ pub fn account_home() -> Option<PathBuf> {
     None
 }
 
+/// `trusted_home` for this process: `HOME` checked against the account's
+/// home from the user database.
+pub fn trusted_account_home() -> Result<PathBuf, String> {
+    let env_home = std::env::var_os("HOME").map(PathBuf::from);
+    trusted_home(env_home.as_deref(), account_home().as_deref())
+}
+
 /// The home folder the desktop may trust: `HOME` (normalized) when it is
 /// absolute, not `/`, free of `..`, and equal to the account's home.
 pub fn trusted_home(env_home: Option<&Path>, account: Option<&Path>) -> Result<PathBuf, String> {

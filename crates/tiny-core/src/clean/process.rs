@@ -104,7 +104,7 @@ pub fn is_running(name: &str) -> bool {
 
 /// Returns true if any of the given names is running. Used by providers
 /// that gate on multiple process names (e.g. cargo + rustc).
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn any_running(checker: &dyn ProcessChecker, names: &[&str]) -> bool {
     names.iter().any(|n| checker.is_running(n))
 }

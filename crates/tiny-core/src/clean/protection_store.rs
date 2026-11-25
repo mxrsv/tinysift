@@ -36,7 +36,7 @@ use super::protection::{
     rule_id, validate_rule_path, PolicySnapshot, ProtectionRule, RuleError, RuleScope,
     RulesDocument, INTERNAL_ID_PREFIX, RULES_VERSION,
 };
-use super::trash_plan::{account_home, trusted_home};
+use super::trash_plan::trusted_account_home;
 
 const STORE_DIR: &str = "clean-protection";
 const LOCK_FILE: &str = "clean-protection.lock";
@@ -141,10 +141,8 @@ impl ProtectionStore {
 
     /// The store under the trusted account home; never a caller-supplied path.
     pub fn for_account() -> Result<Self, StoreError> {
-        let env_home = std::env::var_os("HOME").map(PathBuf::from);
-        let account = account_home();
-        let home = trusted_home(env_home.as_deref(), account.as_deref());
-        Ok(Self::for_home(&home.map_err(StoreError::Home)?))
+        let home = trusted_account_home().map_err(StoreError::Home)?;
+        Ok(Self::for_home(&home))
     }
 
     pub fn dir(&self) -> &Path {

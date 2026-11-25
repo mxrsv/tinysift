@@ -1,3 +1,4 @@
+use super::home;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -80,10 +81,6 @@ const SENSITIVE_EXTENSIONS: &[&str] = &[
 
 /// Prefixes of OpenSSH key file names (`id_rsa`, `id_ed25519.pub`, ...).
 const SSH_KEY_PREFIXES: &[&str] = &["id_rsa", "id_dsa", "id_ecdsa", "id_ed25519"];
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct DownloadsOld {
     pub idle_days: u64,

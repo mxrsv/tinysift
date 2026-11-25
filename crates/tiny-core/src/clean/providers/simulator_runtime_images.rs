@@ -7,6 +7,7 @@
 //! `plutil -extract` reads one key path at a time: `plutil -convert json`
 //! rejects the registry, whose `<date>` and `<data>` values JSON cannot hold.
 
+use super::refuse_every_item;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
@@ -178,16 +179,7 @@ impl CleanProvider for SimulatorRuntimeImages {
     }
     /// Refuses every item: only System Settings removes these runtimes.
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
-        if matches!(action, ExecAction::EmptyTrash) {
-            return Err(engine_error!("{} provider does not accept EmptyTrash", ID));
-        }
-        Ok(ExecReport {
-            failed: items
-                .iter()
-                .map(|item| (item.path.clone(), REPORT_ONLY.to_string()))
-                .collect(),
-            ..ExecReport::default()
-        })
+        refuse_every_item(items, action, ID, REPORT_ONLY)
     }
 }
 

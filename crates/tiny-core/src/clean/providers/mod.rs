@@ -65,7 +65,6 @@ pub enum Family {
 }
 
 impl Family {
-    #[allow(dead_code)]
     pub fn id(&self) -> &'static str {
         match self {
             Family::Dev => "dev",
@@ -535,15 +534,37 @@ const AGENT_ROOTS: &[&str] = &[
     ".superset/worktrees",
 ];
 
+/// `execute` of a provider that removes nothing itself: every item is
+/// refused with `reason`, and emptying the Trash is an error.
+pub(crate) fn refuse_every_item(
+    items: &[CleanItem],
+    action: ExecAction,
+    id: &str,
+    reason: &str,
+) -> Result<ExecReport> {
+    if matches!(action, ExecAction::EmptyTrash) {
+        return Err(engine_error!("{} provider does not accept EmptyTrash", id));
+    }
+    Ok(ExecReport {
+        failed: items
+            .iter()
+            .map(|item| (item.path.clone(), reason.to_string()))
+            .collect(),
+        ..ExecReport::default()
+    })
+}
+
 /// Canonical set of dev project roots scanned by walking providers
 /// (`node_modules`, `rust_targets`, `python_caches`, `build_folders`). Only
 /// roots that exist are returned. Order is stable so test discovery is
 /// deterministic.
 pub(crate) fn dev_search_roots() -> Vec<std::path::PathBuf> {
-    match std::env::var_os("HOME") {
-        Some(h) => dev_search_roots_in(Path::new(&h)),
-        None => Vec::new(),
-    }
+    home().map_or_else(Vec::new, |h| dev_search_roots_in(&h))
+}
+
+/// The user's home folder from `HOME`, as every provider resolves it.
+pub(crate) fn home() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME").map(std::path::PathBuf::from)
 }
 
 /// `dev_search_roots` for the home folder `home`: the roots that are real

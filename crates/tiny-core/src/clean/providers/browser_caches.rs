@@ -1,3 +1,4 @@
+use super::home;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
@@ -36,10 +37,6 @@ const FIREFOX_PROFILES_ROOTS: &[&str] = &[
 ];
 const APPLICATION_SUPPORT: &str = "Library/Application Support";
 const CACHES: &str = "Library/Caches";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 /// One folder a browser category offers, with the browser and profile it
 /// belongs to.

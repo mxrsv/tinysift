@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use tiny_core::clean::trash_plan::{account_home, trusted_home};
+use tiny_core::clean::trash_plan::trusted_account_home;
 use tiny_core::processes::working_dir::{all_working_directories, is_running, working_directory};
 use tiny_core::runner::RealRunner;
 use tiny_core::worktrees::trash::PlannedWorktree;
@@ -254,9 +254,7 @@ impl TinySession {
         if let Some(home) = self.worktrees().home.clone() {
             return Ok(home);
         }
-        let env = std::env::var_os("HOME").map(PathBuf::from);
-        trusted_home(env.as_deref(), account_home().as_deref())
-            .map_err(|detail| FfiError::UntrustedHome { detail })
+        trusted_account_home().map_err(|detail| FfiError::UntrustedHome { detail })
     }
 }
 

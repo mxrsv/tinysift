@@ -1,3 +1,4 @@
+use super::clean::truncate;
 use crate::cli::UninstallOpts;
 use crate::util::format_bytes;
 use anyhow::{Context, Result};
@@ -205,16 +206,6 @@ fn pick_interactive(opts: &UninstallOpts, listed: Option<Vec<AppEntry>>) -> Resu
         .context("interactive picker failed")?;
 
     Ok(selected.into_iter().map(|i| apps[i].clone()).collect())
-}
-
-fn truncate(s: &str, max: usize) -> String {
-    if s.chars().count() <= max {
-        s.to_string()
-    } else {
-        let mut out: String = s.chars().take(max - 1).collect();
-        out.push('…');
-        out
-    }
 }
 
 // ---------- Reporting & confirm ----------

@@ -1,3 +1,4 @@
+use super::home;
 use std::path::PathBuf;
 
 use crate::error::Result;
@@ -11,10 +12,6 @@ const LABEL: &str = "Crash reports / DiagnosticReports";
 
 const USER_DIAG: &str = "Library/Logs/DiagnosticReports";
 const SYS_DIAG: &str = "/Library/Logs/DiagnosticReports";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct CrashReports;
 

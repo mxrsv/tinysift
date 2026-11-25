@@ -1,12 +1,13 @@
 //! Records and enums the cask API exposes to Swift.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use tiny_core::cask::{
     BrewEnvWarning, CaskAction, CaskFailure, CaskPlanItem, CaskProgress, CatalogueApp, Group,
     HomebrewStatus, OutdatedCask, RunOutcome, RunState, Stage,
 };
 
+use crate::lossy;
 use crate::uninstall::FfiAppRunState;
 
 /// A setting in a `brew.env` file that `brew` applies over the environment
@@ -376,8 +377,4 @@ pub(super) fn outdated_record(cask: &OutdatedCask, run_state: FfiAppRunState) ->
 
 pub(super) fn first_app(apps: &[PathBuf]) -> Option<String> {
     apps.first().map(|path| lossy(path))
-}
-
-fn lossy(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
 }

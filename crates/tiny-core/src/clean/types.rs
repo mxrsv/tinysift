@@ -19,7 +19,6 @@ impl RiskLevel {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[allow(dead_code)]
 #[serde(rename_all = "camelCase")]
 pub struct CleanItem {
     pub category_id: String,

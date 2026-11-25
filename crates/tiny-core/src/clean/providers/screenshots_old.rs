@@ -1,3 +1,4 @@
+use super::home;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -13,10 +14,6 @@ const ID: &str = "screenshots-old";
 const LABEL: &str = "Old screenshots";
 
 const SCREENSHOT_PREFIXES: &[&str] = &["Screenshot ", "Screen Shot "];
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct ScreenshotsOld {
     pub idle_days: u64,

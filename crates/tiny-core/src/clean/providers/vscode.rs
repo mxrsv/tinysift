@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use super::home;
 
 use crate::error::Result;
 
@@ -16,10 +16,6 @@ const VSCODE_SUBDIRS: &[&str] = &[
     "Library/Application Support/Code/CachedData",
     "Library/Application Support/Code/logs",
 ];
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct VsCode;
 
