@@ -145,6 +145,15 @@ pub struct FfiCleanCandidate {
     /// `size_bytes` counts them all: deleting frees at most that ("up to").
     #[uniffi(default = false)]
     pub size_is_upper_bound: bool,
+    /// The name of a running process that held this path or something inside
+    /// it when the scan ended: its executable, its working folder or an open
+    /// file (`open_files.rs`). A Clean would skip the candidate as
+    /// `HeldByProcess`, so a client does not tick it for the user. `None`
+    /// when no readable process did, and for a candidate the app does not
+    /// move or delete itself (a tool's, the Trash row's, report-only). It is
+    /// a floor, as the check before a removal is.
+    #[uniffi(default = None)]
+    pub in_use_by: Option<String>,
 }
 
 /// One checkable fact behind a candidate; Swift writes the copy. Times are
@@ -208,6 +217,11 @@ pub enum FfiEvidence {
         kind: FfiBrowserKind,
         profile_id: String,
         profile_name: String,
+    },
+    /// Every name of one Ollama model: the tags naming exactly the same
+    /// layers, shown as one row.
+    ModelTags {
+        names: Vec<String>,
     },
 }
 
@@ -409,6 +423,11 @@ pub enum FfiSkipReason {
     HoldsKept,
     /// Whether a saved rule covers it could not be decided; `detail` says why.
     KeepUncertain,
+    /// A running process holds it or something inside it: its executable,
+    /// its working folder or an open file. `detail` is that process's name,
+    /// which is not always an app's: a shell or a background helper holds
+    /// files too, and cannot be quit from the Dock.
+    HeldByProcess,
 }
 
 #[derive(Debug, Clone, PartialEq, uniffi::Enum)]
@@ -529,6 +548,7 @@ impl From<Evidence> for FfiEvidence {
                 profile_id,
                 profile_name,
             },
+            Evidence::ModelTags { names } => Self::ModelTags { names },
         }
     }
 }
@@ -642,9 +662,7 @@ pub(super) fn skip_reason(reason: SkipReason) -> (FfiSkipReason, Option<String>)
         SkipReason::NotOnHomeVolume => (FfiSkipReason::NotOnHomeVolume, None),
         SkipReason::ProviderGuard(d) => (FfiSkipReason::ProviderGuard, Some(d)),
         SkipReason::AppRunning(app) => (FfiSkipReason::AppRunning, Some(app)),
-        // A process that holds the path is reported as its running app:
-        // the same cause and the same thing to do, quit it and scan again.
-        SkipReason::InUse { holder } => (FfiSkipReason::AppRunning, Some(holder)),
+        SkipReason::InUse { holder } => (FfiSkipReason::HeldByProcess, Some(holder)),
         SkipReason::SafetyCheckFailed(d) => (FfiSkipReason::SafetyCheckUnavailable, Some(d)),
         SkipReason::Kept { rule_path } => (FfiSkipReason::Kept, Some(lossy(&rule_path))),
         SkipReason::HoldsKept { rule_path } => (FfiSkipReason::HoldsKept, Some(lossy(&rule_path))),

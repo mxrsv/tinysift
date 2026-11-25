@@ -78,6 +78,7 @@ pub fn facts(evidence: &[Evidence], read_at: i64) -> Vec<(String, String)> {
                     profile_name,
                     ..
                 } => ("Profile".into(), format!("{browser} · {profile_name}")),
+                Evidence::ModelTags { names } => ("Tags".into(), names.join(", ")),
                 Evidence::TrashEntry { .. } | Evidence::TrashRest { .. } => return None,
             };
             Some((label, value))

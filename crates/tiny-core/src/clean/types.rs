@@ -88,6 +88,10 @@ pub enum Evidence {
         profile_id: String,
         profile_name: String,
     },
+    /// Every name of one Ollama model (`llama3.2:latest`, `llama3.2:3b`):
+    /// the tags whose manifests name exactly the same layers, so one row
+    /// stands for all of them.
+    ModelTags { names: Vec<String> },
 }
 
 /// How a category's items come back after they are moved to the Trash.

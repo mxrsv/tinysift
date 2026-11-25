@@ -133,68 +133,6 @@ fn is_puppeteer_build(home: &Path, path: &Path) -> bool {
         && is_dir_safe(path)
 }
 
-// ---------- Hugging Face ----------
-
-const HUGGING_FACE_ID: &str = "huggingface";
-const HUGGING_FACE_LABEL: &str = "Hugging Face models";
-/// The download cache. Its `models--*` folders only link into the shared
-/// `hub/blobs`, so the whole folder is the unit that frees space. Tokens
-/// sit beside it and are never offered.
-const HUGGING_FACE_HUB: &str = "huggingface/hub";
-
-pub struct HuggingFace;
-
-impl CleanProvider for HuggingFace {
-    fn id(&self) -> &'static str {
-        HUGGING_FACE_ID
-    }
-    fn label(&self) -> &'static str {
-        HUGGING_FACE_LABEL
-    }
-    fn inclusion_reason(&self) -> String {
-        "Models and datasets Hugging Face downloaded; they download again on next use, \
-         which can be large"
-            .into()
-    }
-    fn risk(&self) -> RiskLevel {
-        RiskLevel::Review
-    }
-    fn desktop_trash_paths(&self) -> bool {
-        true
-    }
-    fn available(&self) -> bool {
-        home().is_some_and(|h| is_dir_safe(&cache_dir(&h, HUGGING_FACE_HUB)))
-    }
-    fn discover(&self, ctx: &ScanContext<'_>) -> Result<Vec<CleanItem>> {
-        Ok(home()
-            .map(|h| hugging_face_hub(ctx, &h))
-            .unwrap_or_default())
-    }
-    fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
-        execute_per_item(items, action, HUGGING_FACE_ID)
-    }
-    fn check_item(&self, path: &Path) -> std::result::Result<(), String> {
-        match home() {
-            Some(h) if path == cache_dir(&h, HUGGING_FACE_HUB) => Ok(()),
-            _ => Err("not the Hugging Face download cache".into()),
-        }
-    }
-}
-
-fn hugging_face_hub(ctx: &ScanContext<'_>, home: &Path) -> Vec<CleanItem> {
-    let hub = cache_dir(home, HUGGING_FACE_HUB);
-    if !is_dir_safe(&hub) {
-        return Vec::new();
-    }
-    root_as_item(
-        ctx,
-        &hub,
-        HUGGING_FACE_ID,
-        HUGGING_FACE_LABEL,
-        RiskLevel::Review,
-    )
-}
-
 // ---------- Codex runtimes ----------
 
 const CODEX_RUNTIMES_ID: &str = "codex-runtimes";
@@ -344,22 +282,6 @@ mod tests {
     }
 
     #[test]
-    fn hugging_face_offers_the_hub_folder_alone() {
-        let home = tempfile::tempdir().unwrap();
-        let root = cache_dir(home.path(), "huggingface");
-        let hub = dir(root.join("hub/blobs/78"));
-        let hub = hub.parent().unwrap().parent().unwrap().to_path_buf();
-        dir(root.join("hub/models--org--model/snapshots"));
-        fs::write(root.join("token"), b"hf_secret").unwrap();
-        dir(root.join("stored_tokens"));
-        dir(root.join("xet/logs"));
-        let items = hugging_face_hub(&ScanContext::unchecked(), home.path());
-        assert_eq!(paths(&items), vec![hub]);
-        assert_eq!(items[0].risk, RiskLevel::Review);
-        assert!(HuggingFace.quit_apps().is_empty());
-    }
-
-    #[test]
     fn codex_runtimes_offers_only_old_install_leftovers() {
         let home = tempfile::tempdir().unwrap();
         let root = cache_dir(home.path(), CODEX_RUNTIMES_DIR);
@@ -388,13 +310,9 @@ mod tests {
         for path in ["/", "/tmp/chrome/mac_arm-1", "/tmp/codex-runtime-install-x"] {
             let path = Path::new(path);
             assert!(Puppeteer.check_item(path).is_err());
-            assert!(HuggingFace.check_item(path).is_err());
             assert!(CodexRuntimes.check_item(path).is_err());
         }
         let h = home().unwrap();
-        assert!(HuggingFace
-            .check_item(&cache_dir(&h, "huggingface/token"))
-            .is_err());
         assert!(CodexRuntimes
             .check_item(&cache_dir(&h, "codex-runtimes/codex-primary-runtime"))
             .is_err());
