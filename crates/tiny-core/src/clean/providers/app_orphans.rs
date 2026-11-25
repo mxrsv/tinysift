@@ -16,11 +16,11 @@
 //! (otherwise every dir would look orphan). The handoff calls this out
 //! explicitly: "if mdfind returns 0 result, provider refuse discover".
 
+use super::home;
+use super::refuse_every_item;
 use std::collections::HashSet;
-use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::engine_error;
 use crate::error::Result;
 
 use super::{run_tool, top_level_entries, CleanProvider, ReportOnly};
@@ -40,10 +40,6 @@ const ATTR_SEPARATOR: &str = " kMDItemCFBundleIdentifier = ";
 /// What `mdfind -attr` prints when Spotlight has no value for the attribute.
 const ATTR_NULL: &str = "(null)";
 const APP_SUPPORT: &str = "Library/Application Support";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct AppOrphans {
     runner: Arc<dyn CommandRunner>,
@@ -160,16 +156,7 @@ impl CleanProvider for AppOrphans {
         Ok(without_installed(candidates, &installed))
     }
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
-        if matches!(action, ExecAction::EmptyTrash) {
-            return Err(engine_error!("{} provider does not accept EmptyTrash", ID));
-        }
-        Ok(ExecReport {
-            failed: items
-                .iter()
-                .map(|item| (item.path.clone(), REPORT_ONLY.to_string()))
-                .collect(),
-            ..ExecReport::default()
-        })
+        refuse_every_item(items, action, ID, REPORT_ONLY)
     }
 }
 
@@ -178,6 +165,7 @@ mod tests {
     use super::*;
     use crate::clean::providers::known_category_ids;
     use crate::clean::runner::test_support::MockRunner;
+    use std::path::PathBuf;
 
     #[test]
     fn app_orphans_id_in_known_categories() {

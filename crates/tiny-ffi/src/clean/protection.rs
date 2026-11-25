@@ -26,7 +26,7 @@ use tiny_core::clean::protection_store::StoreError;
 use tiny_core::clean::trash_plan::{protected_reason, PlannedItem};
 
 use super::{FfiDesktopAction, FfiExclusionReason, FfiPreviewExclusion};
-use crate::{FfiError, TinySession};
+use crate::{lossy, FfiError, TinySession};
 
 /// What a rule covers: exactly the path, or the path and everything inside.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, uniffi::Enum)]
@@ -113,10 +113,6 @@ fn scope_of(meta: &fs::Metadata) -> Option<RuleScope> {
     } else {
         None
     }
-}
-
-fn lossy(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
 }
 
 /// Why the rules hold the path `evaluation` describes: saved rules, then

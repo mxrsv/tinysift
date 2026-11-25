@@ -1,6 +1,7 @@
 //! Tool caches in `~/.cache`, each offered only where the tool's own layout
 //! shows what is safe to remove.
 
+use super::home;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -12,10 +13,6 @@ use crate::clean::scan_context::ScanContext;
 use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 
 const CACHE_DIR: &str = ".cache";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 fn cache_dir(home: &Path, tool: &str) -> PathBuf {
     home.join(CACHE_DIR).join(tool)

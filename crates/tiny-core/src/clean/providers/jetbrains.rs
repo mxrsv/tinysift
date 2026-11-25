@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use super::home;
+use std::path::Path;
 
 use crate::error::Result;
 
@@ -20,10 +21,6 @@ const JETBRAINS_DIRS: &[&str] = &[SYSTEMS, LOGS];
 /// the IDE's own Invalidate Caches removes the file system cache only
 /// "together with the information stored in Local History".
 const REBUILT: &[&str] = &["index"];
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct JetBrains;
 

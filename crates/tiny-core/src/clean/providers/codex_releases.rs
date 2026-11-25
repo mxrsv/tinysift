@@ -3,10 +3,11 @@
 //! release it installs. Nothing else under `~/.codex` (sessions, history,
 //! databases, worktrees, credentials) is ever offered.
 
+use super::home;
 use std::ffi::OsStr;
 use std::fs;
 use std::os::unix::fs::MetadataExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use crate::error::Result;
 
@@ -25,10 +26,6 @@ const CURRENT: &str = "current";
 /// the release `current` named when it started, and its updater adds
 /// releases and moves `current`.
 const CODEX_APPS: &[&str] = &["codex", "codex-code-mode-host"];
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct CodexReleases;
 
@@ -134,6 +131,7 @@ fn check_superseded(packages: &Path, path: &Path) -> std::result::Result<(), Str
 mod tests {
     use super::*;
     use std::os::unix::fs::symlink;
+    use std::path::PathBuf;
 
     const NEW: &str = "0.163.0-aarch64-apple-darwin";
     const OLD: &str = "0.162.1-aarch64-apple-darwin";

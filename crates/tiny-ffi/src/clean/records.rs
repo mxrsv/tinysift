@@ -1,5 +1,6 @@
 //! Records and enums the cleanup API exposes to Swift, mirroring core data.
 
+use crate::lossy;
 use tiny_core::clean::checked_execute::{ItemOutcome, SkipReason, StopReason};
 use tiny_core::clean::finder_trash::TrashError;
 use tiny_core::clean::providers::{ReportOnly, Section};
@@ -668,8 +669,4 @@ pub(super) fn skip_reason(reason: SkipReason) -> (FfiSkipReason, Option<String>)
         SkipReason::HoldsKept { rule_path } => (FfiSkipReason::HoldsKept, Some(lossy(&rule_path))),
         SkipReason::KeepUncertain(d) => (FfiSkipReason::KeepUncertain, Some(d)),
     }
-}
-
-fn lossy(path: &std::path::Path) -> String {
-    path.to_string_lossy().into_owned()
 }

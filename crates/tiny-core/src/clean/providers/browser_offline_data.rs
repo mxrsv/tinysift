@@ -5,7 +5,8 @@
 //! again: Review, never ticked ahead by the app, and only to the Trash
 //! (`comes_back` is `TrashOnly`).
 
-use std::path::{Path, PathBuf};
+use super::home;
+use std::path::Path;
 
 use crate::browsers::{discover, BrowserFamily};
 use crate::error::Result;
@@ -19,10 +20,6 @@ const ID: &str = "browser-offline-data";
 const LABEL: &str = "Offline site data";
 /// Inside a Chromium profile's data folder.
 pub(super) const CACHE_STORAGE: &str = "Service Worker/CacheStorage";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 /// Every Chromium profile's `Service Worker/CacheStorage` under `home`.
 pub(super) fn offline_folders(home: &Path) -> Vec<ProfileFolder> {

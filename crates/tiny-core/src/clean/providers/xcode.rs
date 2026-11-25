@@ -1,5 +1,5 @@
+use super::home;
 use crate::error::Result;
-use std::path::PathBuf;
 
 use super::{execute_per_item, root_as_item, CleanProvider};
 use crate::clean::scan_context::ScanContext;
@@ -8,10 +8,6 @@ use crate::clean::types::{CleanItem, ExecAction, ExecReport, RiskLevel};
 const APP: &str = "Xcode";
 /// Builds from a terminal, a script or an agent write DerivedData too.
 const DERIVED_TOOLS: &[&str] = &[APP, "xcodebuild"];
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct XcodeDerivedData;
 

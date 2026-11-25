@@ -11,6 +11,7 @@
 //! again for a runtime that is installed, but a deleted device's data is
 //! gone. Trash and HardDelete run the same command: there is no Trash route.
 
+use super::home;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -51,10 +52,6 @@ struct Device {
     /// Missing in output we do not understand; such a device is not offered.
     is_available: Option<bool>,
     availability_error: Option<String>,
-}
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
 }
 
 /// How long one `simctl list devices` answers the per-device check: a run

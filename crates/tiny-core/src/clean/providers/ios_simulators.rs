@@ -1,4 +1,5 @@
-use std::path::{Path, PathBuf};
+use super::home;
+use std::path::Path;
 
 use crate::error::Result;
 
@@ -18,10 +19,6 @@ pub(super) const SIMULATOR_APPS: &[&str] = &["Xcode", "Simulator", "xcodebuild"]
 /// (`simulator-devices`), and `Devices/` also holds `device_set.plist`,
 /// the registry CoreSimulator reads to list devices.
 const CACHES_DIR: &str = "Library/Developer/CoreSimulator/Caches";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct IosSimulators;
 

@@ -25,7 +25,7 @@ pub use remove_tree::{is_entry_changed, EntryFailure, FileIdentity, TreeRemoval}
 ///
 /// The walker silently skips entries whose metadata cannot be read; cleanup
 /// continues on a best-effort basis.
-#[allow(dead_code)]
+#[cfg(test)]
 pub fn walk_no_follow(root: &Path) -> Vec<PathBuf> {
     let mut out: Vec<PathBuf> = Vec::new();
     let meta = match fs::symlink_metadata(root) {
@@ -39,7 +39,7 @@ pub fn walk_no_follow(root: &Path) -> Vec<PathBuf> {
     out
 }
 
-#[allow(dead_code)]
+#[cfg(test)]
 fn walk_inner(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = match fs::read_dir(dir) {
         Ok(it) => it,

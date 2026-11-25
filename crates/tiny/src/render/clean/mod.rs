@@ -13,6 +13,7 @@ pub(crate) mod picker;
 mod picker_drill;
 pub mod providers;
 mod report;
+pub(super) use report::truncate;
 mod types;
 
 use discover::CategoryGroup;

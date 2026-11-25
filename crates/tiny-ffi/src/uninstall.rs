@@ -26,7 +26,7 @@ use tiny_core::uninstall::{
 
 use crate::clean::{app_runner, guards, protection_error, FfiProtectionGuard, PREVIEW_TTL};
 use crate::session::{CancellationToken, ScanSlot};
-use crate::{FfiError, ProgressListener, TinySession};
+use crate::{lossy, unix_seconds, FfiError, ProgressListener, TinySession};
 
 pub(crate) mod catalog;
 mod records;
@@ -539,15 +539,4 @@ fn exec_report(item_ids: &[String], executed: UninstallReport) -> FfiUninstallRe
         })
         .collect();
     FfiUninstallReport { results, ..summary }
-}
-
-fn unix_seconds(time: SystemTime) -> i64 {
-    time.duration_since(SystemTime::UNIX_EPOCH)
-        .ok()
-        .and_then(|since| i64::try_from(since.as_secs()).ok())
-        .unwrap_or(i64::MAX)
-}
-
-fn lossy(path: &Path) -> String {
-    path.to_string_lossy().into_owned()
 }

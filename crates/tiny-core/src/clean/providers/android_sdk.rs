@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use super::home;
 
 use crate::error::Result;
 
@@ -15,10 +15,6 @@ const SAFE_DIRS: &[&str] = &[".android/cache", ".gradle/.tmp"];
 
 // Conditional: system-images, only when present + idle.
 const SYSTEM_IMAGES: &str = "Library/Android/sdk/system-images";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct AndroidSdk {
     pub idle_days: u64,

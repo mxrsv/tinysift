@@ -7,16 +7,9 @@ use super::discover::CategoryGroup;
 use super::picker_drill;
 use super::providers::{category_family, Family};
 use super::report::truncate;
-use super::types::{CleanAction, RiskLevel};
+use super::types::RiskLevel;
 
 pub use picker_drill::drill_down;
-
-/// Backwards-compatible flat picker. New code should call
-/// `pick_categories_grouped`. Kept so existing tests / callers don't break.
-#[allow(dead_code)]
-pub fn pick_categories(groups: &[CategoryGroup]) -> Result<Vec<usize>> {
-    pick_categories_grouped(groups)
-}
 
 /// Groups `groups` by family (Dev → UserStorage → System) and renders a
 /// MultiSelect with disabled family-header rows + indented category rows.
@@ -137,22 +130,6 @@ pub enum ActionChoice {
     DryRun,
     ReviewPaths,
     Cancel,
-}
-
-/// Action menu shown after the plan is printed. Mirrors `sift uninstall`.
-/// Returns `CleanAction` (UI choice `ReviewPaths` not exposed by this entry —
-/// see `pick_action_with_review`).
-#[allow(dead_code)]
-pub fn pick_action(prefer_hard: bool) -> Result<CleanAction> {
-    let choice = pick_action_with_review(prefer_hard, false)?;
-    Ok(match choice {
-        ActionChoice::Trash => CleanAction::Trash,
-        ActionChoice::HardDelete => CleanAction::HardDelete,
-        ActionChoice::DryRun => CleanAction::DryRun,
-        ActionChoice::Cancel => CleanAction::Cancel,
-        // pick_action_with_review(_, false) never offers ReviewPaths.
-        ActionChoice::ReviewPaths => unreachable!(),
-    })
 }
 
 /// Action menu including the optional `Review paths` entry (drill-down).

@@ -7,11 +7,12 @@
 //! is one manifest, sized by the blobs no other manifest names: what removing
 //! that model alone would free.
 
+use super::home;
+use super::refuse_every_item;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::engine_error;
 use crate::error::Result;
 
 use super::{CleanProvider, ReportOnly};
@@ -28,10 +29,6 @@ const BLOBS: &str = "blobs";
 /// manifest file.
 const MANIFEST_FOLDERS: usize = 3;
 const REPORT_ONLY: &str = "Ollama removes its own models: run ollama rm <model>";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 fn models_dir(home: &Path) -> PathBuf {
     home.join(MODELS)
@@ -66,16 +63,7 @@ impl CleanProvider for OllamaModels {
             .unwrap_or_default())
     }
     fn execute(&self, items: &[CleanItem], action: ExecAction) -> Result<ExecReport> {
-        if matches!(action, ExecAction::EmptyTrash) {
-            return Err(engine_error!("{} provider does not accept EmptyTrash", ID));
-        }
-        Ok(ExecReport {
-            failed: items
-                .iter()
-                .map(|item| (item.path.clone(), REPORT_ONLY.to_string()))
-                .collect(),
-            ..ExecReport::default()
-        })
+        refuse_every_item(items, action, ID, REPORT_ONLY)
     }
     fn check_item(&self, _path: &Path) -> std::result::Result<(), String> {
         Err(REPORT_ONLY.into())

@@ -1,3 +1,4 @@
+use super::home;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -15,10 +16,6 @@ const LABEL: &str = "Font + QuickLook caches";
 /// is resolved at discover time.
 const USER_QL: &str = "Library/Caches/com.apple.QuickLook.thumbnailcache";
 const FONT_REGISTRY: &str = "Library/Caches/com.apple.FontRegistry";
-
-fn home() -> Option<PathBuf> {
-    std::env::var_os("HOME").map(PathBuf::from)
-}
 
 pub struct FontQuicklookCaches {
     runner: Arc<dyn CommandRunner>,
