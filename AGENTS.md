@@ -27,8 +27,9 @@ directory. See the [repository names](docs/operations/development.md#repository-
 - All operations have one implementation in core. CLI parses/presents; FFI owns records,
   consent, preview lifetime and the session gate. See [overview](docs/internals/overview.md).
 - Register cleanup categories in `all_providers_with`, `known_category_ids`, `category_family`,
-  `comes_back` and the `SECTIONS` table test of `category_section` in
-  [`providers/mod.rs`](crates/tiny-core/src/clean/providers/mod.rs). Eligibility is deny by
+  `comes_back` and `category_section` in
+  [`providers/mod.rs`](crates/tiny-core/src/clean/providers/mod.rs), and give each id a deliberate entry in the
+  `SECTIONS` table of [`providers/tests.rs`](crates/tiny-core/src/clean/providers/tests.rs). Eligibility is deny by
   default: the desktop moves paths only when `desktop_trash_paths()` is true, and acts
   otherwise only through `desktop_empties_trash()` (the Trash row) or `desktop_tool()` (a tool
   command). `needs_admin()` categories are report-only: macOS denies the administrator route.
