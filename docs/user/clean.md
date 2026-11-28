@@ -82,7 +82,9 @@ along. Those overlapping selections are retained and explained in the final repo
   symlink, or is reached through a symlinked folder in your home folder, is not searched: Clean
   could not move what it found there. Nothing inside a `node_modules` folder is listed on its own: `python-caches`
   and `rust-targets` do not look inside one, and `node-modules` lists it whole
-  ([`is_node_modules`](../../crates/tiny-core/src/clean/providers/mod.rs)).
+  ([`is_node_modules`](../../crates/tiny-core/src/clean/providers/mod.rs)). No project cache is
+  looked for inside a repository's `.git` folder
+  ([`project_walk.rs`](../../crates/tiny-core/src/clean/providers/project_walk.rs)).
 - `build-folders` lists only folders a manifest beside them proves are generated: `.next` beside
   `package.json`, `Pods` beside a `Podfile`, `build` beside `build.gradle` or
   `build.gradle.kts`, and `build` or `dist` when `package.json` names it in `main`, `module`,

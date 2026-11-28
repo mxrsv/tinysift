@@ -244,9 +244,9 @@ item. It is the only place that builds the real `OsascriptDelete`, and it panics
 **Freed, moved and requested are three numbers.** Bytes freed are measured, never discovery
 sizes. A `Delete` counts them itself: the best-effort walker applies the
 [`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs) rule to each regular file as it
-unlinks it (its `fstatat` blocks and links, one descriptor-relative `getattrlistat` for APFS
-sharing), so a hard-linked inode counts once its last link in the item goes and a clone family once
-every member goes (`TreeRemoval::freed`); only a failed deletion walks what it left. Removals done
+unlinks it (its `fstatat` blocks and links, a descriptor-relative `getattrlistat` for APFS
+sharing and a second one when the file's private size decides), so a hard-linked inode counts
+once its last link in the item goes and a clone family once every member goes (`TreeRemoval::freed`); only a failed deletion walks what it left. Removals done
 by another process (`DeleteAsAdministrator`, Finder's `EmptyTrash`, `RunTool(Prune)`,
 `RunTool(Remove)`) cannot be counted from here, so right before each, among the slow checks, the
 item is measured by the same rule and once more right after it

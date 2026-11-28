@@ -139,6 +139,48 @@ pub(crate) fn read_entries(
     out
 }
 
+/// Lists `dir`'s immediate children with their kind, for a walk that only
+/// goes into folders. Files and symlinks keep the kind the directory entry
+/// records (`d_type`), so the walk skips one `lstat` per file and, on a cold
+/// cache, the disk read behind it; the standard library reads an entry that
+/// records no kind with `lstat`, so a symlink is never taken for its target.
+/// A folder is still read with `lstat`: in a folder that can be listed but
+/// not entered, its entries name folders that cannot be reached, and those
+/// are recorded in `ctx` under `walk_root` and left out. Unlike
+/// `read_entries`, the files of such a folder are not counted unreadable.
+pub(crate) fn read_kinds(
+    walk_root: &Path,
+    dir: &Path,
+    ctx: &ScanContext<'_>,
+) -> Vec<(PathBuf, fs::FileType)> {
+    let entries = match fs::read_dir(dir) {
+        Ok(it) => it,
+        Err(e) => {
+            ctx.note_unreadable(walk_root, &e);
+            return Vec::new();
+        }
+    };
+    let mut out = Vec::new();
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                ctx.note_unreadable(walk_root, &e);
+                continue;
+            }
+        };
+        let kind = match entry.file_type() {
+            Ok(kind) if kind.is_dir() => fs::symlink_metadata(entry.path()).map(|m| m.file_type()),
+            other => other,
+        };
+        match kind {
+            Ok(kind) => out.push((entry.path(), kind)),
+            Err(e) => ctx.note_unreadable(walk_root, &e),
+        }
+    }
+    out
+}
+
 /// Immediate children of `root`, recorded as a discovery root. A missing
 /// `root` yields nothing; an unreadable one is recorded in `ctx`.
 pub fn list_children(root: &Path, ctx: &ScanContext<'_>) -> Vec<PathBuf> {

@@ -6,7 +6,8 @@
 //! Every walker keeps its own rule ([`Walker::visit`]): what it records and
 //! where it stops. The walk descends into a folder while at least one walker
 //! still wants it, and tracks which ones do, so each walker sees exactly the
-//! folders, in exactly the order, its own walk saw. What a read could not
+//! folders, in exactly the order, its own walk saw. No walker enters a
+//! `.git` folder, which holds no build output. What a read could not
 //! reach is recorded per walker the same way, and handed to each provider's
 //! context when it takes its share ([`project_walk`]). The walk is kept in
 //! the scan's [`ScanContext`] and runs once per root per scan.
@@ -17,7 +18,7 @@ use std::sync::Arc;
 use super::build_folders::manifest_of;
 use super::is_node_modules;
 use super::python_caches::{is_named_venv, python_manifest};
-use crate::clean::fs_safe::read_entries;
+use crate::clean::fs_safe::read_kinds;
 use crate::clean::scan_context::{ScanContext, ScanFindings};
 
 /// The project walkers, one bit each in a folder's set of active walkers.
@@ -38,6 +39,8 @@ const WALKERS: [Walker; 5] = [
     Walker::BuildFolders,
 ];
 const ALL: u8 = (1 << WALKERS.len()) - 1;
+/// No walker goes into a repository's git folder.
+const GIT_DIR: &str = ".git";
 
 impl Walker {
     fn bit(self) -> u8 {
@@ -51,6 +54,9 @@ impl Walker {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let file_beside = |file: &str| path.with_file_name(file).is_file();
         match self {
+            // Git's own data, never a project's build output; on an active
+            // repository it holds more entries than its work tree.
+            _ if name == GIT_DIR && path != root => (false, false),
             Walker::NodeModules if name == "node_modules" => (file_beside("package.json"), false),
             Walker::NodeModules => (false, true),
             _ if is_node_modules(path) => (false, false),
@@ -123,15 +129,19 @@ impl ProjectWalk {
         descend
     }
 
+    /// Only folders matter here, so the files a folder lists keep the kind
+    /// their directory entry records ([`read_kinds`]): the walk reads no
+    /// inode of the files it passes, only of folders and of the manifests
+    /// a walker checks beside a candidate.
     fn descend(&mut self, root: &Path, dir: &Path, active: u8, ctx: &ScanContext<'_>) {
         let local = ScanContext::worker(ctx.cancel_flag());
-        let entries = read_entries(root, dir, &local);
+        let entries = read_kinds(root, dir, &local);
         self.attribute(active, local.take_findings());
-        for (path, meta) in entries {
+        for (path, kind) in entries {
             if ctx.is_cancelled() {
                 return;
             }
-            if meta.file_type().is_symlink() || !meta.file_type().is_dir() {
+            if kind.is_symlink() || !kind.is_dir() {
                 continue;
             }
             let next = self.visit(active, &path, root);
@@ -272,5 +282,83 @@ mod tests {
             "build folders never enter a hidden folder"
         );
         assert_eq!(rust.unreadable[root].entries, 1, "Rust targets do");
+    }
+
+    #[test]
+    fn no_walker_enters_a_git_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for dir in [
+            "repo/.git/x/node_modules",
+            "repo/.git/x/__pycache__",
+            "repo/.git/x/.venv",
+            "repo/.git/x/target",
+            "repo/.git/x/dist",
+            "repo/src/__pycache__",
+        ] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in [
+            "repo/.git/x/package.json",
+            "repo/.git/x/Cargo.toml",
+            "repo/.git/x/pyproject.toml",
+            "repo/.git/x/.venv/pyvenv.cfg",
+        ] {
+            fs::write(root.join(file), "{}").unwrap();
+        }
+        fs::write(
+            root.join("repo/.git/x/package.json"),
+            r#"{"main": "dist/i.js"}"#,
+        )
+        .unwrap();
+        let ctx = ScanContext::unchecked();
+        for walker in WALKERS {
+            let found = names(root, project_walk(&ctx, root, walker));
+            let expected: &[&str] = match walker {
+                Walker::Pycache => &["repo/src/__pycache__"],
+                _ => &[],
+            };
+            assert_eq!(found, expected, "{walker:?}");
+        }
+    }
+
+    #[test]
+    fn a_symlinked_folder_is_never_entered() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, elsewhere) = (dir.path().join("root"), dir.path().join("elsewhere"));
+        fs::create_dir_all(elsewhere.join("web/node_modules")).unwrap();
+        fs::write(elsewhere.join("web/package.json"), "{}").unwrap();
+        fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, root.join("link")).unwrap();
+        let ctx = ScanContext::unchecked();
+        assert!(project_walk(&ctx, &root, Walker::NodeModules).is_empty());
+        let ctx = ScanContext::unchecked();
+        assert_eq!(
+            project_walk(&ctx, &elsewhere, Walker::NodeModules),
+            [elsewhere.join("web/node_modules")],
+            "the same tree walked directly"
+        );
+    }
+
+    #[test]
+    fn a_folder_that_lists_but_cannot_be_entered_offers_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let project = root.join("proj");
+        fs::create_dir_all(project.join("__pycache__")).unwrap();
+        fs::write(project.join("app.py"), "").unwrap();
+        // Readable, not searchable: the listing names `__pycache__` as a
+        // folder, but nothing inside the project can be reached.
+        fs::set_permissions(&project, fs::Permissions::from_mode(0o644)).unwrap();
+        let ctx = ScanContext::unchecked();
+        let found = project_walk(&ctx, root, Walker::Pycache);
+        let findings = ctx.take_findings();
+        fs::set_permissions(&project, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(found.is_empty(), "{found:?}");
+        assert_eq!(
+            findings.unreadable[root].entries, 1,
+            "the folder it could not reach"
+        );
     }
 }
