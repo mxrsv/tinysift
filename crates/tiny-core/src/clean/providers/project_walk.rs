@@ -6,7 +6,8 @@
 //! Every walker keeps its own rule ([`Walker::visit`]): what it records and
 //! where it stops. The walk descends into a folder while at least one walker
 //! still wants it, and tracks which ones do, so each walker sees exactly the
-//! folders, in exactly the order, its own walk saw. What a read could not
+//! folders, in exactly the order, its own walk saw. No walker enters a
+//! `.git` folder, which holds no build output. What a read could not
 //! reach is recorded per walker the same way, and handed to each provider's
 //! context when it takes its share ([`project_walk`]). The walk is kept in
 //! the scan's [`ScanContext`] and runs once per root per scan.
@@ -38,6 +39,8 @@ const WALKERS: [Walker; 5] = [
     Walker::BuildFolders,
 ];
 const ALL: u8 = (1 << WALKERS.len()) - 1;
+/// No walker goes into a repository's git folder.
+const GIT_DIR: &str = ".git";
 
 impl Walker {
     fn bit(self) -> u8 {
@@ -51,6 +54,9 @@ impl Walker {
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let file_beside = |file: &str| path.with_file_name(file).is_file();
         match self {
+            // Git's own data, never a project's build output; on an active
+            // repository it holds more entries than its work tree.
+            _ if name == GIT_DIR && path != root => (false, false),
             Walker::NodeModules if name == "node_modules" => (file_beside("package.json"), false),
             Walker::NodeModules => (false, true),
             _ if is_node_modules(path) => (false, false),
@@ -276,6 +282,44 @@ mod tests {
             "build folders never enter a hidden folder"
         );
         assert_eq!(rust.unreadable[root].entries, 1, "Rust targets do");
+    }
+
+    #[test]
+    fn no_walker_enters_a_git_folder() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        for dir in [
+            "repo/.git/x/node_modules",
+            "repo/.git/x/__pycache__",
+            "repo/.git/x/.venv",
+            "repo/.git/x/target",
+            "repo/.git/x/dist",
+            "repo/src/__pycache__",
+        ] {
+            fs::create_dir_all(root.join(dir)).unwrap();
+        }
+        for file in [
+            "repo/.git/x/package.json",
+            "repo/.git/x/Cargo.toml",
+            "repo/.git/x/pyproject.toml",
+            "repo/.git/x/.venv/pyvenv.cfg",
+        ] {
+            fs::write(root.join(file), "{}").unwrap();
+        }
+        fs::write(
+            root.join("repo/.git/x/package.json"),
+            r#"{"main": "dist/i.js"}"#,
+        )
+        .unwrap();
+        let ctx = ScanContext::unchecked();
+        for walker in WALKERS {
+            let found = names(root, project_walk(&ctx, root, walker));
+            let expected: &[&str] = match walker {
+                Walker::Pycache => &["repo/src/__pycache__"],
+                _ => &[],
+            };
+            assert_eq!(found, expected, "{walker:?}");
+        }
     }
 
     #[test]
