@@ -20,7 +20,7 @@ crossterm = "0.29"
 libc = "0.2"
 unicode-segmentation = "1.13"
 unicode-width = "0.2"
-signal-hook = "0.3"
+signal-hook = "0.4"
 
 [dev-dependencies]
 assert_cmd = "2"
