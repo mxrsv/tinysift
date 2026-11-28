@@ -28,7 +28,7 @@ This repository is the open-source engine behind the TinySift app, and the free 
 | --- | --- | --- |
 | **Install** | `brew install --cask mxrsv/tap/tinysift` | `brew install --cask mxrsv/tap/tinysift-cli` |
 | **First run** | Open TinySift, then grant Full Disk Access ([setup guide](https://tinysift.app/docs)) | `sift clean --dry-run` lists what it would clean and changes nothing |
-| **Price** | Monitor is free. Clean and Uninstall are free for 14 days, then a [$5 Lifetime license](https://tinysift.app) for one Mac | Free |
+| **Price** | Monitor is free. Clean and Uninstall are free for 14 days, then a [$15 Lifetime license](https://tinysift.app) for one Mac | Free |
 
 Both need Apple silicon and macOS 14 or later. Every download is Developer ID signed and
 notarized by Apple ([release guide](docs/operations/release.md)). You can also download the app
