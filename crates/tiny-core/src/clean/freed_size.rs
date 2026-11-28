@@ -281,9 +281,14 @@ pub(crate) fn sharing_at(_: std::os::fd::RawFd, _: &std::ffi::CStr) -> Sharing {
     Sharing::Unknown
 }
 
-/// One `getattrlist` call per file for the APFS clone attributes. They are
-/// "extended common" attributes, requested in the `forkattr` group with
-/// `FSOPT_ATTR_CMN_EXTENDED`.
+/// The APFS clone attributes, by `getattrlist`. They are "extended common"
+/// attributes, requested in the `forkattr` group with
+/// `FSOPT_ATTR_CMN_EXTENDED`. A file is asked in two steps: its flags, clone
+/// ID and clone count first, then its private size only when that decides:
+/// the file shares some blocks and is not a member of a clone family its
+/// count covers. Answering the private size reads the file's extents:
+/// on the maintainer's Mac 69 µs a file on a cold cache against 1.5 µs for
+/// the flags, and most files share nothing.
 #[cfg(target_os = "macos")]
 mod apfs {
     use super::Sharing;
@@ -296,10 +301,11 @@ mod apfs {
     const EF_MAY_SHARE_BLOCKS: u64 = 0x0000_0001;
     const EF_SHARES_ALL_BLOCKS: u64 = 0x0000_0040;
 
-    const REQUESTED: u32 = libc::ATTR_CMNEXT_PRIVATESIZE
-        | libc::ATTR_CMNEXT_CLONEID
-        | libc::ATTR_CMNEXT_EXT_FLAGS
-        | ATTR_CMNEXT_CLONE_REFCNT;
+    /// The first step: what the volume reads from the inode.
+    const SHARING: u32 =
+        libc::ATTR_CMNEXT_CLONEID | libc::ATTR_CMNEXT_EXT_FLAGS | ATTR_CMNEXT_CLONE_REFCNT;
+    /// The second step, only for a file that shares some blocks.
+    const PRIVATE: u32 = libc::ATTR_CMNEXT_PRIVATESIZE;
     /// The reply holds a `u32` length and the returned `attribute_set_t`
     /// (five `u32` groups, `forkattr` last), then only the returned values
     /// in bit order, each 4-byte aligned.
@@ -308,6 +314,36 @@ mod apfs {
 
     #[repr(C, align(8))]
     struct Reply([u8; 64]);
+
+    /// The attributes a reply held; `None` for one the volume left out.
+    #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+    struct Attributes {
+        private: Option<u64>,
+        clone_id: Option<u64>,
+        flags: Option<u64>,
+        members: Option<u64>,
+    }
+
+    impl Attributes {
+        /// Whether the private size decides the answer: the file shares
+        /// some blocks and is not a member of a clone family it counts.
+        fn wants_private(&self) -> bool {
+            let Some(flags) = self.flags else {
+                return false;
+            };
+            if flags & EF_SHARES_ALL_BLOCKS != 0 {
+                return self.family().is_none();
+            }
+            flags & EF_MAY_SHARE_BLOCKS != 0
+        }
+
+        fn family(&self) -> Option<(u64, u64)> {
+            match (self.clone_id, self.members) {
+                (Some(id), Some(members @ 2..)) => Some((id, members)),
+                _ => None,
+            }
+        }
+    }
 
     pub(super) fn sharing(path: &Path) -> Sharing {
         let Ok(path) = CString::new(path.as_os_str().as_bytes()) else {
@@ -319,6 +355,18 @@ mod apfs {
     /// `sharing` of `name` inside the open folder `dir` (or the working
     /// directory for `AT_FDCWD`), never following a final symlink.
     pub(crate) fn sharing_at(dir: libc::c_int, name: &std::ffi::CStr) -> Sharing {
+        let Some(mut attributes) = query(dir, name, SHARING) else {
+            return Sharing::Unknown;
+        };
+        if attributes.wants_private() {
+            attributes.private = query(dir, name, PRIVATE).and_then(|a| a.private);
+        }
+        classify(attributes)
+    }
+
+    /// One `getattrlistat` for the `forkattr` bits in `requested`; `None`
+    /// when the call fails.
+    fn query(dir: libc::c_int, name: &std::ffi::CStr, requested: u32) -> Option<Attributes> {
         let mut request = libc::attrlist {
             bitmapcount: libc::ATTR_BIT_MAP_COUNT,
             reserved: 0,
@@ -326,7 +374,7 @@ mod apfs {
             volattr: 0,
             dirattr: 0,
             fileattr: 0,
-            forkattr: REQUESTED,
+            forkattr: requested,
         };
         let mut reply = Reply([0; 64]);
         // SAFETY: `name` is NUL-terminated, `dir` is a live descriptor or
@@ -343,15 +391,12 @@ mod apfs {
                 (libc::FSOPT_NOFOLLOW | libc::FSOPT_ATTR_CMN_EXTENDED).into(),
             )
         };
-        if rc != 0 {
-            return Sharing::Unknown;
-        }
-        parse(&reply.0)
+        (rc == 0).then(|| parse(&reply.0))
     }
 
-    fn parse(reply: &[u8]) -> Sharing {
+    fn parse(reply: &[u8]) -> Attributes {
         let Some(returned) = read::<4>(reply, RETURNED_FORKATTR).map(u32::from_ne_bytes) else {
-            return Sharing::Unknown;
+            return Attributes::default();
         };
         let mut at = VALUES;
         let mut next = |bit: u32| -> Option<u64> {
@@ -368,39 +413,46 @@ mod apfs {
             Some(value)
         };
         // Read in bit order, as packed.
-        let private = next(libc::ATTR_CMNEXT_PRIVATESIZE);
-        let clone_id = next(libc::ATTR_CMNEXT_CLONEID);
-        let flags = next(libc::ATTR_CMNEXT_EXT_FLAGS);
-        let members = next(ATTR_CMNEXT_CLONE_REFCNT);
-        classify(private, clone_id, flags, members)
+        Attributes {
+            private: next(libc::ATTR_CMNEXT_PRIVATESIZE),
+            clone_id: next(libc::ATTR_CMNEXT_CLONEID),
+            flags: next(libc::ATTR_CMNEXT_EXT_FLAGS),
+            members: next(ATTR_CMNEXT_CLONE_REFCNT),
+        }
     }
 
     fn read<const N: usize>(reply: &[u8], at: usize) -> Option<[u8; N]> {
         reply.get(at..at + N)?.try_into().ok()
     }
 
-    fn classify(
-        private: Option<u64>,
-        clone_id: Option<u64>,
-        flags: Option<u64>,
-        members: Option<u64>,
-    ) -> Sharing {
-        let (Some(private), Some(flags)) = (private, flags) else {
+    /// Without the flags the volume cannot tell. A file the flags show
+    /// sharing some blocks also needs its private size, so without one it
+    /// is unknown; a file they show sharing nothing does not.
+    fn classify(attributes: Attributes) -> Sharing {
+        let Some(flags) = attributes.flags else {
             return Sharing::Unknown;
         };
-        // `off_t`: a negative value would be nonsense, so it frees nothing.
-        let private = if (private as i64) < 0 { 0 } else { private };
         if flags & EF_SHARES_ALL_BLOCKS != 0 {
-            if let (Some(id), Some(members @ 2..)) = (clone_id, members) {
+            if let Some((id, members)) = attributes.family() {
                 return Sharing::Clone { id, members };
             }
             // Clone of something the family count does not cover.
-            return Sharing::Partial { private };
+            return partial(attributes.private);
         }
         if flags & EF_MAY_SHARE_BLOCKS != 0 {
-            return Sharing::Partial { private };
+            return partial(attributes.private);
         }
         Sharing::Unshared
+    }
+
+    fn partial(private: Option<u64>) -> Sharing {
+        match private {
+            // `off_t`: a negative value would be nonsense, so it frees nothing.
+            Some(private) => Sharing::Partial {
+                private: if (private as i64) < 0 { 0 } else { private },
+            },
+            None => Sharing::Unknown,
+        }
     }
 
     #[cfg(test)]
@@ -416,10 +468,17 @@ mod apfs {
             out
         }
 
+        /// Every attribute either step asks for.
+        const BOTH: u32 = SHARING | PRIVATE;
+
+        fn sharing_of_reply(reply: &[u8]) -> Sharing {
+            classify(parse(reply))
+        }
+
         #[test]
         fn parses_only_the_returned_attributes_in_bit_order() {
             let all = reply(
-                REQUESTED,
+                BOTH,
                 &[
                     &0u64.to_ne_bytes(),
                     &9u64.to_ne_bytes(),
@@ -427,20 +486,23 @@ mod apfs {
                     &3u32.to_ne_bytes(),
                 ],
             );
-            assert_eq!(parse(&all), Sharing::Clone { id: 9, members: 3 });
+            assert_eq!(sharing_of_reply(&all), Sharing::Clone { id: 9, members: 3 });
 
             let no_refcnt = reply(
-                REQUESTED & !ATTR_CMNEXT_CLONE_REFCNT,
+                BOTH & !ATTR_CMNEXT_CLONE_REFCNT,
                 &[
                     &0u64.to_ne_bytes(),
                     &9u64.to_ne_bytes(),
                     &EF_SHARES_ALL_BLOCKS.to_ne_bytes(),
                 ],
             );
-            assert_eq!(parse(&no_refcnt), Sharing::Partial { private: 0 });
+            assert_eq!(
+                sharing_of_reply(&no_refcnt),
+                Sharing::Partial { private: 0 }
+            );
 
             let edited = reply(
-                REQUESTED,
+                BOTH,
                 &[
                     &16_384u64.to_ne_bytes(),
                     &4u64.to_ne_bytes(),
@@ -448,10 +510,13 @@ mod apfs {
                     &1u32.to_ne_bytes(),
                 ],
             );
-            assert_eq!(parse(&edited), Sharing::Partial { private: 16_384 });
+            assert_eq!(
+                sharing_of_reply(&edited),
+                Sharing::Partial { private: 16_384 }
+            );
 
             let unshared = reply(
-                REQUESTED,
+                BOTH,
                 &[
                     &4096u64.to_ne_bytes(),
                     &5u64.to_ne_bytes(),
@@ -459,15 +524,111 @@ mod apfs {
                     &1u32.to_ne_bytes(),
                 ],
             );
-            assert_eq!(parse(&unshared), Sharing::Unshared);
+            assert_eq!(sharing_of_reply(&unshared), Sharing::Unshared);
         }
 
         #[test]
-        fn a_volume_without_the_attributes_is_unknown() {
-            assert_eq!(parse(&reply(0, &[])), Sharing::Unknown);
+        fn the_first_step_answers_unshared_files_and_full_clones() {
+            assert_eq!(SHARING & PRIVATE, 0, "the first step never asks");
+            let first = |flags: u64, members: u32| {
+                parse(&reply(
+                    SHARING,
+                    &[
+                        &9u64.to_ne_bytes(),
+                        &flags.to_ne_bytes(),
+                        &members.to_ne_bytes(),
+                    ],
+                ))
+            };
+            let unshared = first(0, 1);
+            assert!(!unshared.wants_private());
+            assert_eq!(classify(unshared), Sharing::Unshared);
+            let clone = first(EF_MAY_SHARE_BLOCKS | EF_SHARES_ALL_BLOCKS, 2);
+            assert!(!clone.wants_private());
+            assert_eq!(classify(clone), Sharing::Clone { id: 9, members: 2 });
+        }
+
+        #[test]
+        fn a_file_sharing_some_blocks_needs_its_private_size() {
+            let first = |flags: u64, members: u32| {
+                parse(&reply(
+                    SHARING,
+                    &[
+                        &9u64.to_ne_bytes(),
+                        &flags.to_ne_bytes(),
+                        &members.to_ne_bytes(),
+                    ],
+                ))
+            };
+            for attributes in [
+                first(EF_MAY_SHARE_BLOCKS, 1),
+                // A clone whose family count does not cover it.
+                first(EF_SHARES_ALL_BLOCKS, 1),
+            ] {
+                assert!(attributes.wants_private(), "{attributes:?}");
+                assert_eq!(classify(attributes), Sharing::Unknown, "not asked yet");
+                let answered = Attributes {
+                    private: Some(8192),
+                    ..attributes
+                };
+                assert_eq!(classify(answered), Sharing::Partial { private: 8192 });
+            }
+        }
+
+        #[test]
+        fn a_volume_without_the_flags_is_unknown() {
+            let nothing = parse(&reply(0, &[]));
+            assert!(!nothing.wants_private());
+            assert_eq!(classify(nothing), Sharing::Unknown);
+            assert_eq!(sharing_of_reply(&[0u8; 8]), Sharing::Unknown, "short reply");
+            // The flags alone settle a file that shares nothing.
             let flags_only = reply(libc::ATTR_CMNEXT_EXT_FLAGS, &[&0u64.to_ne_bytes()]);
-            assert_eq!(parse(&flags_only), Sharing::Unknown);
-            assert_eq!(parse(&[0u8; 8]), Sharing::Unknown, "short reply");
+            assert_eq!(sharing_of_reply(&flags_only), Sharing::Unshared);
+            let shares = reply(
+                libc::ATTR_CMNEXT_EXT_FLAGS,
+                &[&EF_MAY_SHARE_BLOCKS.to_ne_bytes()],
+            );
+            assert_eq!(sharing_of_reply(&shares), Sharing::Unknown);
+        }
+
+        /// The answer one query asking every attribute at once gives.
+        fn in_one_call(path: &Path) -> Sharing {
+            let name = CString::new(path.as_os_str().as_bytes()).unwrap();
+            query(libc::AT_FDCWD, &name, BOTH).map_or(Sharing::Unknown, classify)
+        }
+
+        #[test]
+        fn real_files_get_the_one_call_answer_in_two_steps() {
+            let dir = tempfile::tempdir().unwrap();
+            let (original, copy) = (dir.path().join("a"), dir.path().join("b"));
+            std::fs::write(&original, vec![7u8; 64 * 1024]).unwrap();
+            assert_eq!(sharing(&original), Sharing::Unshared);
+            assert_eq!(sharing(&original), in_one_call(&original));
+            let (from, to) = (
+                CString::new(original.as_os_str().as_bytes()).unwrap(),
+                CString::new(copy.as_os_str().as_bytes()).unwrap(),
+            );
+            // SAFETY: both paths are NUL-terminated.
+            if unsafe { libc::clonefile(from.as_ptr(), to.as_ptr(), 0) } != 0 {
+                return; // Not APFS: nothing more to compare.
+            }
+            assert!(matches!(
+                sharing(&original),
+                Sharing::Clone { members: 2, .. }
+            ));
+            assert_eq!(sharing(&original), in_one_call(&original));
+            // An edited clone keeps some blocks shared.
+            use std::io::{Seek, SeekFrom, Write};
+            let mut file = std::fs::OpenOptions::new().write(true).open(&copy).unwrap();
+            file.seek(SeekFrom::Start(0)).unwrap();
+            file.write_all(&[1u8; 4096]).unwrap();
+            file.sync_all().unwrap();
+            match sharing(&copy) {
+                Sharing::Partial { private } => assert!(private < 64 * 1024, "{private}"),
+                other => panic!("an edited clone shares some blocks: {other:?}"),
+            }
+            assert_eq!(sharing(&copy), in_one_call(&copy));
+            assert_eq!(sharing(&original), in_one_call(&original));
         }
     }
 }

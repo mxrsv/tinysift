@@ -42,9 +42,9 @@ Things that are not obvious from reading one file.
 - **A deletion counts what it unlinks; other routes cost a walk before and after.** Counting in the
   deletion's own pass replaced a walk before it: on 200k one-byte files on a freshly attached APFS
   image (cold cache) walk plus deletion took 11.9–12.0 s, the counting deletion 10.2–10.5 s. The
-  remaining cost is one `getattrlistat` per file for APFS sharing. A pruned cache, a tool removal and
-  the emptied Trash are still walked twice (another process removes them); a partly deleted item is
-  walked once, after, for what it left.
+  remaining cost is one `getattrlistat` per file for APFS sharing, two when its private size decides. A
+  pruned cache, a tool removal and the emptied Trash are still walked twice (another process
+  removes them); a partly deleted item is walked once, after, for what it left.
 - **Permanent deletion rejects symlinked ancestors.** The
   [walker](../../crates/tiny-core/src/clean/fs_safe/remove_tree.rs) opens one component at a time;
   a path through `/var` on a Mac where it aliases `/private/var` is refused. Tests must canonicalize
@@ -97,6 +97,15 @@ Things that are not obvious from reading one file.
   18 GiB for four cargo `target/` folders and deleting them freed 14 GiB, because of hard links and
   APFS clones ([`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs)). An inode split
   between two items counts in neither, so a selection total must be measured as a union.
+- **On a dev-heavy Mac a Clean scan runs on a cold cache, so its cost is the inodes and extents it
+  reads.** On 2026-11-28 one scan of the maintainer's Mac touched about 1.3–1.4M entries against a
+  `kern.maxvnodes` of 263k. Asking APFS for `ATTR_CMNEXT_PRIVATESIZE` reads a file's extents (69 µs
+  a file cold, against 1.5 µs for its flags), so [`freed_size.rs`](../../crates/tiny-core/src/clean/freed_size.rs)
+  asks for it only when it decides the answer. A walk that only needs folders keeps the kind the
+  directory entry records for files ([`read_kinds`](../../crates/tiny-core/src/clean/fs_safe.rs)),
+  which halved the project walk; folders still get an `lstat`, because a folder that can be listed
+  but not entered still lists its subfolders as folders. Merging `lstat` into the `getattrlist`
+  call saved nothing: syscalls are not the cost.
 
 ## Administrator deletion
 
