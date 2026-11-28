@@ -17,7 +17,7 @@ use std::sync::Arc;
 use super::build_folders::manifest_of;
 use super::is_node_modules;
 use super::python_caches::{is_named_venv, python_manifest};
-use crate::clean::fs_safe::read_entries;
+use crate::clean::fs_safe::read_kinds;
 use crate::clean::scan_context::{ScanContext, ScanFindings};
 
 /// The project walkers, one bit each in a folder's set of active walkers.
@@ -123,15 +123,19 @@ impl ProjectWalk {
         descend
     }
 
+    /// Only folders matter here, so the files a folder lists keep the kind
+    /// their directory entry records ([`read_kinds`]): the walk reads no
+    /// inode of the files it passes, only of folders and of the manifests
+    /// a walker checks beside a candidate.
     fn descend(&mut self, root: &Path, dir: &Path, active: u8, ctx: &ScanContext<'_>) {
         let local = ScanContext::worker(ctx.cancel_flag());
-        let entries = read_entries(root, dir, &local);
+        let entries = read_kinds(root, dir, &local);
         self.attribute(active, local.take_findings());
-        for (path, meta) in entries {
+        for (path, kind) in entries {
             if ctx.is_cancelled() {
                 return;
             }
-            if meta.file_type().is_symlink() || !meta.file_type().is_dir() {
+            if kind.is_symlink() || !kind.is_dir() {
                 continue;
             }
             let next = self.visit(active, &path, root);
@@ -272,5 +276,45 @@ mod tests {
             "build folders never enter a hidden folder"
         );
         assert_eq!(rust.unreadable[root].entries, 1, "Rust targets do");
+    }
+
+    #[test]
+    fn a_symlinked_folder_is_never_entered() {
+        let dir = tempfile::tempdir().unwrap();
+        let (root, elsewhere) = (dir.path().join("root"), dir.path().join("elsewhere"));
+        fs::create_dir_all(elsewhere.join("web/node_modules")).unwrap();
+        fs::write(elsewhere.join("web/package.json"), "{}").unwrap();
+        fs::create_dir_all(&root).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, root.join("link")).unwrap();
+        let ctx = ScanContext::unchecked();
+        assert!(project_walk(&ctx, &root, Walker::NodeModules).is_empty());
+        let ctx = ScanContext::unchecked();
+        assert_eq!(
+            project_walk(&ctx, &elsewhere, Walker::NodeModules),
+            [elsewhere.join("web/node_modules")],
+            "the same tree walked directly"
+        );
+    }
+
+    #[test]
+    fn a_folder_that_lists_but_cannot_be_entered_offers_nothing() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let project = root.join("proj");
+        fs::create_dir_all(project.join("__pycache__")).unwrap();
+        fs::write(project.join("app.py"), "").unwrap();
+        // Readable, not searchable: the listing names `__pycache__` as a
+        // folder, but nothing inside the project can be reached.
+        fs::set_permissions(&project, fs::Permissions::from_mode(0o644)).unwrap();
+        let ctx = ScanContext::unchecked();
+        let found = project_walk(&ctx, root, Walker::Pycache);
+        let findings = ctx.take_findings();
+        fs::set_permissions(&project, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(found.is_empty(), "{found:?}");
+        assert_eq!(
+            findings.unreadable[root].entries, 1,
+            "the folder it could not reach"
+        );
     }
 }
